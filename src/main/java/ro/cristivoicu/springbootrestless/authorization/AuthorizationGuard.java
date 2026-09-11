@@ -45,8 +45,18 @@ public interface AuthorizationGuard<E> {
         return true;
     }
 
+    /**
+     * The shared no-op instance {@code getAuthorizationGuard()} defaults to. A singleton (not a
+     * fresh instance per call) so {@code RestlessResourceHandler} can reference-compare against
+     * it to detect "no guard configured" and skip the extra per-instance load that {@code
+     * canAccess} would otherwise require on every update/delete — pure overhead when nothing is
+     * actually going to deny anything.
+     */
+    AuthorizationGuard<?> ALLOW_ALL = new AuthorizationGuard<>() {
+    };
+
+    @SuppressWarnings("unchecked")
     static <E> AuthorizationGuard<E> allowAll() {
-        return new AuthorizationGuard<>() {
-        };
+        return (AuthorizationGuard<E>) ALLOW_ALL;
     }
 }

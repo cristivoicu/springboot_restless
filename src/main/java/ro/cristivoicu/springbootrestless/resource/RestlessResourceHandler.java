@@ -56,6 +56,23 @@ import java.util.Map;
  * implementation plan), request bodies/params are parsed against {@link ResourceMetadata}'s resolved
  * {@link Class} tokens at runtime, reusing Spring's own body/bind/validate infrastructure rather than
  * hand-rolling it.
+ * <p>
+ * <b>What's defaulted vs. what stays hand-written.</b> Create/Update/Delete have ready-made
+ * reflection-based implementations ({@code datasource.defaults.Default*DataSource}, wired via
+ * {@link #getCreateDataSource}/{@link #getUpdateDataSource}/{@link #getDeleteDataSource}), and
+ * {@link #getSpecification} defaults to an equality filter on whichever {@code SearchDto} fields
+ * are populated — both overridable per entity when the default isn't enough. {@link
+ * #getCustomReadActions} adds named read actions beyond that default for logic a plain equality
+ * filter can't express. {@link Mapper} deliberately has <em>no</em> such default — see its
+ * javadoc — response shaping is the one boundary this framework always keeps hand-written, since
+ * it's the surface fine-grained authorization has to reason about.
+ * <p>
+ * <b>Authorization.</b> {@link #getAuthorizationGuard} is the hook all of the above funnels
+ * into: the actual point of defaulting CUD/read-filtering away is to make room for per-action
+ * authorization to be the thing an entity author actually writes. See {@code
+ * ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard}'s javadoc for its three
+ * check points (coarse pre-check, row-level scope, per-instance access) and exactly where each
+ * fires in the handler methods below.
  */
 public abstract class RestlessResourceHandler<E, K> {
 
@@ -193,11 +210,20 @@ public abstract class RestlessResourceHandler<E, K> {
      * paging fields), ANDed together. Covers the common "filter by whichever fields were
      * populated" case; override for anything a plain equality match can't express (ranges,
      * joins, {@code LIKE}, ...).
+     * <p>
+     * Primitive fields (e.g. {@code boolean}) are skipped entirely, not just when zero-valued:
+     * a primitive can never represent "the client didn't send this filter" (Java always defaults
+     * it, e.g. {@code false}), so treating an unset primitive field as an explicit filter would
+     * silently exclude every non-default row from unfiltered searches. Use a boxed type
+     * ({@code Boolean}) for an optional equality filter instead.
      */
     protected Specification<E> getSpecification(SearchDto searchDto) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             for (Field field : searchDto.getClass().getDeclaredFields()) {
+                if (field.getType().isPrimitive()) {
+                    continue;
+                }
                 field.setAccessible(true);
                 Object value;
                 try {
@@ -298,11 +324,14 @@ public abstract class RestlessResourceHandler<E, K> {
         checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
         K id = extractId(request);
         // Loaded purely for the guard check - UpdateDataSource.update() loads/mutates/saves as
-        // one atomic unit and never hands the entity back to us beforehand. If it's not found,
-        // skip the check and fall through unchanged to UpdateDataSource's own 404.
-        E existing = getReadDataSource().findOne(id);
-        if (existing != null) {
-            checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
+        // one atomic unit and never hands the entity back to us beforehand. Skipped entirely
+        // (not just short-circuited on a denial) when no guard is configured, so resources that
+        // never opted into authorization don't pay for an extra SELECT on every write.
+        if (hasGuard()) {
+            E existing = getReadDataSource().findOne(id);
+            if (existing != null) {
+                checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
+            }
         }
         Object body = readBody(request, metadata.updateModelType());
         validate(body);
@@ -316,11 +345,14 @@ public abstract class RestlessResourceHandler<E, K> {
     public final ResponseEntity<?> deleteById(HttpServletRequest request) {
         checkPreCheck(AuthorizationGuard.Action.DELETE_ONE, null, request);
         K id = extractId(request);
-        // Same reasoning as update(): loaded purely for the guard check, not found falls through
-        // unchanged to DeleteDataSource's own (today: silent) not-found behavior.
-        E existing = getReadDataSource().findOne(id);
-        if (existing != null) {
-            checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
+        // Same reasoning as update(): loaded purely for the guard check, skipped entirely when
+        // no guard is configured; not found falls through unchanged to DeleteDataSource's own
+        // (today: silent) not-found behavior.
+        if (hasGuard()) {
+            E existing = getReadDataSource().findOne(id);
+            if (existing != null) {
+                checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
+            }
         }
         getDeleteDataSource().deleteById(id);
         return ResponseEntity.noContent().build();
@@ -331,11 +363,14 @@ public abstract class RestlessResourceHandler<E, K> {
         Object body = readBody(request, metadata.deleteModelType());
         DeleteModel deleteModel = (DeleteModel) body;
         // Fail-fast, before deleting anything: check every targeted entity up front so a bulk
-        // delete never partially completes before hitting a denied id.
-        for (String rawId : deleteModel.getIds()) {
-            E existing = getReadDataSource().findOne(convertId(rawId));
-            if (existing != null) {
-                checkCanAccess(AuthorizationGuard.Action.DELETE_ALL, request, existing);
+        // delete never partially completes before hitting a denied id. Skipped entirely (the
+        // whole loop, not just the check) when no guard is configured.
+        if (hasGuard()) {
+            for (String rawId : deleteModel.getIds()) {
+                E existing = getReadDataSource().findOne(convertId(rawId));
+                if (existing != null) {
+                    checkCanAccess(AuthorizationGuard.Action.DELETE_ALL, request, existing);
+                }
             }
         }
         @SuppressWarnings({"unchecked", "rawtypes"})
@@ -346,9 +381,9 @@ public abstract class RestlessResourceHandler<E, K> {
 
     // ---- shared per-request parsing, reusing Spring's own infra rather than hand-rolling it ----
 
-    private PageableResponse<List<?>> paginate(HttpServletRequest request, Mapper<E, ?> mapper) throws Exception {
+    private PageableResponse<List<?>> paginate(HttpServletRequest request, Mapper<E, ?> mapper, AuthorizationGuard.Action action) throws Exception {
         SearchDto searchDto = bindSearchDto(searchDtoConstructor, request);
-        Specification<E> spec = getSpecification(searchDto);
+        Specification<E> spec = withScope(getSpecification(searchDto), action, null, request);
         return paginate(mapper, spec, searchDto.getPageable());
     }
 
@@ -404,10 +439,16 @@ public abstract class RestlessResourceHandler<E, K> {
     private K extractId(HttpServletRequest request) {
         Object attribute = request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
         String rawId = ((Map<String, String>) attribute).get("id");
+        return convertId(rawId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private K convertId(String rawId) {
         // Bypasses the normal @PathVariable argument resolver, so a malformed id (e.g. "abc" for
         // a Long) must be translated to 400 by hand here - otherwise it surfaces as an unhandled
         // ConversionException (500) where the hand-written routes get
-        // MethodArgumentTypeMismatchException (400) for free from the framework.
+        // MethodArgumentTypeMismatchException (400) for free from the framework. Shared by
+        // extractId() (path variable) and deleteAll()'s per-id guard-check loop.
         try {
             return conversionService.convert(rawId, (Class<K>) metadata.idType());
         } catch (ConversionException e) {
@@ -422,5 +463,35 @@ public abstract class RestlessResourceHandler<E, K> {
         if (errors.hasErrors()) {
             throw new MethodArgumentNotValidException(new MethodParameter(VALIDATION_TARGET_METHOD, 0), errors);
         }
+    }
+
+    // ---- AuthorizationGuard wiring ----
+
+    /**
+     * Whether this resource opted into a real guard, vs. the default permissive
+     * {@link AuthorizationGuard#allowAll()} singleton — reference-comparable specifically
+     * because {@code allowAll()} always returns that same instance. Lets update()/deleteById()/
+     * deleteAll() skip their extra {@code findOne} load entirely (not just short-circuit on a
+     * denial) when nothing is actually going to deny anything.
+     */
+    private boolean hasGuard() {
+        return getAuthorizationGuard() != AuthorizationGuard.allowAll();
+    }
+
+    private void checkPreCheck(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {
+        if (!getAuthorizationGuard().preCheck(action, customActionName, request)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to perform " + action);
+        }
+    }
+
+    private void checkCanAccess(AuthorizationGuard.Action action, HttpServletRequest request, E entity) {
+        if (!getAuthorizationGuard().canAccess(action, request, entity)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
+        }
+    }
+
+    private Specification<E> withScope(Specification<E> spec, AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {
+        Specification<E> scope = getAuthorizationGuard().scope(action, customActionName, request);
+        return scope == null ? spec : spec.and(scope);
     }
 }

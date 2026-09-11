@@ -1,9 +1,11 @@
 package ro.cristivoicu.springbootrestless.entity.employee;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import ro.cristivoicu.springbootrestless.annotation.RestlessResource;
+import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
 import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
 import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
@@ -104,5 +106,37 @@ public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, 
                         : cb.conjunction();
             }
         });
+    }
+
+    /**
+     * Demonstration guard: a stand-in for a real principal-derived guard. No-op (fully open)
+     * when the {@value #SCOPE_HEADER} header is absent, so every existing test - which never
+     * sends this header - is unaffected. When present, scopes list/page reads to
+     * {@code lastName = <header value>} and denies direct fetch/update/delete of any entity
+     * whose {@code lastName} doesn't match.
+     */
+    private static final String SCOPE_HEADER = "X-Scope-LastName";
+
+    @Override
+    protected AuthorizationGuard<Employee> getAuthorizationGuard() {
+        return new AuthorizationGuard<>() {
+            @Override
+            public Specification<Employee> scope(Action action, String customActionName, HttpServletRequest request) {
+                String scopedLastName = request.getHeader(SCOPE_HEADER);
+                if (!StringUtils.hasText(scopedLastName)) {
+                    return null;
+                }
+                return (root, query, cb) -> cb.equal(root.get("lastName"), scopedLastName);
+            }
+
+            @Override
+            public boolean canAccess(Action action, HttpServletRequest request, Employee entity) {
+                String scopedLastName = request.getHeader(SCOPE_HEADER);
+                if (!StringUtils.hasText(scopedLastName)) {
+                    return true;
+                }
+                return scopedLastName.equals(entity.getLastName());
+            }
+        };
     }
 }

@@ -118,6 +118,17 @@ class EmployeeCrudTest {
         mockMvc.perform(get("/employees/{id}", second)).andExpect(status().isNotFound());
     }
 
+    @Test
+    void bulkDeleteRejectsMalformedIdWithBadRequest() throws Exception {
+        EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
+        deleteModel.setIds(java.util.List.of("not-a-number"));
+
+        mockMvc.perform(delete("/employees")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(deleteModel)))
+                .andExpect(status().isBadRequest());
+    }
+
     private long createEmployee(String firstName, String lastName, String email) throws Exception {
         EmployeeCreateModel create = new EmployeeCreateModel();
         create.setFirstName(firstName);
