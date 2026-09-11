@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>ro.cristivoicu</groupId>
+        <artifactId>spring-boot-restless-reactor</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>spring-boot-restless-processor</artifactId>
+    <packaging>jar</packaging>
+    <name>spring-boot-restless-processor</name>
+    <description>The @RestlessEntity annotation and the compile-time processor that generates a
+        {Entity}RestlessResource class from it. A separately-built artifact from "app" on
+        purpose: an annotation processor can't process its own compilation unit.</description>
+
+    <properties>
+        <maven.compiler.release>25</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Only needed so the id-field-detection code can reference the annotation's fully
+             qualified name; entities in "app" already depend on the real jakarta.persistence
+             artifact via spring-boot-starter-data-jpa, this module never needs it as a real
+             dependency since it only ever compares annotation-mirror strings. -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!-- This module IS an annotation processor - it must not try to run one on
+                         itself (there is none registered for its own sources), and disabling
+                         also sidesteps any accidental self-processing edge cases. -->
+                    <proc>none</proc>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

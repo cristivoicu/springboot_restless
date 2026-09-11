@@ -3,9 +3,17 @@
 Annotation-driven REST CRUD for Spring Boot, built around DDD and volatility-based design:
 each axis of change (persistence, mapping, HTTP wiring, authorization) is hidden behind its own
 stable contract, so adding an entity means writing domain-meaningful code once and getting HTTP
-for free — not hand-subclassing controllers or hand-writing plumbing DataSource classes. The
-actual point of removing that boilerplate is to make room for the thing worth writing by hand
-for every action: fine-grained authorization.
+for free — not hand-subclassing controllers or hand-writing plumbing classes. The actual point
+of removing that boilerplate is to make room for the thing worth writing by hand for every
+action: fine-grained authorization.
+
+## Modules
+
+- **`processor`** — the `@RestlessEntity` annotation and the compile-time processor that
+  generates a `{Entity}RestlessResource` glue class from it (see below). A separately-built
+  artifact from `app` on purpose: an annotation processor can't process its own compilation unit.
+- **`app`** — the framework runtime (`RestlessResourceHandler`, `RestlessRegistrar`, the
+  `Default*DataSource` classes, `AuthorizationGuard`) plus the reference entities.
 
 ## How it works
 
@@ -16,20 +24,21 @@ update, delete — each its own volatility, independently pluggable) plus its `M
 `deleteAll`, plus one `customRead` per declared named action). At startup, `RestlessRegistrar`
 finds every bean annotated `@RestlessResource`, resolves its entity/id/DTO types via reflection,
 and registers each handler method as a live Spring MVC route
-(`RequestMappingHandlerMapping.registerMapping`) — the same mechanism Spring Data REST uses. No
-code generation, no per-entity controller classes.
+(`RequestMappingHandlerMapping.registerMapping`) — the same mechanism Spring Data REST uses.
 
 **Defaulted away** (still overridable per entity when the default isn't enough):
 
-- **Create/Update/Delete** — `DefaultCreateDataSource`/`DefaultUpdateDataSource`/
-  `DefaultDeleteDataSource` (`datasource/defaults/`) copy DTO fields onto the entity via
-  `BeanUtils.copyProperties` and save/delete through the repository. Construct one directly in
-  your resource bean instead of hand-writing a `*DataSource` subclass — see `Department` below.
+- **Create/Update/Delete/Read** — `DefaultCreateDataSource`/`DefaultUpdateDataSource`/
+  `DefaultDeleteDataSource`/`DefaultReadDataSource` (`datasource/defaults/`) copy DTO fields onto
+  the entity via `BeanUtils.copyProperties` (create/update) or plain-delegate to the repository
+  (read/delete) — read logic turned out to have no entity-specific behavior in practice, only
+  the search *filter* does (see below).
 - **Search filtering** — `getSpecification()` defaults to an equality predicate on whichever
   `SearchDto` fields are populated (skipping `null`/blank). Override it for anything a plain
   equality match can't express, or add a named **custom read action**
   (`getCustomReadActions()`, its own `SearchDto` + query logic, exposed at
   `GET {basePath}/actions/{name}`) alongside the default — see `Employee`'s `byEmailDomain` action.
+- **The `{Entity}RestlessResource` glue class itself** — see "Adding a new entity" below.
 
 **Deliberately not defaulted:**
 
@@ -45,41 +54,56 @@ code generation, no per-entity controller classes.
 
 ## Adding a new entity
 
-Minimal (fully default CUD, default search filter) — using `Department`
-(`src/main/java/.../entity/department/`) as the reference, which declares **no** `*DataSource`
-classes at all:
+### Simplest — compile-time generated (`Project`, `app/.../entity/project/`)
 
-1. **Entity** — `Department.java`, a plain `@Entity` with a no-arg constructor.
-2. **Repository** — `DepartmentRepository extends SpecificationRepository<Department, Long>`.
-3. **DTOs** — `DepartmentDto` (response), `DepartmentCreateModel implements CreateModel`,
-   `DepartmentUpdateModel implements UpdateModel`, `DepartmentSearchDto extends
-   AbstractSearchDto` (adds filter fields; paging/sorting/delete are inherited/defaulted —
-   `DefaultDeleteModel` covers bulk delete without its own DTO).
-4. **Mapper** — `DepartmentMapper implements Mapper<Department, DepartmentDto>`.
-5. **Read data source** — `DepartmentReadDataSource extends ReadDataSource<...>` (the one verb
-   without a default, since read logic is entity-specific by nature).
-6. **Resource bean** — `DepartmentRestlessResource extends RestlessResourceHandler<Department, Long>`,
-   `@Component @RestlessResource(basePath = "/departments")`, constructing `DefaultCreateDataSource`/
-   `DefaultUpdateDataSource`/`DefaultDeleteDataSource` directly in its constructor and wiring the
-   read data source + mapper through the `getXDataSource()`/`getXMapper()` accessors. No
-   `getSpecification()` override needed either — the default equality filter covers it.
+Write the entity + DTOs + `Mapper`, following the naming convention; everything else is
+generated at compile time by `RestlessEntityProcessor` (see `target/generated-sources/annotations`
+after a build):
 
-That's it — no `RestlessRegistrar` changes, no new routes to declare by hand. Once the context
-starts, `/departments`, `/departments/{id}`, `/departments/list`, `/departments/overview`,
-`/departments/select/async` all exist with the standard CRUD verbs.
+1. **Entity** — `Project.java`, `@Entity` with a no-arg constructor, annotated
+   `@RestlessEntity(basePath = "/projects")`.
+2. **DTOs + Mapper** — `ProjectCreateModel`, `ProjectUpdateModel`, `ProjectSearchDto`,
+   `ProjectDto`, `ProjectMapper`, all in the same package, named exactly `{Entity}{Suffix}`.
 
-For custom create/update/delete logic (computed fields, related-entity lookups, ...), hand-write
-a `*DataSource` subclass instead of constructing the `Default*` one — see `Employee`'s
-`EmployeeCreateDataSource` etc. For a named custom read action or an authorization guard, see
-`EmployeeRestlessResource`.
+That's it. `ProjectRepository` (missing) and `ProjectRestlessResource` are both generated.
+
+For logic a generated default can't express, hand-write a class and point the annotation at it
+instead of relying on the naming convention — every attribute defaults to "use the convention/
+generated default":
+
+```java
+@RestlessEntity(basePath = "/projects", createDataSource = ProjectCreateDataSource.class)
+```
+
+`createModel`/`updateModel`/`searchDto`/`mapper` work the same way for DTOs that don't follow
+the naming convention. See `Project`'s `ProjectCreateDataSource` (defaults a blank description)
+for a complete example — the generated resource injects it as a constructor parameter, exactly
+like a hand-written resource bean would.
+
+### Manual — runtime defaults, no codegen (`Department`, `app/.../entity/department/`)
+
+Same generated-default behavior, wired by hand instead of by the processor — useful for
+understanding what the generated code actually does, or if you'd rather not add the `processor`
+module dependency:
+
+1. **Entity + Repository + DTOs + Mapper** — same as above, plus
+   `DepartmentRepository extends SpecificationRepository<Department, Long>` by hand.
+2. **Resource bean** — `DepartmentRestlessResource extends RestlessResourceHandler<Department, Long>`,
+   `@Component @RestlessResource(basePath = "/departments")`, constructing all four
+   `Default*DataSource` instances directly in its constructor.
+
+### Full manual (`Employee`, `app/.../entity/employee/`)
+
+Hand-written `*DataSource` classes for entity-specific create/update/delete logic, a named
+custom read action, and an authorization guard — see `EmployeeRestlessResource`. Also keeps the
+original hand-written `@RestController` classes at `/employees` (vs. `/employees-dynamic` for
+the dynamic route) purely as a parity-testing baseline for the framework's own test suite.
 
 ## Project status
 
-This is a working proof of the runtime-registration mechanism (Employee is mounted at
-`/employees-dynamic` rather than `/employees` so the original hand-written reference
-controllers can stay in place for parity testing — see `ErrorResponseParityTest`). See
-`src/test/java/.../registry/` for the tests proving the mechanism: full route coverage,
+Working proof of both the runtime-registration mechanism and the compile-time generator. See
+`app/src/test/java/.../registry/` and `.../entity/project/` for the tests: full route coverage,
 cross-resource isolation, duplicate-`basePath` detection, error-response parity against the
-hand-written baseline, default-CUD end-to-end behavior, custom read actions, and the
-authorization guard's four scenarios (unscoped, row-level list scoping, per-instance 403,
-fail-fast bulk delete).
+hand-written baseline, default-CUD end-to-end behavior, custom read actions, the authorization
+guard's four scenarios (unscoped, row-level list scoping, per-instance 403, fail-fast bulk
+delete), and the compile-time generator's convention-based + override paths.
