@@ -12,6 +12,9 @@ import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
 import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
 import ro.cristivoicu.springbootrestless.controller.update.UpdateDataSource;
+import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultCreateDataSource;
+import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultDeleteDataSource;
+import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultUpdateDataSource;
 import ro.cristivoicu.springbootrestless.entity.department.*;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.models.SearchDto;
@@ -48,10 +51,13 @@ class RestlessRegistrarDuplicateBasePathTest {
      * instances so {@code GenericTypeResolver} resolves genuine generic type arguments.
      */
     static class DepartmentLikeResource extends RestlessResourceHandler<Department, Long> {
-        private final DepartmentCreateDataSource createDataSource = new DepartmentCreateDataSource(null);
+        private final DefaultCreateDataSource<Department, Long, DepartmentCreateModel> createDataSource =
+                new DefaultCreateDataSource<>(null, Department.class, DepartmentCreateModel.class);
         private final DepartmentReadDataSource readDataSource = new DepartmentReadDataSource(null);
-        private final DepartmentUpdateDataSource updateDataSource = new DepartmentUpdateDataSource(null);
-        private final DepartmentDeleteDataSource deleteDataSource = new DepartmentDeleteDataSource(null);
+        private final DefaultUpdateDataSource<Department, Long, DepartmentUpdateModel> updateDataSource =
+                new DefaultUpdateDataSource<>(null, DepartmentUpdateModel.class);
+        private final DefaultDeleteDataSource<Department, Long> deleteDataSource =
+                new DefaultDeleteDataSource<>(null, Long.class);
         private final DepartmentMapper mapper = new DepartmentMapper();
 
         @Override

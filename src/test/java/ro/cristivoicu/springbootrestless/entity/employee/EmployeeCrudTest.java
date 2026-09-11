@@ -107,7 +107,7 @@ class EmployeeCrudTest {
         long second = createEmployee("Margaret", "Hamilton", "margaret@example.com");
 
         EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
-        deleteModel.setIds(java.util.List.of(first, second));
+        deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
         mockMvc.perform(delete("/employees")
                         .contentType("application/json")

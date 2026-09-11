@@ -10,7 +10,10 @@ import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
 import ro.cristivoicu.springbootrestless.controller.update.UpdateDataSource;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.models.SearchDto;
+import ro.cristivoicu.springbootrestless.resource.ReadAction;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
+
+import java.util.Map;
 
 /**
  * Stage 1/2 proof-of-concept: the same Employee create/read/update/delete data sources and
@@ -80,5 +83,26 @@ public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, 
         return (root, query, cb) -> StringUtils.hasText(dto.getLastName())
                 ? cb.equal(root.get("lastName"), dto.getLastName())
                 : cb.conjunction();
+    }
+
+    /**
+     * Demonstrates a custom read action: a suffix {@code LIKE} on email domain, something the
+     * default equality-match filter (used above for the main search) can't express.
+     */
+    @Override
+    public Map<String, ReadAction<Employee, ?>> getCustomReadActions() {
+        return Map.of("byEmailDomain", new ReadAction<Employee, EmployeeEmailDomainSearchDto>() {
+            @Override
+            public Class<EmployeeEmailDomainSearchDto> getSearchDtoType() {
+                return EmployeeEmailDomainSearchDto.class;
+            }
+
+            @Override
+            public Specification<Employee> buildSpecification(EmployeeEmailDomainSearchDto searchDto) {
+                return (root, query, cb) -> StringUtils.hasText(searchDto.getDomain())
+                        ? cb.like(root.get("email"), "%@" + searchDto.getDomain())
+                        : cb.conjunction();
+            }
+        });
     }
 }

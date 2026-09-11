@@ -90,19 +90,24 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         ResourceMetadata metadata = resource.resolveMetadata(basePath);
         resource.init(metadata, objectMapper, conversionService, validator);
 
-        ROUTES.forEach(route -> registerRoute(resource, basePath, route));
+        ROUTES.forEach(route -> registerRoute(resource, basePath + route.pathSuffix(), route.httpMethod(), route.handlerMethodName()));
+
+        // One extra route per named ReadAction, all sharing the single customRead Method -
+        // getCustomReadActions() is empty by default, so this is a no-op for most resources.
+        resource.getCustomReadActions().keySet().forEach(actionName ->
+                registerRoute(resource, basePath + "/actions/" + actionName, RequestMethod.GET, "customRead"));
     }
 
-    private void registerRoute(RestlessResourceHandler<?, ?> resource, String basePath, RouteDefinition route) {
+    private void registerRoute(RestlessResourceHandler<?, ?> resource, String path, RequestMethod httpMethod, String handlerMethodName) {
         try {
-            Method handlerMethod = RestlessResourceHandler.class.getMethod(route.handlerMethodName(), HttpServletRequest.class);
-            RequestMappingInfo info = RequestMappingInfo.paths(basePath + route.pathSuffix())
-                    .methods(route.httpMethod())
+            Method handlerMethod = RestlessResourceHandler.class.getMethod(handlerMethodName, HttpServletRequest.class);
+            RequestMappingInfo info = RequestMappingInfo.paths(path)
+                    .methods(httpMethod)
                     .options(requestMappingHandlerMapping.getBuilderConfiguration())
                     .build();
             requestMappingHandlerMapping.registerMapping(info, resource, handlerMethod);
         } catch (NoSuchMethodException e) {
-            throw new IllegalStateException("RestlessResourceHandler." + route.handlerMethodName() + " not found", e);
+            throw new IllegalStateException("RestlessResourceHandler." + handlerMethodName + " not found", e);
         }
     }
 }

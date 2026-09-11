@@ -95,7 +95,7 @@ class RestlessRegistrarFullRouteTest {
         long second = createEmployee("Hedy", "Lamarr", "hedy@example.com");
 
         EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
-        deleteModel.setIds(java.util.List.of(first, second));
+        deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
         mockMvc.perform(delete("/employees-dynamic")
                         .contentType("application/json")

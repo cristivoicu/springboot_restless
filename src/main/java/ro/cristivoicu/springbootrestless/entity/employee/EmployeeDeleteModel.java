@@ -12,5 +12,5 @@ import java.util.List;
 public class EmployeeDeleteModel implements DeleteModel {
 
     @NotEmpty
-    private List<Long> ids;
+    private List<String> ids;
 }

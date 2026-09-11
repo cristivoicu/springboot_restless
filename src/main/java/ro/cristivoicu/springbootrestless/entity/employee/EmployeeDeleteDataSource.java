@@ -21,7 +21,7 @@ public class EmployeeDeleteDataSource extends DeleteDataSource<Employee, Long, E
         // context, so already-loaded managed instances keep resolving as present within
         // the same transaction/session. Deleting through findById+delete keeps the
         // first-level cache consistent with the database.
-        d.getIds().forEach(id -> specificationRepository.findById(id)
+        d.getIds().forEach(id -> specificationRepository.findById(Long.valueOf(id))
                 .ifPresent(specificationRepository::delete));
     }
 }
