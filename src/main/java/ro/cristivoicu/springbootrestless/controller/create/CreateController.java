@@ -1,6 +1,5 @@
 package ro.cristivoicu.springbootrestless.controller.create;
 
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;

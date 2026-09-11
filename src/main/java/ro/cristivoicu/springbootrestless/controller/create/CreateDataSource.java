@@ -9,5 +9,7 @@ public abstract class CreateDataSource<E, K, C extends CreateModel> extends Data
         super(specificationRepository);
     }
 
-    abstract E create(C entity) throws Exception;
+    // public, not protected: RestlessResourceHandler (resource package) invokes this by
+    // composition, not inheritance, so protected (same-package-or-subtype) access won't reach it.
+    public abstract E create(C entity) throws Exception;
 }

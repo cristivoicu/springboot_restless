@@ -14,8 +14,10 @@ public abstract class ReadDataSource<E,K,R extends SearchDto> extends DataSource
         super(specificationRepository);
     }
 
-    abstract Page<?> findAll(Specification<E> specification, Pageable pageable);
-    abstract List<?> findAll(Specification<E> specification);
-    abstract E findOne(Specification<E> specification, K id);
-    abstract E findOne( K id);
+    // public, not protected: RestlessResourceHandler (resource package) invokes these by
+    // composition, not inheritance, so protected (same-package-or-subtype) access won't reach them.
+    public abstract Page<E> findAll(Specification<E> specification, Pageable pageable);
+    public abstract List<E> findAll(Specification<E> specification);
+    public abstract E findOne(Specification<E> specification, K id);
+    public abstract E findOne(K id);
 }

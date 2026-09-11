@@ -27,48 +27,50 @@ public abstract class ReadController<E,K,R extends SearchDto> {
     }
 
     @GetMapping("{id}")
-    public ResponseEntity<?> getById(@PathVariable String id) throws Exception {
-        var data = dataSource.getData(id);
-        return ResponseEntity.ok().body(
-                getEntityMapper().mapToDTO((data)
-                ));
+    public ResponseEntity<?> getById(@PathVariable K id) {
+        if (getEntityMapper() == null) throw new RuntimeException("Entity mapper is null");
+        var data = dataSource.findOne(id);
+        if (data == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok().body(getEntityMapper().map(data));
     }
 
     @GetMapping("/list")
-    public ResponseEntity<List<?>> getAllEmployeesAsList(R searchDto) {
+    public ResponseEntity<List<?>> getAllAsList(R searchDto) {
         if (getOverviewMapper() == null) throw new RuntimeException("Overview mapper is null");
         return ResponseEntity.ok().body(
-                getOverviewMapper().mapToDTO(dataSource.getData(this.getSpecification((S) searchDto)))
+                getOverviewMapper().map(dataSource.findAll(this.getSpecification(searchDto)))
         );
     }
 
     @GetMapping()
-    public ResponseEntity<PageableResponse<List<?>>> getAllEmployees(S searchDto) {
+    public ResponseEntity<PageableResponse<List<?>>> getAll(R searchDto) {
         if (getEntityMapper() == null) throw new RuntimeException("Entity mapper is null");
 
-        return ResponseEntity.ok().body(getPaginatedData(searchDto));
+        return ResponseEntity.ok().body(getPaginatedData(searchDto, getEntityMapper()));
     }
 
     @GetMapping("/overview")
-    public ResponseEntity<PageableResponse<List<?>>> getAllEmployeesOverview(S searchDto) {
+    public ResponseEntity<PageableResponse<List<?>>> getAllOverview(R searchDto) {
         if (getOverviewMapper() == null) throw new RuntimeException("Overview mapper is null");
 
-        return ResponseEntity.ok().body(getPaginatedData(searchDto));
+        return ResponseEntity.ok().body(getPaginatedData(searchDto, getOverviewMapper()));
     }
 
     @GetMapping("/select/async")
-    public ResponseEntity<PageableResponse<List<?>>> getAllEmployeesForSelectDto(S searchDto) {
+    public ResponseEntity<PageableResponse<List<?>>> getAllForSelect(R searchDto) {
         if (getSelectMapper() == null) throw new RuntimeException("Select mapper is null");
-        return ResponseEntity.ok().body(getPaginatedData(searchDto));
+        return ResponseEntity.ok().body(getPaginatedData(searchDto, getSelectMapper()));
     }
 
-    private PageableResponse<List<?>> getPaginatedData(R searchDto) {
-        var data = dataSource.getData(this.getSpecification((S) searchDto), searchDto.getPageable());
+    private PageableResponse<List<?>> getPaginatedData(R searchDto, Mapper<E, ?> mapper) {
+        var data = dataSource.findAll(this.getSpecification(searchDto), searchDto.getPageable());
         PageableResponse<List<?>> response = new PageableResponse<>();
         response.setPageSize(data.getSize());
         response.setTotalPages(data.getTotalPages());
         response.setTotalElements(data.getTotalElements());
-        response.setBody(getOverviewMapper().mapToDTO(data.getContent()));
+        response.setBody(mapper.map(data.getContent()));
 
         return response;
     }

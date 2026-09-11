@@ -9,8 +9,9 @@ public abstract class DeleteDataSource<E, K, D extends DeleteModel> extends Data
         super(specificationRepository);
     }
 
-    abstract void deleteEntity(E entity);
-    abstract void deleteById(K id);
+    // public, not protected: RestlessResourceHandler (resource package) invokes these by
+    // composition, not inheritance, so protected (same-package-or-subtype) access won't reach them.
+    public abstract void deleteById(K id);
 
-    abstract void deleteAll(D d);
+    public abstract void deleteAll(D d);
 }
