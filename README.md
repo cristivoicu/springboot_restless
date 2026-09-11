@@ -12,8 +12,16 @@ action: fine-grained authorization.
 - **`processor`** — the `@RestlessEntity` annotation and the compile-time processor that
   generates a `{Entity}RestlessResource` glue class from it (see below). A separately-built
   artifact from `app` on purpose: an annotation processor can't process its own compilation unit.
-- **`app`** — the framework runtime (`RestlessResourceHandler`, `RestlessRegistrar`, the
-  `Default*DataSource` classes, `AuthorizationGuard`) plus the reference entities.
+- **`app`** — the framework itself (`RestlessResourceHandler`, `RestlessRegistrar`, the
+  `Default*DataSource` classes, `AuthorizationGuard`, ...) and nothing else — a library, not a
+  runnable application. Ships no entities and no `@SpringBootApplication` class; it's
+  self-tested against small, generically-named, test-scoped fixtures (`Gadget`/`Gizmo`/
+  `Sprocket` under `app/src/test/.../fixtures/`) that never leave the test jar, so the framework
+  stays independently verifiable without depending on `example` existing or staying in sync.
+- **`example`** — a standalone runnable Spring Boot application that consumes `app` and
+  `processor` as a real external project would (see `ExampleApplication`), demonstrating
+  realistic usage with the original `Employee`/`Department`/`Project` entities under its own
+  `ro.cristivoicu.springbootrestless.example` package.
 
 ## How it works
 
@@ -37,7 +45,7 @@ and registers each handler method as a live Spring MVC route
   `SearchDto` fields are populated (skipping `null`/blank). Override it for anything a plain
   equality match can't express, or add a named **custom read action**
   (`getCustomReadActions()`, its own `SearchDto` + query logic, exposed at
-  `GET {basePath}/actions/{name}`) alongside the default — see `Employee`'s `byEmailDomain` action.
+  `GET {basePath}/actions/{name}`) alongside the default.
 - **The `{Entity}RestlessResource` glue class itself** — see "Adding a new entity" below.
 
 **Deliberately not defaulted:**
@@ -49,12 +57,13 @@ and registers each handler method as a live Spring MVC route
   any work), `scope` (an extra `Specification` ANDed onto read queries — row-level visibility),
   `canAccess` (per-instance check once a specific entity is loaded, for single read/update/
   delete). No Spring Security dependency — it's handed the raw `HttpServletRequest`, so it reads
-  whatever your own auth stack already populates. See `Employee`'s demonstration guard, scoped
-  via an `X-Scope-LastName` header stand-in for a real principal.
+  whatever your own auth stack already populates.
 
 ## Adding a new entity
 
-### Simplest — compile-time generated (`Project`, `app/.../entity/project/`)
+Three approaches, all demonstrated in `example` (`example/src/main/java/.../example/entity/`):
+
+### Simplest — compile-time generated (`Project`)
 
 Write the entity + DTOs + `Mapper`, following the naming convention; everything else is
 generated at compile time by `RestlessEntityProcessor` (see `target/generated-sources/annotations`
@@ -80,7 +89,7 @@ the naming convention. See `Project`'s `ProjectCreateDataSource` (defaults a bla
 for a complete example — the generated resource injects it as a constructor parameter, exactly
 like a hand-written resource bean would.
 
-### Manual — runtime defaults, no codegen (`Department`, `app/.../entity/department/`)
+### Manual — runtime defaults, no codegen (`Department`)
 
 Same generated-default behavior, wired by hand instead of by the processor — useful for
 understanding what the generated code actually does, or if you'd rather not add the `processor`
@@ -92,18 +101,33 @@ module dependency:
    `@Component @RestlessResource(basePath = "/departments")`, constructing all four
    `Default*DataSource` instances directly in its constructor.
 
-### Full manual (`Employee`, `app/.../entity/employee/`)
+### Full manual (`Employee`)
 
 Hand-written `*DataSource` classes for entity-specific create/update/delete logic, a named
 custom read action, and an authorization guard — see `EmployeeRestlessResource`. Also keeps the
 original hand-written `@RestController` classes at `/employees` (vs. `/employees-dynamic` for
-the dynamic route) purely as a parity-testing baseline for the framework's own test suite.
+the dynamic route) purely as a parity-testing baseline for `example`'s own test suite.
+
+## A note on shipping a library alongside its own tests
+
+`app` used to ship a `@SpringBootApplication` class in `src/main` (needed as a
+`@SpringBootTest` anchor). When `example` was split out and its `ExampleApplication` declared a
+wide `@ComponentScan(basePackages = "ro.cristivoicu.springbootrestless")` (needed to reach the
+framework's packages, which aren't sub-packages of `example`'s own), that scan swept up `app`'s
+leftover `@SpringBootApplication` class too, triggering a second, redundant auto-configuration
+pass and duplicate bean definitions. Fixed by moving it to `app/src/test` — it's still on the
+classpath for `app`'s own tests, but never shipped in the library jar a consumer's scan could
+find. `app`'s `spring-boot-maven-plugin` was removed for the same reason: a library with no
+main class has nothing to repackage, and repackaging (classes nested under `BOOT-INF/`) would
+have broken consumption as a normal dependency anyway — see `app/pom.xml`.
 
 ## Project status
 
-Working proof of both the runtime-registration mechanism and the compile-time generator. See
-`app/src/test/java/.../registry/` and `.../entity/project/` for the tests: full route coverage,
-cross-resource isolation, duplicate-`basePath` detection, error-response parity against the
-hand-written baseline, default-CUD end-to-end behavior, custom read actions, the authorization
-guard's four scenarios (unscoped, row-level list scoping, per-instance 403, fail-fast bulk
-delete), and the compile-time generator's convention-based + override paths.
+Working proof of the runtime-registration mechanism, the compile-time generator, and the
+library/example split. 54 tests across both modules: `app`'s own suite (`app/src/test/.../fixtures/`,
+`.../registry/`) proves the framework mechanism in isolation via `Gadget`/`Gizmo`/`Sprocket`;
+`example`'s suite proves the same mechanism through realistic, business-named usage — full route
+coverage, cross-resource isolation, duplicate-`basePath` detection, error-response parity against
+the hand-written baseline, default-CUD end-to-end behavior, custom read actions, the
+authorization guard's four scenarios, and the compile-time generator's convention-based +
+override paths.

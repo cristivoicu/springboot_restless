@@ -32,7 +32,7 @@ public class DefaultDeleteDataSource<E, K>
     @Override
     public void deleteAll(DefaultDeleteModel d) {
         // findById+delete (not a bulk JPQL delete) to keep the persistence context's
-        // first-level cache consistent with the database - see EmployeeDeleteDataSource
+        // first-level cache consistent with the database - see GadgetDeleteDataSource
         // for the same reasoning.
         d.getIds().forEach(rawId -> {
             K id = DefaultConversionService.getSharedInstance().convert(rawId, idType);

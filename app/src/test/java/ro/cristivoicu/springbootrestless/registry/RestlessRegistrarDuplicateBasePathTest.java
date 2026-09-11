@@ -16,7 +16,7 @@ import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultCreateDataSo
 import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultDeleteDataSource;
 import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultReadDataSource;
 import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultUpdateDataSource;
-import ro.cristivoicu.springbootrestless.entity.department.*;
+import ro.cristivoicu.springbootrestless.fixtures.gizmo.*;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.models.SearchDto;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
@@ -40,65 +40,65 @@ import static org.mockito.Mockito.when;
 class RestlessRegistrarDuplicateBasePathTest {
 
     @RestlessResource(basePath = "/collide")
-    static class ResourceA extends DepartmentLikeResource {
+    static class ResourceA extends GizmoLikeResource {
     }
 
     @RestlessResource(basePath = "/collide")
-    static class ResourceB extends DepartmentLikeResource {
+    static class ResourceB extends GizmoLikeResource {
     }
 
     /**
      * Shared shape for the two colliding test resources - real (not mocked) DataSource/Mapper
      * instances so {@code GenericTypeResolver} resolves genuine generic type arguments.
      */
-    static class DepartmentLikeResource extends RestlessResourceHandler<Department, Long> {
-        private final DefaultCreateDataSource<Department, Long, DepartmentCreateModel> createDataSource =
-                new DefaultCreateDataSource<>(null, Department.class, DepartmentCreateModel.class);
-        private final DefaultReadDataSource<Department, Long, DepartmentSearchDto> readDataSource =
-                new DefaultReadDataSource<>(null, DepartmentSearchDto.class);
-        private final DefaultUpdateDataSource<Department, Long, DepartmentUpdateModel> updateDataSource =
-                new DefaultUpdateDataSource<>(null, DepartmentUpdateModel.class);
-        private final DefaultDeleteDataSource<Department, Long> deleteDataSource =
+    static class GizmoLikeResource extends RestlessResourceHandler<Gizmo, Long> {
+        private final DefaultCreateDataSource<Gizmo, Long, GizmoCreateModel> createDataSource =
+                new DefaultCreateDataSource<>(null, Gizmo.class, GizmoCreateModel.class);
+        private final DefaultReadDataSource<Gizmo, Long, GizmoSearchDto> readDataSource =
+                new DefaultReadDataSource<>(null, GizmoSearchDto.class);
+        private final DefaultUpdateDataSource<Gizmo, Long, GizmoUpdateModel> updateDataSource =
+                new DefaultUpdateDataSource<>(null, GizmoUpdateModel.class);
+        private final DefaultDeleteDataSource<Gizmo, Long> deleteDataSource =
                 new DefaultDeleteDataSource<>(null, Long.class);
-        private final DepartmentMapper mapper = new DepartmentMapper();
+        private final GizmoMapper mapper = new GizmoMapper();
 
         @Override
-        protected CreateDataSource<Department, Long, ?> getCreateDataSource() {
+        protected CreateDataSource<Gizmo, Long, ?> getCreateDataSource() {
             return createDataSource;
         }
 
         @Override
-        protected ReadDataSource<Department, Long, ?> getReadDataSource() {
+        protected ReadDataSource<Gizmo, Long, ?> getReadDataSource() {
             return readDataSource;
         }
 
         @Override
-        protected UpdateDataSource<Department, Long, ?> getUpdateDataSource() {
+        protected UpdateDataSource<Gizmo, Long, ?> getUpdateDataSource() {
             return updateDataSource;
         }
 
         @Override
-        protected DeleteDataSource<Department, Long, ?> getDeleteDataSource() {
+        protected DeleteDataSource<Gizmo, Long, ?> getDeleteDataSource() {
             return deleteDataSource;
         }
 
         @Override
-        protected Mapper<Department, ?> getEntityMapper() {
+        protected Mapper<Gizmo, ?> getEntityMapper() {
             return mapper;
         }
 
         @Override
-        protected Mapper<Department, ?> getOverviewMapper() {
+        protected Mapper<Gizmo, ?> getOverviewMapper() {
             return mapper;
         }
 
         @Override
-        protected Mapper<Department, ?> getSelectMapper() {
+        protected Mapper<Gizmo, ?> getSelectMapper() {
             return mapper;
         }
 
         @Override
-        protected Specification<Department> getSpecification(SearchDto searchDto) {
+        protected Specification<Gizmo> getSpecification(SearchDto searchDto) {
             return (root, query, cb) -> cb.conjunction();
         }
     }

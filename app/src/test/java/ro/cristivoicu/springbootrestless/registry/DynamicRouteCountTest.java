@@ -12,18 +12,18 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Stage 4: a context-load-level check that catches silent registration failures -
- * {@code RestlessRegistrar} must have registered exactly nine fixed routes (see
+ * A context-load-level check that catches silent registration failures - {@code
+ * RestlessRegistrar} must have registered exactly nine fixed routes (see
  * {@code RestlessRegistrar.ROUTES}) for each of the three {@code @RestlessResource} beans
- * currently in the app (Employee, Department, the compile-time-generated Project), plus one
- * extra route per named custom read action (Employee's {@code byEmailDomain}), no more, no fewer.
+ * currently in the app (Gadget, Gizmo, the compile-time-generated Sprocket), plus one extra
+ * route per named custom read action (Gadget's {@code byEmailDomain}), no more, no fewer.
  */
 @SpringBootTest
 class DynamicRouteCountTest {
 
     private static final int FIXED_ROUTES_PER_RESOURCE = 9;
-    private static final int RESOURCE_COUNT = 3; // Employee, Department, Project (generated)
-    private static final int CUSTOM_READ_ACTION_COUNT = 1; // Employee's "byEmailDomain"
+    private static final int RESOURCE_COUNT = 3; // Gadget, Gizmo, Sprocket (generated)
+    private static final int CUSTOM_READ_ACTION_COUNT = 1; // Gadget's "byEmailDomain"
 
     @Autowired
     private RequestMappingHandlerMapping requestMappingHandlerMapping;

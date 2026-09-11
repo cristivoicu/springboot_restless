@@ -1,0 +1,17 @@
+package ro.cristivoicu.springbootrestless.fixtures.gizmo;
+
+import jakarta.validation.constraints.NotBlank;
+import lombok.Getter;
+import lombok.Setter;
+import ro.cristivoicu.springbootrestless.models.UpdateModel;
+
+@Getter
+@Setter
+public class GizmoUpdateModel implements UpdateModel {
+
+    @NotBlank
+    private String name;
+
+    @NotBlank
+    private String code;
+}

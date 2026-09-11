@@ -85,10 +85,13 @@
 
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-            </plugin>
+            <!-- No spring-boot-maven-plugin here: app is a library (no @SpringBootApplication
+                 class in src/main - it moved to src/test, since app is never run standalone
+                 anymore, only self-tested). spring-boot-maven-plugin's repackage goal needs a
+                 main class to repackage and would fail without one; a plain jar (built by the
+                 default maven-jar-plugin from spring-boot-starter-parent) is also what "example"
+                 needs to consume app's classes as a normal dependency - repackaging (classes
+                 nested under BOOT-INF/) would have broken that anyway. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

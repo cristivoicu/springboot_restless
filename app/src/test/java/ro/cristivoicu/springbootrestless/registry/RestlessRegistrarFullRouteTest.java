@@ -6,19 +6,18 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
-import ro.cristivoicu.springbootrestless.entity.employee.EmployeeCreateModel;
-import ro.cristivoicu.springbootrestless.entity.employee.EmployeeDeleteModel;
-import ro.cristivoicu.springbootrestless.entity.employee.EmployeeUpdateModel;
+import ro.cristivoicu.springbootrestless.fixtures.gadget.GadgetCreateModel;
+import ro.cristivoicu.springbootrestless.fixtures.gadget.GadgetDeleteModel;
+import ro.cristivoicu.springbootrestless.fixtures.gadget.GadgetUpdateModel;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * Stage 2 proof: every one of the nine routes {@code RestlessRegistrar} registers dynamically
- * for {@code EmployeeRestlessResource} at "/employees-dynamic" behaves the same as the
- * hand-written Stage-0 controllers at "/employees" (see {@code EmployeeCrudTest}) - full route
- * parity, not just the one route Stage 1 proved.
+ * Proof: every one of the nine routes {@code RestlessRegistrar} registers dynamically for
+ * {@code GadgetRestlessResource} at "/gadgets-dynamic" behaves the same as the hand-written
+ * baseline controllers at "/gadgets" (see {@code GadgetCrudTest}) - full route parity.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -33,12 +32,12 @@ class RestlessRegistrarFullRouteTest {
 
     @Test
     void allNineRoutesWorkThroughTheDynamicMechanism() throws Exception {
-        EmployeeCreateModel create = new EmployeeCreateModel();
+        GadgetCreateModel create = new GadgetCreateModel();
         create.setFirstName("Radia");
         create.setLastName("Perlman");
         create.setEmail("radia@example.com");
 
-        String createResponse = mockMvc.perform(post("/employees-dynamic")
+        String createResponse = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isOk())
@@ -46,73 +45,73 @@ class RestlessRegistrarFullRouteTest {
                 .andReturn().getResponse().getContentAsString();
         long id = objectMapper.readTree(createResponse).get("id").asLong();
 
-        mockMvc.perform(get("/employees-dynamic/{id}", id))
+        mockMvc.perform(get("/gadgets-dynamic/{id}", id))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lastName").value("Perlman"));
 
-        mockMvc.perform(get("/employees-dynamic/list"))
+        mockMvc.perform(get("/gadgets-dynamic/list"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].firstName").value("Radia"));
 
-        mockMvc.perform(get("/employees-dynamic"))
+        mockMvc.perform(get("/gadgets-dynamic"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].firstName").value("Radia"));
 
-        mockMvc.perform(get("/employees-dynamic/overview"))
+        mockMvc.perform(get("/gadgets-dynamic/overview"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.body[0].email").value("radia@example.com"));
 
-        mockMvc.perform(get("/employees-dynamic/select/async"))
+        mockMvc.perform(get("/gadgets-dynamic/select/async"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1));
 
-        mockMvc.perform(get("/employees-dynamic").param("lastName", "Nobody"))
+        mockMvc.perform(get("/gadgets-dynamic").param("lastName", "Nobody"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(0));
 
-        EmployeeUpdateModel update = new EmployeeUpdateModel();
+        GadgetUpdateModel update = new GadgetUpdateModel();
         update.setFirstName("Radia");
         update.setLastName("Updated");
         update.setEmail("radia.updated@example.com");
 
-        mockMvc.perform(put("/employees-dynamic/{id}", id)
+        mockMvc.perform(put("/gadgets-dynamic/{id}", id)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(update)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lastName").value("Updated"));
 
-        mockMvc.perform(delete("/employees-dynamic/{id}", id))
+        mockMvc.perform(delete("/gadgets-dynamic/{id}", id))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/employees-dynamic/{id}", id))
+        mockMvc.perform(get("/gadgets-dynamic/{id}", id))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     void bulkDeleteWorksThroughTheDynamicMechanism() throws Exception {
-        long first = createEmployee("Grace", "Hopper", "grace2@example.com");
-        long second = createEmployee("Hedy", "Lamarr", "hedy@example.com");
+        long first = createGadget("Grace", "Hopper", "grace2@example.com");
+        long second = createGadget("Hedy", "Lamarr", "hedy@example.com");
 
-        EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
+        GadgetDeleteModel deleteModel = new GadgetDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
-        mockMvc.perform(delete("/employees-dynamic")
+        mockMvc.perform(delete("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/employees-dynamic/{id}", first)).andExpect(status().isNotFound());
-        mockMvc.perform(get("/employees-dynamic/{id}", second)).andExpect(status().isNotFound());
+        mockMvc.perform(get("/gadgets-dynamic/{id}", first)).andExpect(status().isNotFound());
+        mockMvc.perform(get("/gadgets-dynamic/{id}", second)).andExpect(status().isNotFound());
     }
 
-    private long createEmployee(String firstName, String lastName, String email) throws Exception {
-        EmployeeCreateModel create = new EmployeeCreateModel();
+    private long createGadget(String firstName, String lastName, String email) throws Exception {
+        GadgetCreateModel create = new GadgetCreateModel();
         create.setFirstName(firstName);
         create.setLastName(lastName);
         create.setEmail(email);
 
-        String response = mockMvc.perform(post("/employees-dynamic")
+        String response = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isOk())

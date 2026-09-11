@@ -10,10 +10,12 @@
     <name>spring-boot-restless-reactor</name>
     <description>Reactor build: the annotation processor must be a separately-built artifact
         from the code that uses it (it can't process its own compilation unit), so "processor"
-        builds first and "app" depends on it.</description>
+        builds first and "app" depends on it. "example" is a standalone consumer of "app" (the
+        library) and "processor", demonstrating real usage under its own package.</description>
 
     <modules>
         <module>processor</module>
         <module>app</module>
+        <module>example</module>
     </modules>
 </project>

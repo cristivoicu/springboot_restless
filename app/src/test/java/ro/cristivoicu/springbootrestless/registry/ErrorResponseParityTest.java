@@ -8,7 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
-import ro.cristivoicu.springbootrestless.entity.employee.EmployeeCreateModel;
+import ro.cristivoicu.springbootrestless.fixtures.gadget.GadgetCreateModel;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -17,8 +17,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Stage 4: proves the dynamic mechanism isn't just "returns 400"/"returns 404" but produces the
- * exact same response as the hand-written reference controller - status, content type, and body,
+ * Proves the dynamic mechanism isn't just "returns 400"/"returns 404" but produces the exact
+ * same response as the hand-written reference controller - status, content type, and body,
  * byte for byte. This holds because Spring MVC's exception resolution is global to
  * {@code DispatcherServlet}, not tied to which {@code HandlerMapping} matched the request.
  */
@@ -35,19 +35,19 @@ class ErrorResponseParityTest {
 
     @Test
     void invalidBodyProducesIdenticalResponseOnBothRoutes() throws Exception {
-        EmployeeCreateModel invalid = new EmployeeCreateModel();
+        GadgetCreateModel invalid = new GadgetCreateModel();
         invalid.setFirstName("");
         invalid.setLastName("Turing");
         invalid.setEmail("not-an-email");
         String body = objectMapper.writeValueAsString(invalid);
 
-        MvcResult handWritten = mockMvc.perform(post("/employees")
+        MvcResult handWritten = mockMvc.perform(post("/gadgets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
                 .andReturn();
 
-        MvcResult dynamic = mockMvc.perform(post("/employees-dynamic")
+        MvcResult dynamic = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
@@ -61,11 +61,11 @@ class ErrorResponseParityTest {
 
     @Test
     void missingIdProducesIdenticalResponseOnBothRoutes() throws Exception {
-        MvcResult handWritten = mockMvc.perform(get("/employees/{id}", 999_999L))
+        MvcResult handWritten = mockMvc.perform(get("/gadgets/{id}", 999_999L))
                 .andExpect(status().isNotFound())
                 .andReturn();
 
-        MvcResult dynamic = mockMvc.perform(get("/employees-dynamic/{id}", 999_999L))
+        MvcResult dynamic = mockMvc.perform(get("/gadgets-dynamic/{id}", 999_999L))
                 .andExpect(status().isNotFound())
                 .andReturn();
 
@@ -75,14 +75,11 @@ class ErrorResponseParityTest {
 
     @Test
     void malformedIdReturnsBadRequestOnBothRoutes() throws Exception {
-        MvcResult handWritten = mockMvc.perform(get("/employees/{id}", "not-a-number"))
+        MvcResult handWritten = mockMvc.perform(get("/gadgets/{id}", "not-a-number"))
                 .andReturn();
-        MvcResult dynamic = mockMvc.perform(get("/employees-dynamic/{id}", "not-a-number"))
+        MvcResult dynamic = mockMvc.perform(get("/gadgets-dynamic/{id}", "not-a-number"))
                 .andReturn();
 
-        // extractId()'s manual ConversionService.convert() bypasses the normal @PathVariable
-        // resolver (which throws MethodArgumentTypeMismatchException), so it must translate a
-        // malformed id to 400 by hand rather than let it surface as an unhandled 500.
         assertThat(dynamic.getResponse().getStatus()).isEqualTo(400);
         assertThat(handWritten.getResponse().getStatus()).isEqualTo(400);
     }
@@ -91,18 +88,15 @@ class ErrorResponseParityTest {
     void malformedJsonBodyReturnsBadRequestOnBothRoutes() throws Exception {
         String truncatedJson = "{\"firstName\": \"Ada\", ";
 
-        MvcResult handWritten = mockMvc.perform(post("/employees")
+        MvcResult handWritten = mockMvc.perform(post("/gadgets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(truncatedJson))
                 .andReturn();
-        MvcResult dynamic = mockMvc.perform(post("/employees-dynamic")
+        MvcResult dynamic = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(truncatedJson))
                 .andReturn();
 
-        // readBody()'s manual ObjectMapper.readValue() bypasses HttpMessageConverter (which
-        // throws HttpMessageNotReadableException), so malformed JSON must translate to 400 by
-        // hand rather than let it surface as an unhandled 500.
         assertThat(dynamic.getResponse().getStatus()).isEqualTo(400);
         assertThat(handWritten.getResponse().getStatus()).isEqualTo(400);
     }

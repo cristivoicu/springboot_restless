@@ -6,8 +6,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
-import ro.cristivoicu.springbootrestless.entity.department.DepartmentCreateModel;
-import ro.cristivoicu.springbootrestless.entity.employee.EmployeeCreateModel;
+import ro.cristivoicu.springbootrestless.fixtures.gadget.GadgetCreateModel;
+import ro.cristivoicu.springbootrestless.fixtures.gizmo.GizmoCreateModel;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -16,10 +16,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Stage 3 proof: Employee ("/employees-dynamic", added in Stage 2) and Department
- * ("/departments", added purely by writing its own beans in Stage 3) both route correctly
- * through the same {@link RestlessRegistrar} with no cross-talk between resources - i.e. no
- * accidental shared mutable state in {@code RestlessResourceHandler}.
+ * Proof: Gadget ("/gadgets-dynamic") and Gizmo ("/gizmos") both route correctly through the
+ * same {@link RestlessRegistrar} with no cross-talk between resources - i.e. no accidental
+ * shared mutable state in {@code RestlessResourceHandler}.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -33,46 +32,46 @@ class CrossResourceIsolationTest {
     private ObjectMapper objectMapper;
 
     @Test
-    void employeeAndDepartmentRouteIndependently() throws Exception {
-        EmployeeCreateModel employee = new EmployeeCreateModel();
-        employee.setFirstName("Barbara");
-        employee.setLastName("Liskov");
-        employee.setEmail("barbara@example.com");
+    void gadgetAndGizmoRouteIndependently() throws Exception {
+        GadgetCreateModel gadget = new GadgetCreateModel();
+        gadget.setFirstName("Barbara");
+        gadget.setLastName("Liskov");
+        gadget.setEmail("barbara@example.com");
 
-        String employeeResponse = mockMvc.perform(post("/employees-dynamic")
+        String gadgetResponse = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
-                        .content(objectMapper.writeValueAsString(employee)))
+                        .content(objectMapper.writeValueAsString(gadget)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        long employeeId = objectMapper.readTree(employeeResponse).get("id").asLong();
+        long gadgetId = objectMapper.readTree(gadgetResponse).get("id").asLong();
 
-        DepartmentCreateModel department = new DepartmentCreateModel();
-        department.setName("Engineering");
-        department.setCode("ENG");
+        GizmoCreateModel gizmo = new GizmoCreateModel();
+        gizmo.setName("Engineering");
+        gizmo.setCode("ENG");
 
-        String departmentResponse = mockMvc.perform(post("/departments")
+        String gizmoResponse = mockMvc.perform(post("/gizmos")
                         .contentType("application/json")
-                        .content(objectMapper.writeValueAsString(department)))
+                        .content(objectMapper.writeValueAsString(gizmo)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        long departmentId = objectMapper.readTree(departmentResponse).get("id").asLong();
+        long gizmoId = objectMapper.readTree(gizmoResponse).get("id").asLong();
 
         // each resource only sees its own data
-        mockMvc.perform(get("/employees-dynamic"))
+        mockMvc.perform(get("/gadgets-dynamic"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].firstName").value("Barbara"));
 
-        mockMvc.perform(get("/departments"))
+        mockMvc.perform(get("/gizmos"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].name").value("Engineering"));
 
-        mockMvc.perform(get("/employees-dynamic/{id}", employeeId))
+        mockMvc.perform(get("/gadgets-dynamic/{id}", gadgetId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lastName").value("Liskov"));
 
-        mockMvc.perform(get("/departments/{id}", departmentId))
+        mockMvc.perform(get("/gizmos/{id}", gizmoId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("ENG"));
     }
