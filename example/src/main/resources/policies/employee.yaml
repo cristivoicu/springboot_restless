@@ -1,0 +1,43 @@
+---
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: employee
+  rules:
+    # admin: unconditional access to everything.
+    - actions: ["*"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+
+    # manager: may always create, but read/update/delete only the employees whose lastName
+    # matches their own "scopedLastName" claim - the same semantics the old header-based demo
+    # guard had (X-Scope-LastName), now expressed as a real policy instead of hand-rolled code.
+    - actions: ["create"]
+      effect: EFFECT_ALLOW
+      roles: ["manager"]
+
+    # Note the "!has(...) ||" guard: CerbosAuthorizationGuard.preCheck() (the coarse "can this
+    # principal even attempt this action" gate, called before any entity is loaded) checks against
+    # a synthetic resource with NO attributes at all - request.resource.attr.lastName is simply
+    # unset there. Without the has() guard, that would make this condition false and preCheck deny
+    # the attempt outright for every manager, before scope()/canAccess() ever get a chance to do
+    # the real per-row restriction. has() lets the attribute-less coarse check pass through
+    # unconditionally, while canAccess()/scope() - which always run with real attributes present -
+    # still evaluate the actual equality.
+    - actions:
+        - read_one
+        - read_list
+        - read_page
+        - read_page_overview
+        - read_page_select
+        - update
+        - delete_one
+        - delete_all
+        - byEmailDomain
+      effect: EFFECT_ALLOW
+      roles: ["manager"]
+      condition:
+        match:
+          expr: >
+            !has(request.resource.attr.lastName) ||
+            request.resource.attr.lastName == request.principal.attr.scopedLastName

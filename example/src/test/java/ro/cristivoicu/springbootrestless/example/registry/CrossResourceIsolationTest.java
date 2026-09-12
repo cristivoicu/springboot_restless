@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import ro.cristivoicu.springbootrestless.example.entity.department.DepartmentCreateModel;
@@ -20,11 +21,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * ("/departments", added purely by writing its own beans in Stage 3) both route correctly
  * through the same {@link RestlessRegistrar} with no cross-talk between resources - i.e. no
  * accidental shared mutable state in {@code RestlessResourceHandler}.
+ * <p>
+ * {@code @WithMockUser}+{@link CerbosBackedTest}: see {@link Stage1DynamicRegistrationTest}'s
+ * javadoc - Department has no guard and stays open; only the Employee side needs this.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
-class CrossResourceIsolationTest {
+@WithMockUser(username = "demo-admin", authorities = "admin")
+class CrossResourceIsolationTest extends CerbosBackedTest {
 
     @Autowired
     private MockMvc mockMvc;

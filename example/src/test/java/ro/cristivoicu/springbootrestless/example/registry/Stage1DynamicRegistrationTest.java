@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeCreateModel;
@@ -20,11 +21,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@link RestlessRegistrar} for every {@code @RestlessResource} bean) is reachable through
  * DispatcherServlet exactly like a normal {@code @RestController} route, and
  * {@code RestlessResourceHandler.findOne}'s manual id-conversion + entity-mapping works.
+ * <p>
+ * {@code /employees-dynamic} now goes through a real {@code CerbosAuthorizationGuard} - {@code
+ * @WithMockUser} pre-authenticates as an unconditionally-allowed "admin" (see {@code
+ * policies/employee.yaml}) so this stays a pure routing/mapping test, not an authorization one;
+ * {@link CerbosBackedTest} supplies the real PDP that guard now calls on every request.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
-class Stage1DynamicRegistrationTest {
+@WithMockUser(username = "demo-admin", authorities = "admin")
+class Stage1DynamicRegistrationTest extends CerbosBackedTest {
 
     @Autowired
     private MockMvc mockMvc;

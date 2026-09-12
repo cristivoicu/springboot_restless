@@ -16,6 +16,7 @@
     <modules>
         <module>processor</module>
         <module>app</module>
+        <module>cerbos</module>
         <module>example</module>
     </modules>
 </project>

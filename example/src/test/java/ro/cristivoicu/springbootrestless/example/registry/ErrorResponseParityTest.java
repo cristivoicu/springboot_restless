@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,11 +22,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * exact same response as the hand-written reference controller - status, content type, and body,
  * byte for byte. This holds because Spring MVC's exception resolution is global to
  * {@code DispatcherServlet}, not tied to which {@code HandlerMapping} matched the request.
+ * <p>
+ * {@code @WithMockUser}+{@link CerbosBackedTest}: see {@link Stage1DynamicRegistrationTest}'s
+ * javadoc - same reasoning, this stays a pure error-shape-parity test.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
-class ErrorResponseParityTest {
+@WithMockUser(username = "demo-admin", authorities = "admin")
+class ErrorResponseParityTest extends CerbosBackedTest {
 
     @Autowired
     private MockMvc mockMvc;

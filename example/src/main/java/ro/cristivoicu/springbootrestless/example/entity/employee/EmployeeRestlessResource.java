@@ -1,11 +1,13 @@
 package ro.cristivoicu.springbootrestless.example.entity.employee;
 
-import jakarta.servlet.http.HttpServletRequest;
+import dev.cerbos.sdk.CerbosBlockingClient;
+import dev.cerbos.sdk.builders.AttributeValue;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import ro.cristivoicu.springbootrestless.annotation.RestlessResource;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
+import ro.cristivoicu.springbootrestless.cerbos.CerbosAuthorizationGuard;
 import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
 import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
@@ -31,17 +33,20 @@ public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, 
     private final EmployeeUpdateDataSource updateDataSource;
     private final EmployeeDeleteDataSource deleteDataSource;
     private final EmployeeMapper mapper;
+    private final CerbosBlockingClient cerbosClient;
 
     public EmployeeRestlessResource(EmployeeCreateDataSource createDataSource,
                                      EmployeeReadDataSource readDataSource,
                                      EmployeeUpdateDataSource updateDataSource,
                                      EmployeeDeleteDataSource deleteDataSource,
-                                     EmployeeMapper mapper) {
+                                     EmployeeMapper mapper,
+                                     CerbosBlockingClient cerbosClient) {
         this.createDataSource = createDataSource;
         this.readDataSource = readDataSource;
         this.updateDataSource = updateDataSource;
         this.deleteDataSource = deleteDataSource;
         this.mapper = mapper;
+        this.cerbosClient = cerbosClient;
     }
 
     @Override
@@ -109,34 +114,17 @@ public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, 
     }
 
     /**
-     * Demonstration guard: a stand-in for a real principal-derived guard. No-op (fully open)
-     * when the {@value #SCOPE_HEADER} header is absent, so every existing test - which never
-     * sends this header - is unaffected. When present, scopes list/page reads to
-     * {@code lastName = <header value>} and denies direct fetch/update/delete of any entity
-     * whose {@code lastName} doesn't match.
+     * Real Cerbos-backed guard, replacing the earlier header-based stand-in: {@code
+     * policies/employee.yaml} grants {@code admin} unconditional access, and scopes {@code
+     * manager} to only the employees whose {@code lastName} matches their own {@code
+     * scopedLastName} JWT claim - same semantics the old {@code X-Scope-LastName} header demo
+     * had, now a real policy evaluated by a real PDP instead of hand-rolled guard code. See
+     * {@code CerbosAuthorizationGuard}'s javadoc for how {@code preCheck}/{@code canAccess}/
+     * {@code scope} map onto Cerbos's check/plan calls.
      */
-    private static final String SCOPE_HEADER = "X-Scope-LastName";
-
     @Override
     protected AuthorizationGuard<Employee> getAuthorizationGuard() {
-        return new AuthorizationGuard<>() {
-            @Override
-            public Specification<Employee> scope(Action action, String customActionName, HttpServletRequest request) {
-                String scopedLastName = request.getHeader(SCOPE_HEADER);
-                if (!StringUtils.hasText(scopedLastName)) {
-                    return null;
-                }
-                return (root, query, cb) -> cb.equal(root.get("lastName"), scopedLastName);
-            }
-
-            @Override
-            public boolean canAccess(Action action, HttpServletRequest request, Employee entity) {
-                String scopedLastName = request.getHeader(SCOPE_HEADER);
-                if (!StringUtils.hasText(scopedLastName)) {
-                    return true;
-                }
-                return scopedLastName.equals(entity.getLastName());
-            }
-        };
+        return new CerbosAuthorizationGuard<>(cerbosClient, "employee", Employee::getId,
+                employee -> Map.of("lastName", AttributeValue.stringValue(employee.getLastName())));
     }
 }

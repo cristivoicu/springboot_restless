@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeCreateModel;
@@ -19,11 +20,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * for {@code EmployeeRestlessResource} at "/employees-dynamic" behaves the same as the
  * hand-written Stage-0 controllers at "/employees" (see {@code EmployeeCrudTest}) - full route
  * parity, not just the one route Stage 1 proved.
+ * <p>
+ * {@code @WithMockUser}+{@link CerbosBackedTest}: see {@link Stage1DynamicRegistrationTest}'s
+ * javadoc - same reasoning, this stays a routing-parity test, not an authorization one.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
-class RestlessRegistrarFullRouteTest {
+@WithMockUser(username = "demo-admin", authorities = "admin")
+class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
 
     @Autowired
     private MockMvc mockMvc;

@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>ro.cristivoicu</groupId>
+    <artifactId>spring-boot-restless-cerbos</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>spring-boot-restless-cerbos</name>
+    <description>Optional Cerbos-backed AuthorizationGuard for spring-boot-restless. A separate
+        module (not a package inside "app") so consumers who don't want Cerbos never pull in
+        cerbos-sdk-java or Spring Security transitively.</description>
+
+    <properties>
+        <java.version>25</java.version>
+        <cerbos-sdk-java.version>0.20.1</cerbos-sdk-java.version>
+    </properties>
+
+    <dependencies>
+        <!-- The framework itself - CerbosAuthorizationGuard implements its AuthorizationGuard<E>. -->
+        <dependency>
+            <groupId>ro.cristivoicu</groupId>
+            <artifactId>spring-boot-restless</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>dev.cerbos</groupId>
+            <artifactId>cerbos-sdk-java</artifactId>
+            <version>${cerbos-sdk-java.version}</version>
+        </dependency>
+
+        <!-- CerbosPrincipalResolver reads Authentication off SecurityContextHolder and
+             special-cases JwtAuthenticationToken - the concrete mechanism this framework's
+             "example" module wires up (OAuth2 Resource Server / JWT Bearer). Compile-scope here
+             too (not just in "example") since the resolver's source references these types
+             directly; consumers of this module are expected to bring their own Spring Security
+             setup regardless of the concrete auth mechanism. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-resource-server</artifactId>
+        </dependency>
+        <!-- Jwt itself (as opposed to JwtAuthenticationToken, which resource-server brings) lives
+             in oauth2-jose; resource-server only depends on it transitively at runtime scope. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
+        </dependency>
+
+        <!-- cerbos-sdk-java depends on these at runtime scope only (it never exposes protobuf
+             types through its own public API) - CerbosQueryPlanTranslator is the one place in
+             this module that has to reach past the SDK's builders into the raw plan response's
+             protobuf-generated Expression/Operand/Value types, so it needs compile-scope access. -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Boot 4.1 split @DataJpaTest out of spring-boot-test-autoconfigure into its own
+             per-tech-stack module (same restructuring "example"/"app" already hit for
+             @AutoConfigureMockMvc, now under org.springframework.boot.webmvc.test.autoconfigure). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-data-jpa-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- CerbosContainer (bundled in cerbos-sdk-java itself) extends Testcontainers'
+             GenericContainer - junit-jupiter brings the @Testcontainers/@Container JUnit 5
+             extension; version managed by spring-boot-dependencies' Testcontainers BOM import. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- No spring-boot-maven-plugin, same reasoning as "app": this is a library module
+                 with no @SpringBootApplication in src/main, only a test-scoped one for the test
+                 slices below to bootstrap a context from. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

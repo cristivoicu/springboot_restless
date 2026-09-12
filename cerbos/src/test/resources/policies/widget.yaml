@@ -1,0 +1,28 @@
+---
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: widget
+  rules:
+    # admin: unconditional access to everything - exercises the ALWAYS_ALLOWED branch of
+    # scope()/plan() and the unconditional-allow branch of preCheck()/canAccess().
+    - actions: ["create", "read_one", "read_list", "read_page", "update", "delete_one"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+
+    # owner: only the widgets they own - exercises the CONDITIONAL branch, translated into a
+    # real SQL WHERE clause by CerbosQueryPlanTranslator. The "!has(...) ||" guard matters for
+    # preCheck(): its synthetic pre-load resource carries no attributes at all, so without it
+    # this condition would deny every attempt outright before scope()/canAccess() ever run
+    # (see CerbosAuthorizationGuard's javadoc).
+    - actions: ["read_one", "read_list", "read_page", "update", "delete_one"]
+      effect: EFFECT_ALLOW
+      roles: ["owner"]
+      condition:
+        match:
+          expr: >
+            !has(request.resource.attr.ownerId) ||
+            request.resource.attr.ownerId == request.principal.attr.userId
+
+    # nobody (no roles at all): create is allowed to nobody but admin, so preCheck() on an
+    # unprivileged principal exercises the plain-deny branch.

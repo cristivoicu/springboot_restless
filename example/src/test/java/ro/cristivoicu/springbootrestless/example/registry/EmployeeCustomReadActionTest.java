@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeCreateModel;
@@ -18,11 +19,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Stage 2 proof: a named custom read action ({@code byEmailDomain}, see
  * {@code EmployeeRestlessResource}) is reachable as its own extra route beyond the fixed nine,
  * with its own {@code SearchDto} and query logic the default equality filter can't express.
+ * <p>
+ * {@code @WithMockUser}+{@link CerbosBackedTest}: see {@link Stage1DynamicRegistrationTest}'s
+ * javadoc - {@code policies/employee.yaml} allows {@code admin} the {@code byEmailDomain} action
+ * unconditionally, so this stays a pure custom-read-routing test.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
-class EmployeeCustomReadActionTest {
+@WithMockUser(username = "demo-admin", authorities = "admin")
+class EmployeeCustomReadActionTest extends CerbosBackedTest {
 
     @Autowired
     private MockMvc mockMvc;
