@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import ro.cristivoicu.springbootrestless.example.entity.department.DepartmentCreateModel;
@@ -20,11 +21,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * (see {@code DepartmentRestlessResource}) - no hand-written DataSource classes exist for those
  * three verbs at all. Validation and not-found behavior must be unaffected by swapping in the
  * default implementations.
+ * <p>
+ * {@code @WithMockUser}+{@link CerbosBackedTest}: see {@link Stage1DynamicRegistrationTest}'s
+ * javadoc - {@code /departments} now goes through a real {@code CerbosAuthorizationGuard} too;
+ * {@code admin} is unconditionally allowed by {@code policies/department.yaml}, so this stays a
+ * pure CUD-defaulting test, not an authorization one.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
-class DepartmentDefaultCudTest {
+@WithMockUser(username = "demo-admin", authorities = "admin")
+class DepartmentDefaultCudTest extends CerbosBackedTest {
 
     @Autowired
     private MockMvc mockMvc;

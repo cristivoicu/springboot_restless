@@ -3,6 +3,7 @@ package ro.cristivoicu.springbootrestless.cerbos;
 import dev.cerbos.sdk.CerbosBlockingClient;
 import dev.cerbos.sdk.CerbosClientBuilder;
 import dev.cerbos.sdk.CerbosContainer;
+import dev.cerbos.sdk.builders.AttributeValue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -101,6 +102,26 @@ class CerbosAuthorizationGuardIT {
         authenticateAs("nobody", "unassigned-role", Map.of());
 
         assertThat(guard.preCheck(Action.CREATE, null, request())).isFalse();
+    }
+
+    /**
+     * {@code principalAttributesExtender} exists for attributes that don't come from a JWT claim
+     * at all - here, "department" is deliberately left off the token itself (unlike {@code
+     * ownerId} in the other tests) and supplied only by the extender, proving it's actually
+     * merged onto the principal {@link CerbosPrincipalResolver} builds, not read from the token.
+     */
+    @Test
+    void principalAttributesExtenderSuppliesAttributesTheJwtNeverCarried() {
+        List<Widget> widgets = seed();
+        Widget engineering = widgets.get(0); // department "engineering", see seed()
+        Widget sales = widgets.get(1); // department "sales"
+        CerbosAuthorizationGuard<Widget> guard = new CerbosAuthorizationGuard<>(client, "widget", Widget::getId,
+                CerbosResourceAttributesMapper.reflective(Widget.class), CerbosActionNaming.DEFAULT,
+                request -> Map.of("department", AttributeValue.stringValue("engineering")));
+        authenticateAs("colleague-user", "colleague", Map.of()); // no department claim on the token
+
+        assertThat(guard.canAccess(Action.READ_ONE, request(), engineering)).isTrue();
+        assertThat(guard.canAccess(Action.READ_ONE, request(), sales)).isFalse();
     }
 
     private CerbosAuthorizationGuard<Widget> widgetGuard() {

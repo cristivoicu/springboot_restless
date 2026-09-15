@@ -13,4 +13,7 @@ public class ProjectCreateModel implements CreateModel {
     private String name;
 
     private String description;
+
+    @NotBlank
+    private String departmentCode;
 }

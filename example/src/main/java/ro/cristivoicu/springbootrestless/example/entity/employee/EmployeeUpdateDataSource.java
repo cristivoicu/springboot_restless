@@ -19,6 +19,8 @@ public class EmployeeUpdateDataSource extends UpdateDataSource<Employee, Long, E
         employee.setFirstName(updateDto.getFirstName());
         employee.setLastName(updateDto.getLastName());
         employee.setEmail(updateDto.getEmail());
+        employee.setSalary(updateDto.getSalary());
+        employee.setDepartmentCode(updateDto.getDepartmentCode());
         return specificationRepository.save(employee);
     }
 }

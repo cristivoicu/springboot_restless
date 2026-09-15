@@ -9,6 +9,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.math.BigDecimal;
+
 @Entity
 @Getter
 @Setter
@@ -25,4 +27,21 @@ public class Employee {
     private String lastName;
 
     private String email;
+
+    /**
+     * Deliberately sensitive: demonstrates {@code CerbosFieldMasker} in {@link EmployeeMapper} -
+     * hidden from the DTO for managers who lack the {@code canViewSalary} JWT attribute, always
+     * visible to admins. See {@code policies/employee.yaml}'s {@code view} action.
+     */
+    private BigDecimal salary;
+
+    /**
+     * Which {@link ro.cristivoicu.springbootrestless.example.entity.department.Department}'s
+     * {@code code} this employee belongs to - not a JPA {@code @ManyToOne} (this codebase keeps
+     * every entity flat, no mapped associations anywhere), just a matching natural key. Read back
+     * by {@code ProjectRestlessResource}'s guard (via {@code EmployeeRepository.findByEmail}, the
+     * authenticated principal's own row) to answer "what's my department" for {@code
+     * policies/project.yaml}'s row-scoping rule - see its javadoc.
+     */
+    private String departmentCode;
 }

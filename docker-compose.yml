@@ -1,0 +1,25 @@
+services:
+  # PDP for the example app's CerbosAuthorizationGuard beans. Serves the exact policies the
+  # app itself ships under example/src/main/resources/policies - no separate copy to keep in sync.
+  cerbos:
+    image: ghcr.io/cerbos/cerbos:latest
+    ports:
+      - "3592:3592"  # HTTP (admin/health)
+      - "3593:3593"  # gRPC - what CerbosClientConfiguration's cerbos.client.target points at
+    volumes:
+      - ./example/src/main/resources/policies:/policies:ro
+
+  # Real IAM for the example app's Spring Security / OAuth2 Resource Server config. Starts with
+  # a pre-imported realm (roles, demo users, custom-attribute claims) - see
+  # docker/keycloak/restless-demo-realm.json and docker/keycloak/README.md for the demo accounts
+  # and how to mint a token against it.
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./docker/keycloak/restless-demo-realm.json:/opt/keycloak/data/import/restless-demo-realm.json:ro

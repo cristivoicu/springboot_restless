@@ -1,0 +1,49 @@
+---
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: project
+  rules:
+    # admin: unconditional access to everything.
+    - actions: ["*"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+
+    # manager: also unconditional - managers oversee projects across departments, so unlike
+    # employee below they are never scoped to their own department.
+    - actions: ["*"]
+      effect: EFFECT_ALLOW
+      roles: ["manager"]
+
+    # employee (i.e. not a manager/admin): read-only, and only within their own department.
+    # departmentCode comes from ProjectRestlessResource's CerbosAuthorizationGuard in two
+    # different ways depending on which hook is asking: the *resource* side is the project's own
+    # departmentCode (CerbosResourceAttributesMapper); the *principal* side isn't a JWT claim at
+    # all - it's resolved from the authenticated employee's own Employee row and merged onto the
+    # principal via principalAttributesExtender (see ProjectRestlessResource's javadoc).
+    #
+    # The "!has(resource...) ||" half matters exactly like policies/employee.yaml's: preCheck()'s
+    # synthetic pre-load resource carries no attributes at all, so without it this condition would
+    # deny every read attempt outright before scope()/canAccess() - which always run with the real
+    # departmentCode present - ever get a chance to do the actual restriction.
+    #
+    # The "has(principal...) &&" half is this policy's own addition, for a failure mode
+    # policies/employee.yaml never has to handle: scopedLastName is always present (every manager
+    # has the claim), but an employee's departmentCode is only present when
+    # principalAttributesExtender's Employee lookup actually found a row - referencing a genuinely
+    # absent map key on either side of the "==" would otherwise be a CEL evaluation error rather
+    # than a clean false. An employee with no resolvable department correctly sees nothing.
+    - actions:
+        - read_one
+        - read_list
+        - read_page
+        - read_page_overview
+        - read_page_select
+      effect: EFFECT_ALLOW
+      roles: ["employee"]
+      condition:
+        match:
+          expr: >
+            !has(request.resource.attr.departmentCode) ||
+            (has(request.principal.attr.departmentCode) &&
+             request.resource.attr.departmentCode == request.principal.attr.departmentCode)

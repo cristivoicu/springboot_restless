@@ -1,0 +1,113 @@
+{
+  "realm": "restless-demo",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "admin" },
+      { "name": "manager" },
+      { "name": "employee" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "restless-example",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["*"],
+      "protocolMappers": [
+        {
+          "name": "scopedLastName",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "scopedLastName",
+            "claim.name": "scopedLastName",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "canViewSalary",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "canViewSalary",
+            "claim.name": "canViewSalary",
+            "jsonType.label": "boolean",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "alice@restless-demo.example",
+      "firstName": "Alice",
+      "lastName": "Admin",
+      "credentials": [
+        { "type": "password", "value": "alice-admin-pw", "temporary": false }
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "bob-manager",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "bob@restless-demo.example",
+      "firstName": "Bob",
+      "lastName": "Manager",
+      "credentials": [
+        { "type": "password", "value": "bob-manager-pw", "temporary": false }
+      ],
+      "realmRoles": ["manager"],
+      "attributes": {
+        "scopedLastName": ["Hopper"],
+        "canViewSalary": ["false"]
+      }
+    },
+    {
+      "username": "carol-manager",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "carol@restless-demo.example",
+      "firstName": "Carol",
+      "lastName": "Manager",
+      "credentials": [
+        { "type": "password", "value": "carol-manager-pw", "temporary": false }
+      ],
+      "realmRoles": ["manager"],
+      "attributes": {
+        "scopedLastName": ["Lovelace"],
+        "canViewSalary": ["true"]
+      }
+    },
+    {
+      "username": "dave-employee",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "dave@restless-demo.example",
+      "firstName": "Dave",
+      "lastName": "Employee",
+      "credentials": [
+        { "type": "password", "value": "dave-employee-pw", "temporary": false }
+      ],
+      "realmRoles": ["employee"]
+    }
+  ]
+}

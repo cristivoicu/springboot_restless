@@ -119,6 +119,26 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+            <!-- CerbosAuthorizationGuardIT is named "*IT", conventionally a Failsafe
+                 (integration-test/verify phase) class rather than a Surefire (test phase) one -
+                 but this module has no Failsafe binding and no other module needs one either, so
+                 without this, a plain "mvn test" silently skips it (unlike every other
+                 Testcontainers-backed test elsewhere in the reactor, all named "*Test"). Explicit
+                 <includes> restores Surefire's own default patterns alongside "*IT", rather than
+                 replacing them. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <includes>
+                        <include>**/Test*.java</include>
+                        <include>**/*Test.java</include>
+                        <include>**/*Tests.java</include>
+                        <include>**/*TestCase.java</include>
+                        <include>**/*IT.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

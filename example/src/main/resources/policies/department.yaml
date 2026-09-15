@@ -1,0 +1,23 @@
+---
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: department
+  rules:
+    # admin: unconditional access to everything.
+    - actions: ["*"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+
+    # Everyone else authenticated can read the department directory (it's reference data every
+    # employee needs to make sense of their own record/projects) but not restructure it - no
+    # condition needed, this is a role-only policy: departments aren't scoped to anything, so
+    # there's nothing for CerbosAuthorizationGuard.scope()'s query plan to restrict on either.
+    - actions:
+        - read_one
+        - read_list
+        - read_page
+        - read_page_overview
+        - read_page_select
+      effect: EFFECT_ALLOW
+      roles: ["manager", "employee"]

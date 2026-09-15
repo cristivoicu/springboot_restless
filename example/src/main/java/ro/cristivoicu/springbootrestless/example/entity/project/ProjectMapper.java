@@ -7,6 +7,6 @@ import ro.cristivoicu.springbootrestless.mapper.Mapper;
 public class ProjectMapper implements Mapper<Project, ProjectDto> {
     @Override
     public ProjectDto map(Project source) {
-        return new ProjectDto(source.getId(), source.getName(), source.getDescription());
+        return new ProjectDto(source.getId(), source.getName(), source.getDescription(), source.getDepartmentCode());
     }
 }

@@ -13,4 +13,7 @@ public class ProjectUpdateModel implements UpdateModel {
     private String name;
 
     private String description;
+
+    @NotBlank
+    private String departmentCode;
 }

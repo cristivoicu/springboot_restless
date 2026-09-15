@@ -14,4 +14,5 @@ public class ProjectDto implements EntityDto {
     private Long id;
     private String name;
     private String description;
+    private String departmentCode;
 }

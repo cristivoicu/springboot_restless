@@ -24,5 +24,19 @@ resourcePolicy:
             !has(request.resource.attr.ownerId) ||
             request.resource.attr.ownerId == request.principal.attr.userId
 
+    # colleague: only widgets in their own department - exercises
+    # CerbosAuthorizationGuard's principalAttributesExtender hook. Deliberately keyed on
+    # "department", an attribute the test's JWT never carries at all (unlike ownerId above),
+    # so a passing check here proves the extender's contribution actually reached the principal
+    # Cerbos evaluated against, not just that the field happens to exist on the resource.
+    - actions: ["read_one", "read_list"]
+      effect: EFFECT_ALLOW
+      roles: ["colleague"]
+      condition:
+        match:
+          expr: >
+            !has(request.resource.attr.department) ||
+            request.resource.attr.department == request.principal.attr.department
+
     # nobody (no roles at all): create is allowed to nobody but admin, so preCheck() on an
     # unprivileged principal exercises the plain-deny branch.

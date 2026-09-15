@@ -42,6 +42,16 @@ import java.util.function.Function;
  * CerbosActionNaming#DEFAULT}, override-able (e.g. a differently-named existing policy) via the
  * five-argument constructor.
  * <p>
+ * <b>Attributes the JWT itself doesn't carry.</b> {@link CerbosPrincipalResolver} only ever
+ * exposes what's already sitting in the token's claims. Some conditions need a principal
+ * attribute that has to be looked up from somewhere else instead - "which department does this
+ * user belong to" resolved from a database row keyed by their email, say, rather than a claim
+ * Keycloak was configured to emit. {@code principalAttributesExtender} (six-argument
+ * constructor) is called with the current request after the JWT-derived principal is built, and
+ * whatever it returns is merged on top via {@link Principal#withAttributes} - additively, so it
+ * can add attributes without disturbing the ones {@link CerbosPrincipalResolver} already
+ * resolved. Defaults to contributing nothing.
+ * <p>
  * <b>Writing conditions that reference resource attributes.</b> {@link #preCheck}'s resource is
  * synthetic - a placeholder id, no attributes at all - since it runs before any entity is loaded
  * (or, for {@code CREATE}, before one even exists). A policy condition like {@code
@@ -64,6 +74,7 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
     private final Function<E, ?> idExtractor;
     private final CerbosResourceAttributesMapper<E> attributesMapper;
     private final BiFunction<Action, String, String> actionNaming;
+    private final Function<HttpServletRequest, Map<String, AttributeValue>> principalAttributesExtender;
 
     public CerbosAuthorizationGuard(CerbosBlockingClient client, String resourceKind, Function<E, ?> idExtractor,
                                      CerbosResourceAttributesMapper<E> attributesMapper) {
@@ -73,17 +84,25 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
     public CerbosAuthorizationGuard(CerbosBlockingClient client, String resourceKind, Function<E, ?> idExtractor,
                                      CerbosResourceAttributesMapper<E> attributesMapper,
                                      BiFunction<Action, String, String> actionNaming) {
+        this(client, resourceKind, idExtractor, attributesMapper, actionNaming, request -> Map.of());
+    }
+
+    public CerbosAuthorizationGuard(CerbosBlockingClient client, String resourceKind, Function<E, ?> idExtractor,
+                                     CerbosResourceAttributesMapper<E> attributesMapper,
+                                     BiFunction<Action, String, String> actionNaming,
+                                     Function<HttpServletRequest, Map<String, AttributeValue>> principalAttributesExtender) {
         this.client = client;
         this.resourceKind = resourceKind;
         this.idExtractor = idExtractor;
         this.attributesMapper = attributesMapper;
         this.actionNaming = actionNaming;
+        this.principalAttributesExtender = principalAttributesExtender;
     }
 
     @Override
     public boolean preCheck(Action action, String customActionName, HttpServletRequest request) {
         String cerbosAction = actionNaming.apply(action, customActionName);
-        Principal principal = CerbosPrincipalResolver.resolve(request);
+        Principal principal = principalOf(request);
         Resource resource = Resource.newInstance(resourceKind, "new");
         return client.check(principal, resource, cerbosAction).isAllowed(cerbosAction);
     }
@@ -91,7 +110,7 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
     @Override
     public boolean canAccess(Action action, HttpServletRequest request, E entity) {
         String cerbosAction = actionNaming.apply(action, null);
-        Principal principal = CerbosPrincipalResolver.resolve(request);
+        Principal principal = principalOf(request);
         Resource resource = resourceOf(entity);
         return client.check(principal, resource, cerbosAction).isAllowed(cerbosAction);
     }
@@ -99,7 +118,7 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
     @Override
     public Specification<E> scope(Action action, String customActionName, HttpServletRequest request) {
         String cerbosAction = actionNaming.apply(action, customActionName);
-        Principal principal = CerbosPrincipalResolver.resolve(request);
+        Principal principal = principalOf(request);
         Resource resource = Resource.newInstance(resourceKind);
 
         PlanResourcesResult plan = client.plan(principal, resource, cerbosAction);
@@ -114,6 +133,12 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
                 "Cerbos plan for action '" + cerbosAction + "' on resource kind '" + resourceKind
                         + "' is CONDITIONAL but carries no condition"));
         return CerbosQueryPlanTranslator.translate(condition);
+    }
+
+    private Principal principalOf(HttpServletRequest request) {
+        Principal principal = CerbosPrincipalResolver.resolve(request);
+        Map<String, AttributeValue> extra = principalAttributesExtender.apply(request);
+        return extra.isEmpty() ? principal : principal.withAttributes(extra);
     }
 
     private Resource resourceOf(E entity) {

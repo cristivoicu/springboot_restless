@@ -4,11 +4,9 @@ import org.springframework.stereotype.Component;
 import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 
 /**
- * Escape-hatch proof: referenced via {@code @RestlessEntity(createDataSource =
- * ProjectCreateDataSource.class)} on {@link Project}, so the generated {@code
- * ProjectRestlessResource} injects this hand-written bean instead of generating a {@code
- * DefaultCreateDataSource} call — something the default (a plain field-by-field copy) can't
- * express: defaulting a blank description instead of leaving it blank.
+ * Escape-hatch proof: injected into {@code ProjectRestlessResource} by hand instead of a
+ * generated {@code DefaultCreateDataSource} call — something the default (a plain field-by-field
+ * copy) can't express: defaulting a blank description instead of leaving it blank.
  */
 @Component
 public class ProjectCreateDataSource extends CreateDataSource<Project, Long, ProjectCreateModel> {
@@ -26,6 +24,7 @@ public class ProjectCreateDataSource extends CreateDataSource<Project, Long, Pro
         project.setDescription(createDto.getDescription() == null || createDto.getDescription().isBlank()
                 ? DEFAULT_DESCRIPTION
                 : createDto.getDescription());
+        project.setDepartmentCode(createDto.getDepartmentCode());
         return specificationRepository.save(project);
     }
 }

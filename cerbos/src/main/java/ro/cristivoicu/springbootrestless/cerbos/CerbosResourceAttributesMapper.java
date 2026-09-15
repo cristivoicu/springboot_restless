@@ -3,8 +3,6 @@ package ro.cristivoicu.springbootrestless.cerbos;
 import dev.cerbos.sdk.builders.AttributeValue;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,7 +44,7 @@ public interface CerbosResourceAttributesMapper<E> {
      * than a policy should see.
      */
     static <E> CerbosResourceAttributesMapper<E> reflective(Class<E> entityType) {
-        List<Field> fields = declaredFieldsOf(entityType);
+        List<Field> fields = CerbosReflection.declaredFieldsOf(entityType);
         return entity -> {
             Map<String, AttributeValue> attributes = new HashMap<>();
             for (Field field : fields) {
@@ -63,18 +61,5 @@ public interface CerbosResourceAttributesMapper<E> {
             }
             return attributes;
         };
-    }
-
-    private static List<Field> declaredFieldsOf(Class<?> entityType) {
-        List<Field> fields = new ArrayList<>();
-        for (Class<?> type = entityType; type != null && type != Object.class; type = type.getSuperclass()) {
-            for (Field field : type.getDeclaredFields()) {
-                if (!Modifier.isStatic(field.getModifiers())) {
-                    field.setAccessible(true);
-                    fields.add(field);
-                }
-            }
-        }
-        return fields;
     }
 }

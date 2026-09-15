@@ -9,4 +9,6 @@ import ro.cristivoicu.springbootrestless.models.AbstractSearchDto;
 public class ProjectSearchDto extends AbstractSearchDto {
 
     private String name;
+
+    private String departmentCode;
 }

@@ -41,3 +41,17 @@ resourcePolicy:
           expr: >
             !has(request.resource.attr.lastName) ||
             request.resource.attr.lastName == request.principal.attr.scopedLastName
+
+    # "view" isn't one of AuthorizationGuard's CRUD actions - EmployeeMapper checks it
+    # separately, purely to read back the output below (see CerbosFieldMasker). It's not a
+    # substitute for the row-level rule above: a manager only ever reaches this check for a
+    # row they were already allowed to read/update/delete. Field-level masking, not access
+    # control - role AND attribute in one place: the role ("manager") gates whether this rule
+    # applies at all, the "canViewSalary" attribute decides what its output hides.
+    - actions: ["view"]
+      effect: EFFECT_ALLOW
+      roles: ["manager"]
+      output:
+        when:
+          ruleActivated: |-
+            request.principal.attr.canViewSalary == true ? [] : ["salary"]

@@ -16,6 +16,8 @@ public class EmployeeCreateDataSource extends CreateDataSource<Employee, Long, E
         employee.setFirstName(createDto.getFirstName());
         employee.setLastName(createDto.getLastName());
         employee.setEmail(createDto.getEmail());
+        employee.setSalary(createDto.getSalary());
+        employee.setDepartmentCode(createDto.getDepartmentCode());
         return specificationRepository.save(employee);
     }
 }

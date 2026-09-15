@@ -23,7 +23,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * accidental shared mutable state in {@code RestlessResourceHandler}.
  * <p>
  * {@code @WithMockUser}+{@link CerbosBackedTest}: see {@link Stage1DynamicRegistrationTest}'s
- * javadoc - Department has no guard and stays open; only the Employee side needs this.
+ * javadoc - both {@code /employees-dynamic} and {@code /departments} now go through a real
+ * {@code CerbosAuthorizationGuard}; {@code admin} is unconditionally allowed on both policies, so
+ * this stays a pure routing/isolation test, not an authorization one.
  */
 @SpringBootTest
 @AutoConfigureMockMvc

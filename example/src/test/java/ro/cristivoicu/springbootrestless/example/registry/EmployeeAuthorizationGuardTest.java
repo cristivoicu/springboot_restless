@@ -12,6 +12,9 @@ import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeCreateM
 import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeDeleteModel;
 import tools.jackson.databind.ObjectMapper;
 
+import java.math.BigDecimal;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -23,6 +26,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * points against actual policy decisions - not the header-based stand-in this test used to cover.
  * {@code admin} is unconditionally allowed; {@code manager} is scoped to {@code lastName ==
  * <their own scopedLastName claim>} via a real translated Cerbos query plan.
+ * <p>
+ * The {@code salary} tests below cover a different mechanism on the same policy file: {@code
+ * CerbosFieldMasker} field-level masking (via {@code @CerbosHiddenField} on {@code
+ * EmployeeDto.salary}), driven by the {@code view} action's output rather than row-level
+ * access - see {@code EmployeeMapper} and {@code policies/employee.yaml}'s {@code view} rule.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -95,11 +103,63 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
                 .andExpect(status().isOk());
     }
 
+    @Test
+    void adminSeesSalaryOnASingleFetch() throws Exception {
+        long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com", new BigDecimal("95000"));
+
+        String response = mockMvc.perform(get("/employees-dynamic/{id}", id).with(admin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(objectMapper.readTree(response).get("salary").decimalValue()).isEqualByComparingTo("95000");
+    }
+
+    @Test
+    void managerWithoutCanViewSalaryGetsItMaskedOnASingleFetch() throws Exception {
+        long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com", new BigDecimal("95000"));
+
+        String response = mockMvc.perform(get("/employees-dynamic/{id}", id).with(manager("Lovelace", false)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(objectMapper.readTree(response).get("salary").isNull()).isTrue();
+    }
+
+    @Test
+    void managerWithCanViewSalarySeesTheRealValueOnASingleFetch() throws Exception {
+        long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com", new BigDecimal("95000"));
+
+        String response = mockMvc.perform(get("/employees-dynamic/{id}", id).with(manager("Lovelace", true)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(objectMapper.readTree(response).get("salary").decimalValue()).isEqualByComparingTo("95000");
+    }
+
+    @Test
+    void managerWithoutCanViewSalaryGetsItMaskedOnAListReadTooViaBatchedMasking() throws Exception {
+        createEmployee(admin(), "Ada", "Lovelace", "ada@example.com", new BigDecimal("95000"));
+
+        // /list uses EmployeeMapper.map(List<Employee>) - CerbosFieldMasker.maskAll's one
+        // batched RPC path, not the single-entity one the tests above exercise.
+        String response = mockMvc.perform(get("/employees-dynamic/list").with(manager("Lovelace", false)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(objectMapper.readTree(response).get(0).get("salary").isNull()).isTrue();
+    }
+
     private long createEmployee(RequestPostProcessor authentication, String firstName, String lastName, String email) throws Exception {
+        return createEmployee(authentication, firstName, lastName, email, null);
+    }
+
+    private long createEmployee(RequestPostProcessor authentication, String firstName, String lastName,
+                                 String email, BigDecimal salary) throws Exception {
         EmployeeCreateModel create = new EmployeeCreateModel();
         create.setFirstName(firstName);
         create.setLastName(lastName);
         create.setEmail(email);
+        create.setSalary(salary);
 
         String response = mockMvc.perform(post("/employees-dynamic")
                         .with(authentication)
@@ -116,8 +176,12 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
     }
 
     private static RequestPostProcessor manager(String scopedLastName) {
+        return manager(scopedLastName, true);
+    }
+
+    private static RequestPostProcessor manager(String scopedLastName, boolean canViewSalary) {
         return jwt()
-                .jwt(builder -> builder.claim("scopedLastName", scopedLastName))
+                .jwt(builder -> builder.claim("scopedLastName", scopedLastName).claim("canViewSalary", canViewSalary))
                 .authorities(new SimpleGrantedAuthority("manager"));
     }
 }
