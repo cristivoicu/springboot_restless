@@ -35,6 +35,8 @@ action: fine-grained authorization.
 - [Tutorial: Cerbos-backed authorization](#tutorial-cerbos-backed-authorization)
 - [Tutorial: hiding fields with `@CerbosHiddenField`](#tutorial-hiding-fields-with-cerboshiddenfield)
 - [Running the full demo: Docker Compose + Keycloak](#running-the-full-demo-docker-compose--keycloak)
+- [Resilience and observability](#resilience-and-observability)
+- [API completeness](#api-completeness)
 - [Project status](#project-status)
 
 ## Scope
@@ -86,6 +88,8 @@ hand-wired.
 | Identity provider (demo) | [Keycloak](https://www.keycloak.org/), via Docker Compose |
 | Persistence (demo) | H2 (in-memory) |
 | Boilerplate reduction | Lombok |
+| API versioning | Spring Framework 7's own (`RequestMappingInfo.Builder.version(...)`) |
+| Health/observability (optional) | Spring Boot Actuator (`CerbosHealthIndicator`, `cerbos` module) |
 | Testing | JUnit 5, Spring Boot Test / MockMvc, Testcontainers, AssertJ |
 
 ## Modules
@@ -337,6 +341,28 @@ won't see a version a `@RestlessEntity`/`@RestlessResource` declares — that au
 ordinary `@RequestMapping` beans during `RequestMappingHandlerMapping`'s own startup pass, before
 `RestlessRegistrar` has dynamically registered anything at all. List a resource's versions
 explicitly via `addSupportedVersions(...)` instead.
+
+**Selecting which routes get registered**: `RestlessResourceHandler#getEnabledOperations`
+defaults to every fixed route (`ALL_OPERATIONS`); `@RestlessEntity(operations = ...)` forwards the
+same choice onto the generated resource, overriding `getEnabledOperations()` for you when it's
+anything less than everything — e.g. a read-only resource:
+
+```java
+@RestlessEntity(basePath = "/cogs",
+        operations = {RestlessOperation.READ_ONE, RestlessOperation.READ_LIST, RestlessOperation.READ_PAGE})
+```
+
+`RestlessRegistrar` filters `RestlessRegistrar.ROUTES` against the enabled set before registering
+anything, so a disabled operation's routes aren't just guarded off — they're never registered at
+all (the app fixture's `Cog`/`CogGeneratedResourceTest` proves this: `POST`/`PUT`/`DELETE` against
+`/cogs` come back `405`, the same as any other method Spring never mapped). `PATCH` and named
+custom read actions aren't part of this set — they're already independently opt-in via
+`patchDataSource`/custom read actions, so there's nothing here to additionally gate for them. One
+real limit: unlike a hand-wired resource overriding `getEnabledOperations()` directly, disabling an
+operation here doesn't relax the naming-convention requirement on its DTO — `createModel`/
+`updateModel` still have to resolve to something even with `CREATE`/`UPDATE` excluded, since this
+attribute governs routing, not DTO resolution. A resource that should need no `{Entity}CreateModel`
+at all belongs on the manual tier instead.
 
 `Project` is the worked example of that delegating-bean case: `ProjectAuthorizationGuardBean`
 wraps a `CerbosAuthorizationGuard<Project>` (row-scoped by department for non-managers, see
@@ -662,6 +688,60 @@ and `alice-admin` would see both projects, unconditionally — `policies/project
 docker compose down   # when you're done
 ```
 
+## Resilience and observability
+
+`CerbosAuthorizationGuard` fails **closed**, not open — a PDP that's slow past
+`cerbos.client.timeout` (default `3s`, see `CerbosClientConfiguration`) or unreachable makes
+`preCheck`/`canAccess` return `false` and `scope` return an always-deny `Specification`, logged at
+WARN, rather than an unhandled 500 or (far worse) silently falling through to unrestricted access.
+There's no fail-open switch by design: an authorization check that can't reach its policy source
+has no basis to say yes. See `CerbosAuthorizationGuardFailClosedIT` (`cerbos` module) for the
+PDP-dies-mid-test proof.
+
+`CerbosHealthIndicator` (`cerbos` module, `@ConditionalOnClass` on Spring Boot Actuator's
+`HealthIndicator` — only activates if the consumer already depends on `spring-boot-starter-actuator`
+themselves) reports whether the PDP is actually reachable, independent of hitting a guarded route
+to find out. `example` wires it in; `management.endpoint.health.show-details=always` in its
+`application.properties` surfaces it on `/actuator/health` without needing a management-role
+principal, since this demo has no such role modeled.
+
+## API completeness
+
+- **`PATCH`** — entirely opt-in (`@RestlessEntity(patchDataSource = ...)` or a resource overriding
+  `getPatchDataSource()`), unlike the four mandatory CUD verbs: no route gets registered at all
+  until one is provided. `DefaultPatchDataSource` is the reflective default — copies whichever
+  `{Entity}PatchModel` fields the client actually sent (`null` means "not sent", not "clear it";
+  a full `PUT` is still how a client explicitly nulls a field). Checked against its own
+  `Action.PATCH` — deliberately not inherited from `Action.UPDATE`, so granting full-replace
+  access never silently also grants partial-update access. See `Doohickey`/`DoohickeyPatchTest`
+  (`app` module) for the worked example.
+- **Bulk create/update** — `POST`/`PUT {basePath}/bulk`, unconditional (every resource already has
+  a `CreateDataSource`/`UpdateDataSource`). `createAll`/`updateAll` default methods loop the
+  single-item verb, same spirit as `Mapper<E,D>.map(List<E>)`'s own default. Bulk update's body is
+  a JSON object keyed by id (`{"1": {...}, "2": {...}}`); every entry is validated, and (with a
+  guard configured) every target loaded and `canAccess`-checked, before anything is written — the
+  same fail-fast-before-mutating pattern bulk delete already used.
+- **Multi-field sort** — `AbstractSearchDto`'s `sort` is a repeatable query param
+  (`?sort=lastName,asc&sort=firstName,asc`), Spring Data's own convention. An unresolvable
+  direction or a property that isn't an actual field on the entity both become a clean 400 (via
+  `RestlessResourceHandler#pageableOf`) before any query runs, instead of Hibernate's own later
+  and less clear failure.
+- **One error response contract** — `RestlessExceptionHandler` (`app` module, `@RestControllerAdvice`
+  at `Ordered.LOWEST_PRECEDENCE` — a consumer's own handler for the same exception type still
+  wins) gives every route this framework registers, generated or hand-wired, the same JSON body:
+  `{timestamp, status, error, message, path, details}` (`details` is field-level validation
+  messages when relevant, empty otherwise). Before this existed, "the same error shape either way"
+  (`ErrorResponseParityTest`'s whole premise) meant "the same shape Spring Boot's own defaults
+  happened to produce" — undocumented and not this framework's to version.
+- **OpenAPI discovery — a documented gap, not a fix.** `OpenApiDiscoverySpikeTest` (`example`
+  module) confirms springdoc-openapi's usual `@RestController` scanning sees hand-written routes
+  (`/employees`) but *not* routes `RestlessRegistrar` registers dynamically via
+  `RequestMappingHandlerMapping.registerMapping(...)` — including `/projects`, even though it's
+  compile-time generated, since the generated class is still a plain `@Component`, not a
+  `@RestController`. A real fix needs a custom springdoc contributor walking
+  `RequestMappingHandlerMapping` for Restless-owned routes; out of scope here, but the finding (and
+  a regression-proof test for it) is checked in.
+
 ## Project status
 
 Working proof of the runtime-registration mechanism, the compile-time generator (now including a
@@ -677,10 +757,11 @@ carries it while staying fully compile-time generated, via the delegating-bean p
 green, including every Testcontainers-backed class (a live Cerbos PDP is started automatically for
 those): `app`'s own suite (`app/src/test/.../fixtures/`, `.../registry/`) proves the framework
 mechanism in isolation via `Gadget`/`Gizmo`/`Sprocket`/`Doohickey` — the last exercising the
-generated default `Mapper`, `@RestlessMapperExclude`, and an annotation-wired guard; `cerbos`'s
-suite proves the query-plan translator, the field masker, the guard's three hook points, and
-`principalAttributesExtender`, all against a real PDP; `example`'s suite proves the same mechanism
-through realistic, business-named usage — full route coverage, cross-resource isolation,
-duplicate-`basePath` detection, error-response parity against a hand-written baseline,
-default-CUD end-to-end behavior, custom read actions, and every guard's row-scoping and (for
-Employee) field-masking scenarios.
+generated default `Mapper`, `@RestlessMapperExclude`, an annotation-wired guard, API versioning,
+and an opt-in `PATCH` route; `cerbos`'s suite proves the query-plan translator, the field masker,
+the guard's three hook points (including fail-closed behavior against a killed PDP), the health
+indicator, and `principalAttributesExtender`, all against a real PDP; `example`'s suite proves the
+same mechanism through realistic, business-named usage — full route coverage, cross-resource
+isolation, duplicate-`basePath` detection, error-response parity against a hand-written baseline,
+default-CUD end-to-end behavior, custom read actions, bulk create/update, multi-field sort, and
+every guard's row-scoping and (for Employee) field-masking scenarios. 106 tests across the reactor.

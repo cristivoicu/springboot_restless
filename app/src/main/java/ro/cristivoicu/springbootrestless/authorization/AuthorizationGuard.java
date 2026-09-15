@@ -30,7 +30,7 @@ public interface AuthorizationGuard<E> {
 
     enum Action {
         CREATE, READ_ONE, READ_LIST, READ_PAGE, READ_PAGE_OVERVIEW, READ_PAGE_SELECT,
-        UPDATE, DELETE_ONE, DELETE_ALL, CUSTOM_READ
+        UPDATE, PATCH, DELETE_ONE, DELETE_ALL, CUSTOM_READ
     }
 
     default boolean preCheck(Action action, String customActionName, HttpServletRequest request) {

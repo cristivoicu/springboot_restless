@@ -8,6 +8,7 @@ import org.springframework.core.convert.ConversionException;
 import org.springframework.core.convert.ConversionService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +23,7 @@ import org.springframework.web.servlet.HandlerMapping;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
 import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
+import ro.cristivoicu.springbootrestless.controller.patch.PatchDataSource;
 import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
 import ro.cristivoicu.springbootrestless.controller.update.UpdateDataSource;
 import ro.cristivoicu.springbootrestless.datasource.TypedDataSource;
@@ -29,18 +31,25 @@ import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.models.CreateModel;
 import ro.cristivoicu.springbootrestless.models.DeleteModel;
 import ro.cristivoicu.springbootrestless.models.PageableResponse;
+import ro.cristivoicu.springbootrestless.models.PatchModel;
 import ro.cristivoicu.springbootrestless.models.SearchDto;
 import ro.cristivoicu.springbootrestless.models.UpdateModel;
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JavaType;
 import tools.jackson.databind.ObjectMapper;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Runtime-registered replacement for the four hand-subclassed {@code *Controller} classes.
@@ -76,6 +85,19 @@ import java.util.Map;
  */
 public abstract class RestlessResourceHandler<E, K> {
 
+    /**
+     * The full, default set {@link #getEnabledOperations} returns unless overridden - every
+     * fixed route this framework registers, at the granularity {@code RestlessRegistrar.ROUTES}
+     * groups them into (one {@link AuthorizationGuard.Action} per group of routes that share it -
+     * see {@link #getEnabledOperations}'s own javadoc).
+     */
+    public static final Set<AuthorizationGuard.Action> ALL_OPERATIONS = Set.of(
+            AuthorizationGuard.Action.CREATE, AuthorizationGuard.Action.READ_ONE,
+            AuthorizationGuard.Action.READ_LIST, AuthorizationGuard.Action.READ_PAGE,
+            AuthorizationGuard.Action.READ_PAGE_OVERVIEW, AuthorizationGuard.Action.READ_PAGE_SELECT,
+            AuthorizationGuard.Action.UPDATE, AuthorizationGuard.Action.DELETE_ONE,
+            AuthorizationGuard.Action.DELETE_ALL);
+
     private static final Method VALIDATION_TARGET_METHOD;
 
     static {
@@ -98,6 +120,7 @@ public abstract class RestlessResourceHandler<E, K> {
     private Validator validator;
     private Constructor<?> searchDtoConstructor;
     private Map<String, Constructor<?>> customActionSearchDtoConstructors;
+    private Class<?> patchModelType;
 
     /**
      * Wires this resource's infra collaborators. Called once by whichever registrar discovered
@@ -118,6 +141,8 @@ public abstract class RestlessResourceHandler<E, K> {
             customActionSearchDtoConstructors.put(entry.getKey(),
                     resolveNoArgConstructor(searchDtoType, "custom read action '" + entry.getKey() + "'"));
         }
+
+        getPatchDataSource().ifPresent(patchDataSource -> this.patchModelType = resolveDtoType(patchDataSource, PatchDataSource.class));
     }
 
     private static Constructor<?> resolveNoArgConstructor(Class<?> type, String describedAs) {
@@ -168,13 +193,30 @@ public abstract class RestlessResourceHandler<E, K> {
         return GenericTypeResolver.resolveTypeArguments(dataSource.getClass(), declaringClass)[2];
     }
 
-    protected abstract CreateDataSource<E, K, ?> getCreateDataSource();
+    /**
+     * Unlike {@link #getReadDataSource} (still abstract - used internally for guard checks by
+     * update/patch/delete even when no read route is exposed, see {@link #getEnabledOperations}),
+     * Create/Update/Delete have no such internal use once their own route is disabled, so they're
+     * no longer mandatory to implement at all: the default throws, and is only ever reached if a
+     * resource enables the corresponding operation (see {@link #getEnabledOperations}) without
+     * overriding the matching accessor - a real misconfiguration, not a routine case.
+     */
+    protected CreateDataSource<E, K, ?> getCreateDataSource() {
+        throw new UnsupportedOperationException(getClass().getSimpleName()
+                + " enables a CREATE operation but never overrides getCreateDataSource()");
+    }
 
     protected abstract ReadDataSource<E, K, ?> getReadDataSource();
 
-    protected abstract UpdateDataSource<E, K, ?> getUpdateDataSource();
+    protected UpdateDataSource<E, K, ?> getUpdateDataSource() {
+        throw new UnsupportedOperationException(getClass().getSimpleName()
+                + " enables an UPDATE operation but never overrides getUpdateDataSource()");
+    }
 
-    protected abstract DeleteDataSource<E, K, ?> getDeleteDataSource();
+    protected DeleteDataSource<E, K, ?> getDeleteDataSource() {
+        throw new UnsupportedOperationException(getClass().getSimpleName()
+                + " enables a DELETE_ONE/DELETE_ALL operation but never overrides getDeleteDataSource()");
+    }
 
     protected abstract Mapper<E, ?> getEntityMapper();
 
@@ -192,6 +234,47 @@ public abstract class RestlessResourceHandler<E, K> {
      */
     public Map<String, ReadAction<E, ?>> getCustomReadActions() {
         return Map.of();
+    }
+
+    /**
+     * Partial-update ({@code PATCH}) support — entirely opt-in, unlike Create/Read/Update/Delete:
+     * empty by default, meaning no {@code PATCH} route gets registered for this resource at all
+     * (see {@code RestlessRegistrar}). Override (also {@code public}, same reasoning as {@link
+     * #getCustomReadActions} - {@code RestlessRegistrar} needs to call this from a different
+     * package) to add one, typically {@code Optional.of(new DefaultPatchDataSource<>(repository,
+     * {Entity}PatchModel.class))} unless entity-specific partial-update logic is needed.
+     */
+    public Optional<PatchDataSource<E, K, ?>> getPatchDataSource() {
+        return Optional.empty();
+    }
+
+    /**
+     * Every fixed route ({@code create}/{@code createBulk}, {@code findOne}, {@code findList},
+     * {@code findPage}/{@code findPageOverview}/{@code findPageSelect}, {@code update}/{@code
+     * updateBulk}, {@code deleteById}, {@code deleteAll}) this resource exposes - keyed one
+     * {@link AuthorizationGuard.Action} per <em>group</em> of routes sharing one, not one per
+     * route: {@code createBulk} shares {@code CREATE} with {@code create}, {@code updateBulk}
+     * shares {@code UPDATE} with {@code update}, so disabling {@code CREATE}/{@code UPDATE}
+     * disables both the single-item and bulk route together. {@code PATCH} and named custom read
+     * actions aren't part of this set at all - they're already independently opt-in via {@link
+     * #getPatchDataSource}/{@link #getCustomReadActions}, so there's nothing here for them to
+     * additionally gate.
+     * <p>
+     * Defaults to {@link #ALL_OPERATIONS} (today's behavior, unchanged) — override to expose only
+     * a subset, e.g. a read-only resource:
+     * <pre>{@code
+     * public Set<AuthorizationGuard.Action> getEnabledOperations() {
+     *     return Set.of(Action.READ_ONE, Action.READ_LIST, Action.READ_PAGE);
+     * }
+     * }</pre>
+     * A disabled operation's own {@code get*DataSource()} accessor never has to be overridden
+     * either (see {@link #getCreateDataSource}/{@link #getUpdateDataSource}/{@link
+     * #getDeleteDataSource}'s now-non-abstract defaults) - a genuinely read-only resource needs
+     * no {@code CreateDataSource}/{@code UpdateDataSource}/{@code DeleteDataSource} at all, not
+     * even a never-reached one.
+     */
+    public Set<AuthorizationGuard.Action> getEnabledOperations() {
+        return ALL_OPERATIONS;
     }
 
     /**
@@ -259,6 +342,27 @@ public abstract class RestlessResourceHandler<E, K> {
         return ResponseEntity.ok(getEntityMapper().map(created));
     }
 
+    /**
+     * Bulk create - {@code POST {basePath}/bulk}, body a JSON array of {@code CreateModel}s.
+     * {@link #checkPreCheck} is one coarse "can this principal create at all" call, same as
+     * single {@link #create} - there's no per-item {@code canAccess} the way bulk update/delete
+     * have, since none of these rows exist yet for a per-instance check to run against. Every
+     * item is validated before any of them are created (fail-fast, same spirit as {@link
+     * #deleteAll}'s per-id guard check running entirely before the first delete).
+     */
+    public final ResponseEntity<?> createBulk(HttpServletRequest request) throws Exception {
+        checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
+        List<Object> bodies = readBodyList(request, metadata.createModelType());
+        for (Object body : bodies) {
+            validate(body);
+        }
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        CreateDataSource rawDataSource = getCreateDataSource();
+        @SuppressWarnings("unchecked")
+        List<E> created = rawDataSource.createAll(bodies);
+        return ResponseEntity.ok(getEntityMapper().map(created));
+    }
+
     public final ResponseEntity<?> findOne(HttpServletRequest request) {
         checkPreCheck(AuthorizationGuard.Action.READ_ONE, null, request);
         K id = extractId(request);
@@ -317,7 +421,7 @@ public abstract class RestlessResourceHandler<E, K> {
         Specification<E> spec = (Specification<E>) rawAction.buildSpecification(searchDto);
         spec = withScope(spec, AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
 
-        return ResponseEntity.ok(paginate(getOverviewMapper(), spec, searchDto.getPageable()));
+        return ResponseEntity.ok(paginate(getOverviewMapper(), spec, pageableOf(searchDto)));
     }
 
     public final ResponseEntity<?> update(HttpServletRequest request) throws Exception {
@@ -339,6 +443,66 @@ public abstract class RestlessResourceHandler<E, K> {
         UpdateDataSource rawDataSource = getUpdateDataSource();
         @SuppressWarnings("unchecked")
         E updated = (E) rawDataSource.update(id, (UpdateModel) body);
+        return ResponseEntity.ok(getEntityMapper().map(updated));
+    }
+
+    /**
+     * Only ever dispatched to at all when {@link #getPatchDataSource()} is non-empty - {@code
+     * RestlessRegistrar} doesn't register a {@code PATCH} route otherwise (see its own reasoning
+     * for why, mirroring {@link #getCustomReadActions()}'s per-action registration). {@code
+     * Action.PATCH} is checked, not {@code Action.UPDATE} - deliberately not inherited, so a
+     * policy granting full-replace access doesn't silently also grant partial-update access
+     * without an explicit decision (see {@code AuthorizationGuard.Action}'s javadoc-equivalent
+     * reasoning already applied to every other action here).
+     */
+    public final ResponseEntity<?> patch(HttpServletRequest request) throws Exception {
+        checkPreCheck(AuthorizationGuard.Action.PATCH, null, request);
+        K id = extractId(request);
+        if (hasGuard()) {
+            E existing = getReadDataSource().findOne(id);
+            if (existing != null) {
+                checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
+            }
+        }
+        Object body = readBody(request, patchModelType);
+        validate(body);
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        PatchDataSource rawDataSource = getPatchDataSource().orElseThrow(
+                () -> new IllegalStateException("PATCH route registered but getPatchDataSource() is now empty"));
+        @SuppressWarnings("unchecked")
+        E patched = (E) rawDataSource.patch(id, (PatchModel) body);
+        return ResponseEntity.ok(getEntityMapper().map(patched));
+    }
+
+    /**
+     * Bulk update - {@code PUT {basePath}/bulk}, body a JSON object keyed by id ({@code
+     * {"1": {...update fields...}, "2": {...}}}), each value the same shape a single {@code PUT
+     * {basePath}/{id}} takes. Every target is loaded and guard-checked before any of them are
+     * updated - fail-fast, same reasoning as {@link #deleteAll}'s per-id check running entirely
+     * before the first delete: a bulk write should never partially apply because item #7 of 10
+     * turned out to be denied.
+     */
+    public final ResponseEntity<?> updateBulk(HttpServletRequest request) throws Exception {
+        checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
+        Map<String, Object> rawBodies = readBodyMap(request, metadata.updateModelType());
+
+        Map<K, Object> byId = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : rawBodies.entrySet()) {
+            validate(entry.getValue());
+            byId.put(convertId(entry.getKey()), entry.getValue());
+        }
+        if (hasGuard()) {
+            for (K id : byId.keySet()) {
+                E existing = getReadDataSource().findOne(id);
+                if (existing != null) {
+                    checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
+                }
+            }
+        }
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        UpdateDataSource rawDataSource = getUpdateDataSource();
+        @SuppressWarnings("unchecked")
+        List<E> updated = rawDataSource.updateAll(byId);
         return ResponseEntity.ok(getEntityMapper().map(updated));
     }
 
@@ -384,7 +548,7 @@ public abstract class RestlessResourceHandler<E, K> {
     private PageableResponse<List<?>> paginate(HttpServletRequest request, Mapper<E, ?> mapper, AuthorizationGuard.Action action) throws Exception {
         SearchDto searchDto = bindSearchDto(searchDtoConstructor, request);
         Specification<E> spec = withScope(getSpecification(searchDto), action, null, request);
-        return paginate(mapper, spec, searchDto.getPageable());
+        return paginate(mapper, spec, pageableOf(searchDto));
     }
 
     /**
@@ -404,6 +568,36 @@ public abstract class RestlessResourceHandler<E, K> {
         return response;
     }
 
+    /**
+     * {@link SearchDto#getPageable()}, validated against this resource's own entity before a
+     * single query ever runs: an unresolvable {@code sort} direction ({@code
+     * AbstractSearchDto#getPageable()} throws {@link IllegalArgumentException} for one) or a
+     * property that isn't an actual field on {@code E} both become a clean 400 here instead of
+     * either an opaque 500 (the direction case) or Hibernate's own, much later and much less
+     * clear failure once the query actually runs (the property case) - the same "translate to 400
+     * by hand, at the boundary, since there's no normal argument-resolution pipeline to get this
+     * for free from" idiom {@link #convertId}/{@link #readBody} already use.
+     */
+    private Pageable pageableOf(SearchDto searchDto) {
+        Pageable pageable;
+        try {
+            pageable = searchDto.getPageable();
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid sort: " + e.getMessage(), e);
+        }
+
+        Set<String> entityProperties = Arrays.stream(metadata.entityType().getDeclaredFields())
+                .map(Field::getName)
+                .collect(Collectors.toSet());
+        for (Sort.Order order : pageable.getSort()) {
+            if (!entityProperties.contains(order.getProperty())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Unknown sort property '" + order.getProperty() + "' for " + metadata.entityType().getSimpleName());
+            }
+        }
+        return pageable;
+    }
+
     private Object readBody(HttpServletRequest request, Class<?> type) throws java.io.IOException {
         // Bypasses HttpMessageConverter (there's no typed @RequestBody parameter to hang one off
         // of), so malformed JSON must be translated to 400 by hand - otherwise it surfaces as an
@@ -411,6 +605,33 @@ public abstract class RestlessResourceHandler<E, K> {
         // HttpMessageNotReadableException (400) for free from the framework.
         try {
             return objectMapper.readValue(request.getInputStream(), type);
+        } catch (JacksonException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Malformed request body", e);
+        }
+    }
+
+    /** {@link #readBody}, but a JSON array of {@code elementType} - backs bulk create. */
+    @SuppressWarnings("unchecked")
+    private List<Object> readBodyList(HttpServletRequest request, Class<?> elementType) throws java.io.IOException {
+        JavaType listType = objectMapper.getTypeFactory().constructCollectionType(List.class, elementType);
+        try {
+            return (List<Object>) objectMapper.readValue(request.getInputStream(), listType);
+        } catch (JacksonException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Malformed request body", e);
+        }
+    }
+
+    /**
+     * {@link #readBody}, but a JSON object keyed by id, each value {@code elementType} - backs
+     * bulk update. Keys stay {@code String} here (not yet converted to {@code K}) - callers
+     * convert each one through {@link #convertId} individually, the same "translate to 400 by
+     * hand" idiom that method already applies for a single {@code PUT}/{@code DELETE}.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> readBodyMap(HttpServletRequest request, Class<?> elementType) throws java.io.IOException {
+        JavaType mapType = objectMapper.getTypeFactory().constructMapType(Map.class, String.class, elementType);
+        try {
+            return (Map<String, Object>) objectMapper.readValue(request.getInputStream(), mapType);
         } catch (JacksonException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Malformed request body", e);
         }

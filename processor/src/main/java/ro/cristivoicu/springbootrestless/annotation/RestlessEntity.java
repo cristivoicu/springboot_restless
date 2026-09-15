@@ -41,11 +41,35 @@ import java.lang.annotation.Target;
  *     CerbosAuthorizationGuard<E>}) needs a small named {@code @Component} per entity that
  *     implements {@code AuthorizationGuard<Entity>} and delegates to it, rather than pointing
  *     this attribute at the generic class itself.</li>
+ *     <li>{@code patchDataSource} — point at a hand-written {@code PatchDataSource<Entity, Id,
+ *     ?>} {@code @Component} to add a {@code PATCH} route, exactly like a hand-written resource
+ *     overriding {@code getPatchDataSource()} would. Unlike the four CUD verbs, unset (the
+ *     default) doesn't fall back to a generated default - {@code PATCH} is entirely opt-in, so no
+ *     route gets registered for it at all until this is set. Same {@code Class<?>}-can't-name-a-
+ *     parameterized-type limit as {@code authorizationGuard}: {@code DefaultPatchDataSource<E, K,
+ *     P>} is generic, so point this at a small named subclass fixing its type parameters for one
+ *     entity (e.g. {@code class WidgetPatchDataSource extends DefaultPatchDataSource<Widget,
+ *     Long, WidgetPatchModel> { WidgetPatchDataSource(WidgetRepository r) { super(r,
+ *     WidgetPatchModel.class); } }}), not at the generic class itself.</li>
  *     <li>{@code version} — this resource's API version, copied verbatim onto the generated
  *     resource's own {@code @RestlessResource(version = ...)} (see its javadoc for the syntax and
  *     what configuring a resolution strategy needs) - unlike every attribute above, this one
  *     isn't "convention vs override", it's just forwarded, since there's no per-verb naming
  *     convention for an API version to default to.</li>
+ *     <li>{@code operations} — which fixed routes to actually register, mirroring {@code
+ *     RestlessResourceHandler#getEnabledOperations}'s own default-to-everything/override-to-a-
+ *     subset shape (see its javadoc for exactly which routes each {@link RestlessOperation} value
+ *     covers, e.g. {@code CREATE} covering both {@code create} and bulk {@code createBulk}
+ *     together). Defaults to every value - set explicitly to a smaller array for, say, a
+ *     read-only resource: {@code operations = {RestlessOperation.READ_ONE,
+ *     RestlessOperation.READ_LIST, RestlessOperation.READ_PAGE}}. <b>One real limit:</b> unlike a
+ *     hand-wired resource overriding {@code getEnabledOperations()} directly, disabling an
+ *     operation here doesn't relax the naming-convention requirement on its DTO - {@code
+ *     createModel}/{@code updateModel} still have to resolve to something (convention or
+ *     override) even with {@code CREATE}/{@code UPDATE} excluded from {@code operations}, since
+ *     this attribute governs routing, not DTO resolution. A resource that should need no {@code
+ *     {Entity}CreateModel} at all belongs on the manual tier instead - see
+ *     [Tutorial: adding a new entity] in the README.</li>
  * </ul>
  * <p>
  * {@code SOURCE} retention: this is a pure compile-time signal, never read at runtime (unlike
@@ -80,5 +104,13 @@ public @interface RestlessEntity {
 
     Class<?> authorizationGuard() default Void.class;
 
+    Class<?> patchDataSource() default Void.class;
+
     String version() default "";
+
+    RestlessOperation[] operations() default {
+            RestlessOperation.CREATE, RestlessOperation.READ_ONE, RestlessOperation.READ_LIST,
+            RestlessOperation.READ_PAGE, RestlessOperation.READ_PAGE_OVERVIEW, RestlessOperation.READ_PAGE_SELECT,
+            RestlessOperation.UPDATE, RestlessOperation.DELETE_ONE, RestlessOperation.DELETE_ALL
+    };
 }

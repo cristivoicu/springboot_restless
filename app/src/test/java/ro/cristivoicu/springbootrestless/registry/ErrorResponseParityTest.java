@@ -55,8 +55,23 @@ class ErrorResponseParityTest {
 
         assertThat(dynamic.getResponse().getStatus()).isEqualTo(handWritten.getResponse().getStatus());
         assertThat(dynamic.getResponse().getErrorMessage()).isEqualTo(handWritten.getResponse().getErrorMessage());
-        assertThat(dynamic.getResponse().getContentAsByteArray()).isEqualTo(handWritten.getResponse().getContentAsByteArray());
+        // Content, not raw bytes: RestlessExceptionHandler's ErrorResponse carries two fields
+        // that are legitimately different between these two calls by design, not by accident -
+        // "timestamp" (two separate requests, fired moments apart) and "path" (this comparison
+        // is deliberately hitting two different URLs - the whole point of "identical response" is
+        // "same status/error/validation content", never "literally the same path").
+        assertThat(normalizedBody(dynamic)).isEqualTo(normalizedBody(handWritten));
         assertThat(dynamic.getResponse().getContentType()).isEqualTo(handWritten.getResponse().getContentType());
+    }
+
+    private String normalizedBody(MvcResult result) throws Exception {
+        var node = objectMapper.readTree(result.getResponse().getContentAsByteArray());
+        if (node.isObject()) {
+            var object = (tools.jackson.databind.node.ObjectNode) node;
+            object.remove("timestamp");
+            object.remove("path");
+        }
+        return node.toString();
     }
 
     @Test

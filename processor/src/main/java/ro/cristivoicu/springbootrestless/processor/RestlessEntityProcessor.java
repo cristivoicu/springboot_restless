@@ -1,6 +1,7 @@
 package ro.cristivoicu.springbootrestless.processor;
 
 import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
+import ro.cristivoicu.springbootrestless.annotation.RestlessOperation;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
@@ -114,11 +115,13 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         VerbOverride updateDataSource = resolveVerbOverride(entityType, "updateDataSource");
         VerbOverride deleteDataSource = resolveVerbOverride(entityType, "deleteDataSource");
         VerbOverride authorizationGuard = resolveVerbOverride(entityType, "authorizationGuard");
+        VerbOverride patchDataSource = resolveVerbOverride(entityType, "patchDataSource");
 
         RestlessEntity restlessEntity = entityType.getAnnotation(RestlessEntity.class);
         writeResourceClass(packageName, entityName, idType, createModel, updateModel, searchDto, mapper,
-                repository, restlessEntity.basePath(), restlessEntity.version(), createDataSource, readDataSource,
-                updateDataSource, deleteDataSource, authorizationGuard, entityType);
+                repository, restlessEntity.basePath(), restlessEntity.version(), restlessEntity.operations(),
+                createDataSource, readDataSource, updateDataSource, deleteDataSource, authorizationGuard,
+                patchDataSource, entityType);
     }
 
     /**
@@ -311,9 +314,10 @@ public class RestlessEntityProcessor extends AbstractProcessor {
     private void writeResourceClass(String packageName, String entityName, String idType,
                                      String createModel, String updateModel, String searchDto, String mapper,
                                      String repository, String basePath, String version,
+                                     RestlessOperation[] operations,
                                      VerbOverride createDataSource, VerbOverride readDataSource,
                                      VerbOverride updateDataSource, VerbOverride deleteDataSource,
-                                     VerbOverride authorizationGuard,
+                                     VerbOverride authorizationGuard, VerbOverride patchDataSource,
                                      Element origin) throws IOException {
         String resourceName = entityName + "RestlessResource";
 
@@ -361,6 +365,48 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                     + "    }\n";
         }
 
+        // Same "unset means no override, RestlessResourceHandler's own default applies" shape as
+        // the guard above - here that default is Optional.empty() (no PATCH route registered at
+        // all), not a permissive fallback.
+        String patchFieldDecl = "";
+        String patchAssignment = "";
+        String patchMethod = "";
+        if (patchDataSource.isOverridden()) {
+            String patchType = patchDataSource.typeFqn();
+            extraParams.append(", ").append(patchType).append(" patchDataSource");
+            patchFieldDecl = "    private final %s patchDataSource;\n".formatted(patchType);
+            patchAssignment = "        this.patchDataSource = patchDataSource;\n";
+            patchMethod = "\n"
+                    + "    @Override\n"
+                    + "    public java.util.Optional<PatchDataSource<" + entityName + ", " + idType + ", ?>> getPatchDataSource() {\n"
+                    + "        return java.util.Optional.of(patchDataSource);\n"
+                    + "    }\n";
+        }
+
+        // Unset (the default, all nine RestlessOperation values) means no override at all -
+        // RestlessResourceHandler#getEnabledOperations already defaults to ALL_OPERATIONS, so
+        // generating an identical override would be redundant. Only a genuine subset gets one,
+        // same "unset means don't touch the base class's own default" shape as guard/patch above.
+        String operationsMethod = "";
+        Set<RestlessOperation> operationSet = Set.of(operations);
+        if (!operationSet.containsAll(Set.of(RestlessOperation.values()))) {
+            StringBuilder actions = new StringBuilder();
+            for (RestlessOperation op : RestlessOperation.values()) {
+                if (!operationSet.contains(op)) {
+                    continue;
+                }
+                if (!actions.isEmpty()) {
+                    actions.append(", ");
+                }
+                actions.append("AuthorizationGuard.Action.").append(op.name());
+            }
+            operationsMethod = "\n"
+                    + "    @Override\n"
+                    + "    public java.util.Set<AuthorizationGuard.Action> getEnabledOperations() {\n"
+                    + "        return java.util.Set.of(" + actions + ");\n"
+                    + "    }\n";
+        }
+
         JavaFileObject file = filer.createSourceFile(packageName + "." + resourceName, origin);
         try (Writer writer = file.openWriter()) {
             writer.write("""
@@ -371,6 +417,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                     import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
                     import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
                     import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
+                    import ro.cristivoicu.springbootrestless.controller.patch.PatchDataSource;
                     import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
                     import ro.cristivoicu.springbootrestless.controller.update.UpdateDataSource;
                     import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultCreateDataSource;
@@ -439,7 +486,9 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                     %18$s}
                     """.formatted(packageName, entityName, restlessResourceAttrs, resourceName, idType,
                     createModel, searchDto, updateModel, mapper, repository, extraParams,
-                    createInit, readInit, updateInit, deleteInit, guardFieldDecl, guardAssignment, guardMethod));
+                    createInit, readInit, updateInit, deleteInit,
+                    guardFieldDecl + patchFieldDecl, guardAssignment + patchAssignment,
+                    guardMethod + patchMethod + operationsMethod));
         }
     }
 

@@ -2,11 +2,14 @@ package ro.cristivoicu.springbootrestless.cerbos;
 
 import dev.cerbos.api.v1.engine.Engine.PlanResourcesFilter.Expression.Operand;
 import dev.cerbos.sdk.CerbosBlockingClient;
+import dev.cerbos.sdk.CerbosException;
 import dev.cerbos.sdk.PlanResourcesResult;
 import dev.cerbos.sdk.builders.AttributeValue;
 import dev.cerbos.sdk.builders.Principal;
 import dev.cerbos.sdk.builders.Resource;
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.jpa.domain.Specification;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
 
@@ -64,10 +67,23 @@ import java.util.function.Function;
  * request.principal.attr.userId} - absent (the coarse pre-check) passes through, present (the
  * real check) is actually compared. See {@code policies/employee.yaml} in the {@code example}
  * module for a worked example.
+ * <p>
+ * <b>Fails closed, not open.</b> A PDP that's slow past {@code cerbos.client.timeout} (see
+ * {@link CerbosClientConfiguration}) or unreachable makes every one of these three methods throw
+ * {@link CerbosException} deep inside the SDK - left uncaught, that would surface as an
+ * undifferentiated 500 from whatever generic exception handling happens to be configured (or none
+ * at all). Instead, every call here is wrapped: {@link #preCheck}/{@link #canAccess} return {@code
+ * false} (denied) and {@link #scope} returns the same always-deny {@link Specification} its
+ * {@code ALWAYS_DENIED} branch already uses - a PDP outage degrades to "nobody can do anything
+ * through this guard" rather than either an opaque crash or, worse, silently falling through to
+ * unrestricted access. There's no fail-open escape hatch on this class by design: an
+ * authorization check that can't reach its policy source has no basis to say yes.
  *
  * @param <E> the entity type this guard protects
  */
 public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
+
+    private static final Logger log = LoggerFactory.getLogger(CerbosAuthorizationGuard.class);
 
     private final CerbosBlockingClient client;
     private final String resourceKind;
@@ -104,7 +120,12 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
         String cerbosAction = actionNaming.apply(action, customActionName);
         Principal principal = principalOf(request);
         Resource resource = Resource.newInstance(resourceKind, "new");
-        return client.check(principal, resource, cerbosAction).isAllowed(cerbosAction);
+        try {
+            return client.check(principal, resource, cerbosAction).isAllowed(cerbosAction);
+        } catch (CerbosException e) {
+            logFailedClosed("preCheck", cerbosAction, e);
+            return false;
+        }
     }
 
     @Override
@@ -112,7 +133,12 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
         String cerbosAction = actionNaming.apply(action, null);
         Principal principal = principalOf(request);
         Resource resource = resourceOf(entity);
-        return client.check(principal, resource, cerbosAction).isAllowed(cerbosAction);
+        try {
+            return client.check(principal, resource, cerbosAction).isAllowed(cerbosAction);
+        } catch (CerbosException e) {
+            logFailedClosed("canAccess", cerbosAction, e);
+            return false;
+        }
     }
 
     @Override
@@ -121,7 +147,13 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
         Principal principal = principalOf(request);
         Resource resource = Resource.newInstance(resourceKind);
 
-        PlanResourcesResult plan = client.plan(principal, resource, cerbosAction);
+        PlanResourcesResult plan;
+        try {
+            plan = client.plan(principal, resource, cerbosAction);
+        } catch (CerbosException e) {
+            logFailedClosed("scope", cerbosAction, e);
+            return (root, query, cb) -> cb.disjunction();
+        }
         if (plan.isAlwaysAllowed()) {
             return null;
         }
@@ -133,6 +165,12 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
                 "Cerbos plan for action '" + cerbosAction + "' on resource kind '" + resourceKind
                         + "' is CONDITIONAL but carries no condition"));
         return CerbosQueryPlanTranslator.translate(condition);
+    }
+
+    private void logFailedClosed(String hook, String cerbosAction, CerbosException e) {
+        log.warn("Cerbos PDP unreachable/errored during {}('{}') on resource kind '{}' "
+                        + "(gRPC status {}) - failing closed (denied)",
+                hook, cerbosAction, resourceKind, e.getStatusCode(), e);
     }
 
     private Principal principalOf(HttpServletRequest request) {

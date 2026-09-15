@@ -71,6 +71,16 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Optional: only backs CerbosHealthIndicator, which is itself @ConditionalOnClass on
+             HealthIndicator - a consumer who never adds actuator to their own app never pulls
+             this in transitively (optional=true), and the bean simply never activates for one
+             who doesn't. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

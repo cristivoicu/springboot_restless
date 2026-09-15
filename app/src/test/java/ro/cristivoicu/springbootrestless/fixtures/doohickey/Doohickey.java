@@ -23,14 +23,17 @@ import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
  * default-permissive {@code AuthorizationGuard.allowAll()}. {@code version = "1"} also proves
  * {@code @RestlessEntity}'s API-versioning attribute reaches the generated {@code
  * @RestlessResource} and, through it, every route {@code RestlessRegistrar} registers - see
- * {@code DynamicRouteVersionTest}.
+ * {@code DynamicRouteVersionTest}. {@code patchDataSource} wires in {@link
+ * DoohickeyPatchDataSource}, adding a {@code PATCH} route the generated resource otherwise
+ * wouldn't have at all - see {@code DoohickeyPatchTest}.
  */
 @Entity
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@RestlessEntity(basePath = "/doohickeys", authorizationGuard = DoohickeyAuthorizationGuard.class, version = "1")
+@RestlessEntity(basePath = "/doohickeys", authorizationGuard = DoohickeyAuthorizationGuard.class,
+        patchDataSource = DoohickeyPatchDataSource.class, version = "1")
 public class Doohickey {
 
     @Id
