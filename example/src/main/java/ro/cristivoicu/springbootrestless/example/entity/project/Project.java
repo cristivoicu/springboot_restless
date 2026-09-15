@@ -8,22 +8,28 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
 
 /**
- * Manual — runtime defaults, no codegen (see {@code ProjectRestlessResource}), not the
- * compile-time-generated tier this used to demonstrate: it needs a real {@code
- * CerbosAuthorizationGuard} (row-scoped by department for non-managers, see {@code
- * policies/project.yaml}), and {@code @RestlessEntity}-generated resources have no way to inject
- * one - the annotation has no {@code authorizationGuard} attribute, deliberately (see the design
- * discussion this shipped under: extending the processor for one demo entity was judged not
- * worth the codegen surface). {@link ProjectCreateDataSource} (defaulting a blank description)
- * still applies unchanged; only the wiring moved from generated to hand-written.
+ * Compile-time generated again, now that a generated resource can carry a real {@code
+ * AuthorizationGuard} too: {@code RestlessEntityProcessor} generates {@code ProjectRepository},
+ * {@code ProjectMapper} (reflective - {@link ProjectDto}'s fields already match this entity's own
+ * by name, so no {@code @RestlessMapperExclude} is needed anywhere), and {@code
+ * ProjectRestlessResource} from just this annotation. Only two hand-written pieces remain, both
+ * pointed at explicitly since neither follows a "generate a sensible default" convention:
+ * {@link ProjectCreateDataSource} (defaulting a blank description) and {@link
+ * ProjectAuthorizationGuardBean} (row-scoped by department for non-managers, see {@code
+ * policies/project.yaml} - a generic {@code CerbosAuthorizationGuard<E>} needs a small named
+ * delegating bean to satisfy {@code authorizationGuard}'s one-concrete-class limit; see that
+ * bean's own javadoc).
  */
 @Entity
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
+@RestlessEntity(basePath = "/projects", createDataSource = ProjectCreateDataSource.class,
+        authorizationGuard = ProjectAuthorizationGuardBean.class)
 public class Project {
 
     @Id

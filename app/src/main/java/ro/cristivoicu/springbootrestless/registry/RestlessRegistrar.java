@@ -6,6 +6,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.convert.ConversionService;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.Validator;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
@@ -86,26 +87,33 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
             throw new IllegalStateException("Duplicate @RestlessResource basePath '" + basePath
                     + "' - each resource must be mounted at a distinct base path");
         }
+        String version = annotation.version();
 
         ResourceMetadata metadata = resource.resolveMetadata(basePath);
         resource.init(metadata, objectMapper, conversionService, validator);
 
-        ROUTES.forEach(route -> registerRoute(resource, basePath + route.pathSuffix(), route.httpMethod(), route.handlerMethodName()));
+        ROUTES.forEach(route -> registerRoute(resource, basePath + route.pathSuffix(), route.httpMethod(), route.handlerMethodName(), version));
 
         // One extra route per named ReadAction, all sharing the single customRead Method -
         // getCustomReadActions() is empty by default, so this is a no-op for most resources.
         resource.getCustomReadActions().keySet().forEach(actionName ->
-                registerRoute(resource, basePath + "/actions/" + actionName, RequestMethod.GET, "customRead"));
+                registerRoute(resource, basePath + "/actions/" + actionName, RequestMethod.GET, "customRead", version));
     }
 
-    private void registerRoute(RestlessResourceHandler<?, ?> resource, String path, RequestMethod httpMethod, String handlerMethodName) {
+    private void registerRoute(RestlessResourceHandler<?, ?> resource, String path, RequestMethod httpMethod,
+                                String handlerMethodName, String version) {
         try {
             Method handlerMethod = RestlessResourceHandler.class.getMethod(handlerMethodName, HttpServletRequest.class);
-            RequestMappingInfo info = RequestMappingInfo.paths(path)
+            RequestMappingInfo.Builder builder = RequestMappingInfo.paths(path)
                     .methods(httpMethod)
-                    .options(requestMappingHandlerMapping.getBuilderConfiguration())
-                    .build();
-            requestMappingHandlerMapping.registerMapping(info, resource, handlerMethod);
+                    .options(requestMappingHandlerMapping.getBuilderConfiguration());
+            // Left off entirely (not set to "") when unset, same as an @RequestMapping with no
+            // version attribute at all - a route with no version constraint stays reachable
+            // regardless of what version a request resolves to.
+            if (StringUtils.hasText(version)) {
+                builder.version(version);
+            }
+            requestMappingHandlerMapping.registerMapping(builder.build(), resource, handlerMethod);
         } catch (NoSuchMethodException e) {
             throw new IllegalStateException("RestlessResourceHandler." + handlerMethodName + " not found", e);
         }

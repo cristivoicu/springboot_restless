@@ -21,8 +21,11 @@ import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
 import java.io.Writer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Generates a {@code {Entity}RestlessResource} class (the same shape a human would hand-write —
@@ -37,6 +40,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
 
     private static final String ID_ANNOTATION = "jakarta.persistence.Id";
     private static final String VOID_SENTINEL = "java.lang.Void"; // "not overridden" - see RestlessEntity's javadoc
+    private static final String MAPPER_EXCLUDE_ANNOTATION = "ro.cristivoicu.springbootrestless.annotation.RestlessMapperExclude";
 
     /** A resolved {@code *DataSource} verb: either "use the default" (typeFqn == null,
      * constructed inline from the repository) or "inject this hand-written bean instead"
@@ -94,8 +98,12 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         String createModel = resolveDtoType(entityType, "createModel", packageName, entityName, "CreateModel");
         String updateModel = resolveDtoType(entityType, "updateModel", packageName, entityName, "UpdateModel");
         String searchDto = resolveDtoType(entityType, "searchDto", packageName, entityName, "SearchDto");
-        String mapper = resolveDtoType(entityType, "mapper", packageName, entityName, "Mapper");
-        if (createModel == null || updateModel == null || searchDto == null || mapper == null) {
+        if (createModel == null || updateModel == null || searchDto == null) {
+            return; // errors already reported via the messager
+        }
+
+        String mapper = resolveMapperType(entityType, packageName, entityName);
+        if (mapper == null) {
             return; // errors already reported via the messager
         }
 
@@ -105,10 +113,108 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         VerbOverride readDataSource = resolveVerbOverride(entityType, "readDataSource");
         VerbOverride updateDataSource = resolveVerbOverride(entityType, "updateDataSource");
         VerbOverride deleteDataSource = resolveVerbOverride(entityType, "deleteDataSource");
+        VerbOverride authorizationGuard = resolveVerbOverride(entityType, "authorizationGuard");
 
-        String basePath = entityType.getAnnotation(RestlessEntity.class).basePath();
+        RestlessEntity restlessEntity = entityType.getAnnotation(RestlessEntity.class);
         writeResourceClass(packageName, entityName, idType, createModel, updateModel, searchDto, mapper,
-                repository, basePath, createDataSource, readDataSource, updateDataSource, deleteDataSource, entityType);
+                repository, restlessEntity.basePath(), restlessEntity.version(), createDataSource, readDataSource,
+                updateDataSource, deleteDataSource, authorizationGuard, entityType);
+    }
+
+    /**
+     * The annotation's own {@code mapper} override if set, otherwise a hand-written {@code
+     * {Entity}Mapper} naming-convention sibling if one exists - both unchanged from before. New:
+     * if neither exists, generates a reflective default (see {@link #generateDefaultMapper}) onto
+     * a hand-written {@code {Entity}Dto} (its own override/convention resolution, via {@link
+     * #resolveDtoType}) instead of erroring - {@code Mapper} itself still has no default because
+     * *shape* stays hand-written; only the field-by-field copy of an already-declared shape does.
+     */
+    private String resolveMapperType(TypeElement entityType, String packageName, String entityName) throws IOException {
+        TypeMirror override = readClassAttribute(entityType, "mapper");
+        if (!isVoidSentinel(override)) {
+            return override.toString();
+        }
+        String conventionQualifiedName = packageName + "." + entityName + "Mapper";
+        if (elements.getTypeElement(conventionQualifiedName) != null) {
+            return conventionQualifiedName;
+        }
+
+        String dtoType = resolveDtoType(entityType, "dto", packageName, entityName, "Dto");
+        if (dtoType == null) {
+            return null; // resolveDtoType already reported an error via the messager
+        }
+        return generateDefaultMapper(packageName, entityName, dtoType, entityType);
+    }
+
+    /**
+     * Every field {@link RestlessMapperExclude} marks on {@code dtoQualifiedName} - resolved by
+     * inspecting the DTO's own declared fields, the same {@code getEnclosedElements()} technique
+     * {@link #resolveIdType} already uses for {@code @Id}. Empty (not an error) if the type can't
+     * be resolved as an element (shouldn't happen - {@link #resolveDtoType} already verified it
+     * exists) or declares no excluded fields at all.
+     */
+    private List<String> resolveExcludedMapperFields(String dtoQualifiedName) {
+        TypeElement dtoElement = elements.getTypeElement(dtoQualifiedName);
+        if (dtoElement == null) {
+            return List.of();
+        }
+        List<String> excluded = new ArrayList<>();
+        for (Element enclosed : dtoElement.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.FIELD) {
+                continue;
+            }
+            for (AnnotationMirror mirror : enclosed.getAnnotationMirrors()) {
+                if (mirror.getAnnotationType().toString().equals(MAPPER_EXCLUDE_ANNOTATION)) {
+                    excluded.add(enclosed.getSimpleName().toString());
+                }
+            }
+        }
+        return excluded;
+    }
+
+    /**
+     * Generates a {@code {Entity}Mapper implements Mapper<Entity, Dto>} whose {@code map(...)}
+     * is one {@code BeanUtils.copyProperties} call - reflective, matching source/target fields by
+     * name, exactly the technique {@code DefaultCreateDataSource}/{@code DefaultUpdateDataSource}
+     * already use for their own verbs. {@code dtoType} is always fully qualified (whatever {@link
+     * #resolveDtoType} returned), so it's safe to use directly in the generated source with no
+     * import needed, same as every other DTO type name this processor already writes out.
+     */
+    private String generateDefaultMapper(String packageName, String entityName, String dtoType, Element origin) throws IOException {
+        String simpleName = entityName + "Mapper";
+        String qualifiedName = packageName + "." + simpleName;
+
+        List<String> excluded = resolveExcludedMapperFields(dtoType);
+        String ignoreArgs = excluded.stream().map(field -> ", \"" + field + "\"").collect(Collectors.joining());
+
+        JavaFileObject file = filer.createSourceFile(qualifiedName, origin);
+        try (Writer writer = file.openWriter()) {
+            writer.write("""
+                    package %1$s;
+
+                    import org.springframework.beans.BeanUtils;
+                    import org.springframework.stereotype.Component;
+                    import ro.cristivoicu.springbootrestless.mapper.Mapper;
+
+                    /**
+                     * Generated by RestlessEntityProcessor: no hand-written %2$s existed, so every
+                     * %4$s field not annotated {@literal @}RestlessMapperExclude is copied from the
+                     * matching %3$s field by name via BeanUtils.copyProperties. Do not edit -
+                     * regenerated on every build; write %2$s by hand instead the moment this
+                     * default stops being enough.
+                     */
+                    @Component
+                    public class %2$s implements Mapper<%3$s, %4$s> {
+                        @Override
+                        public %4$s map(%3$s source) {
+                            %4$s dto = new %4$s();
+                            BeanUtils.copyProperties(source, dto%5$s);
+                            return dto;
+                        }
+                    }
+                    """.formatted(packageName, simpleName, entityName, dtoType, ignoreArgs));
+        }
+        return qualifiedName;
     }
 
     private String resolveIdType(TypeElement entityType) {
@@ -204,11 +310,20 @@ public class RestlessEntityProcessor extends AbstractProcessor {
 
     private void writeResourceClass(String packageName, String entityName, String idType,
                                      String createModel, String updateModel, String searchDto, String mapper,
-                                     String repository, String basePath,
+                                     String repository, String basePath, String version,
                                      VerbOverride createDataSource, VerbOverride readDataSource,
                                      VerbOverride updateDataSource, VerbOverride deleteDataSource,
+                                     VerbOverride authorizationGuard,
                                      Element origin) throws IOException {
         String resourceName = entityName + "RestlessResource";
+
+        // Forwarded onto the generated @RestlessResource verbatim - RestlessRegistrar (not this
+        // processor) is what actually acts on it, see RestlessEntity#version's javadoc for why.
+        // String.isBlank() (JDK, not a hand-rolled check) rather than a Spring/Apache utility -
+        // this module deliberately carries no dependencies at all (see its pom.xml).
+        String restlessResourceAttrs = !version.isBlank()
+                ? "basePath = \"%s\", version = \"%s\"".formatted(basePath, version)
+                : "basePath = \"%s\"".formatted(basePath);
 
         StringBuilder extraParams = new StringBuilder();
         String createInit = verbInit(createDataSource, extraParams, "createDataSource",
@@ -220,6 +335,32 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         String deleteInit = verbInit(deleteDataSource, extraParams, "deleteDataSource",
                 "new DefaultDeleteDataSource<>(repository, %s.class)".formatted(idType));
 
+        // Unlike the four *DataSource verbs above (always present, defaulting to a Default*
+        // instance when not overridden), an unset authorizationGuard means "no override at all" -
+        // RestlessResourceHandler's own getAuthorizationGuard() (AuthorizationGuard.allowAll())
+        // applies unchanged, exactly like a hand-written resource that never overrides it. So
+        // these three stay empty rather than getting a default-expression fallback like verbInit
+        // gives the DataSource verbs.
+        String guardFieldDecl = "";
+        String guardAssignment = "";
+        String guardMethod = "";
+        if (authorizationGuard.isOverridden()) {
+            String guardType = authorizationGuard.typeFqn();
+            extraParams.append(", ").append(guardType).append(" authorizationGuard");
+            guardFieldDecl = "    private final %s authorizationGuard;\n".formatted(guardType);
+            guardAssignment = "        this.authorizationGuard = authorizationGuard;\n";
+            // Built via plain concatenation, not a nested text block: a text block's own
+            // indentation would get stripped down to its own minimum margin independently of
+            // where %18$s ends up sitting in the outer template, landing this method's body at
+            // column 0 instead of matching its sibling methods' indentation (getSelectMapper()
+            // etc. above it). Explicit literal spaces here are never subject to that stripping.
+            guardMethod = "\n"
+                    + "    @Override\n"
+                    + "    protected AuthorizationGuard<" + entityName + "> getAuthorizationGuard() {\n"
+                    + "        return authorizationGuard;\n"
+                    + "    }\n";
+        }
+
         JavaFileObject file = filer.createSourceFile(packageName + "." + resourceName, origin);
         try (Writer writer = file.openWriter()) {
             writer.write("""
@@ -227,6 +368,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
 
                     import org.springframework.stereotype.Component;
                     import ro.cristivoicu.springbootrestless.annotation.RestlessResource;
+                    import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
                     import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
                     import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
                     import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
@@ -243,7 +385,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                      * Do not edit - regenerated on every build.
                      */
                     @Component
-                    @RestlessResource(basePath = "%3$s")
+                    @RestlessResource(%3$s)
                     public class %4$s extends RestlessResourceHandler<%2$s, %5$s> {
 
                         private final CreateDataSource<%2$s, %5$s, ?> createDataSource;
@@ -251,14 +393,14 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                         private final UpdateDataSource<%2$s, %5$s, ?> updateDataSource;
                         private final DeleteDataSource<%2$s, %5$s, ?> deleteDataSource;
                         private final %9$s mapper;
-
+                    %16$s
                         public %4$s(%10$s repository, %9$s mapper%11$s) {
                             this.createDataSource = %12$s;
                             this.readDataSource = %13$s;
                             this.updateDataSource = %14$s;
                             this.deleteDataSource = %15$s;
                             this.mapper = mapper;
-                        }
+                    %17$s    }
 
                         @Override
                         protected CreateDataSource<%2$s, %5$s, ?> getCreateDataSource() {
@@ -294,10 +436,10 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                         protected Mapper<%2$s, ?> getSelectMapper() {
                             return mapper;
                         }
-                    }
-                    """.formatted(packageName, entityName, basePath, resourceName, idType,
+                    %18$s}
+                    """.formatted(packageName, entityName, restlessResourceAttrs, resourceName, idType,
                     createModel, searchDto, updateModel, mapper, repository, extraParams,
-                    createInit, readInit, updateInit, deleteInit));
+                    createInit, readInit, updateInit, deleteInit, guardFieldDecl, guardAssignment, guardMethod));
         }
     }
 

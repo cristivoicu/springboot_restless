@@ -14,15 +14,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * A context-load-level check that catches silent registration failures - {@code
  * RestlessRegistrar} must have registered exactly nine fixed routes (see
- * {@code RestlessRegistrar.ROUTES}) for each of the three {@code @RestlessResource} beans
- * currently in the app (Gadget, Gizmo, the compile-time-generated Sprocket), plus one extra
- * route per named custom read action (Gadget's {@code byEmailDomain}), no more, no fewer.
+ * {@code RestlessRegistrar.ROUTES}) for each of the four {@code @RestlessResource} beans
+ * currently in the app (Gadget, Gizmo, the compile-time-generated Sprocket and Doohickey - the
+ * latter also exercising the generated default Mapper and an annotation-wired
+ * {@code AuthorizationGuard}), plus one extra route per named custom read action (Gadget's
+ * {@code byEmailDomain}), no more, no fewer.
  */
 @SpringBootTest
 class DynamicRouteCountTest {
 
     private static final int FIXED_ROUTES_PER_RESOURCE = 9;
-    private static final int RESOURCE_COUNT = 3; // Gadget, Gizmo, Sprocket (generated)
+    private static final int RESOURCE_COUNT = 4; // Gadget, Gizmo, Sprocket, Doohickey (both generated)
     private static final int CUSTOM_READ_ACTION_COUNT = 1; // Gadget's "byEmailDomain"
 
     @Autowired

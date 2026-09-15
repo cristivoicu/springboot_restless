@@ -43,9 +43,12 @@ This is **not** a Spring Data REST replacement or a full-blown low-code framewor
 deliberately keeps three things out of its own hands, because they're exactly where an app's
 actual business rules live:
 
-- **Response shape.** `Mapper<Entity, Dto>` is always hand-written, never reflective. A
-  generated default would silently expose whatever fields an entity happens to have, which is
-  the one surface fine-grained authorization needs to control.
+- **Response shape.** The DTO itself is always hand-written — a generated default would silently
+  expose whatever fields an entity happens to have, which is the one surface fine-grained
+  authorization needs to control. `Mapper<Entity, Dto>`'s *implementation* doesn't have to be:
+  `RestlessEntityProcessor` can generate a reflective one (`BeanUtils.copyProperties`) once the
+  DTO's shape is already decided, since copying an already-authored shape doesn't reintroduce the
+  risk a generated *shape* would — see [Tutorial: adding a new entity](#tutorial-adding-a-new-entity).
 - **Authorization.** Opt-in per resource, never mandatory boilerplate, and never tied to one
   auth stack — see [`AuthorizationGuard`](#tutorial-authorization-with-authorizationguard). The
   `cerbos` module is one concrete backing for it (policy-as-code via a real PDP), not the only
@@ -94,8 +97,13 @@ hand-wired.
   `Default*DataSource` classes, `AuthorizationGuard`, ...) and nothing else — a library, not a
   runnable application. Ships no entities and no `@SpringBootApplication` class; it's
   self-tested against small, generically-named, test-scoped fixtures (`Gadget`/`Gizmo`/
-  `Sprocket` under `app/src/test/.../fixtures/`) that never leave the test jar, so the framework
-  stays independently verifiable without depending on `example` existing or staying in sync.
+  `Sprocket`/`Doohickey` under `app/src/test/.../fixtures/`) that never leave the test jar, so the
+  framework stays independently verifiable without depending on `example` existing or staying in
+  sync. `Doohickey` is the live proof of the compile-time-generated tier's newest capabilities —
+  a reflective default `Mapper`, an annotation-wired `AuthorizationGuard`, and API versioning
+  (`version = "1"`, real `RequestMappingInfo`-level routing, not just a stored string) — all with
+  nothing but the entity, its DTOs, and one small guard bean hand-written — see
+  [Tutorial: adding a new entity](#tutorial-adding-a-new-entity).
 - **`cerbos`** — optional [Cerbos](https://www.cerbos.dev/)-backed `AuthorizationGuard`
   implementation, plus opt-in field-level masking (`@CerbosHiddenField`). A separate module (not
   a package inside `app`) so consumers who don't want Cerbos never pull in `cerbos-sdk-java` or
@@ -251,53 +259,100 @@ routes for real instead of just through the automated test suite.
 
 ## Tutorial: adding a new entity
 
-Three approaches exist; every entity currently in `example` needs a real
-`AuthorizationGuard` (see [Project status](#project-status) — all three now carry a policy), and
-`@RestlessEntity`-generated resources have no way to have one injected (no `authorizationGuard`
-attribute on the annotation, deliberately — see [Modules](#modules)), so `example` currently only
-has live examples of the two hand-wired tiers below. The compile-time-generated mechanism itself
-is unchanged and still fully exercised by the framework (`RestlessEntityProcessor`, the
-`@RestlessEntity` annotation) — it just doesn't currently back a *guarded* demo entity; git
-history has `Project` as a worked example from before it needed one.
+Three approaches exist. Authorization is no longer a reason on its own to leave the
+compile-time-generated tier — `authorizationGuard` (below) can wire a real guard into a generated
+resource too — so what actually forces a manual resource is entity-specific CUD logic or a custom
+read action. A *generic* guard implementation shared across entities (`CerbosAuthorizationGuard<E>`
+— everything in `example` is exactly this case) needs one small named delegating bean per entity
+first (see `authorizationGuard`'s note below) — real, but a one-time cost per entity, not a reason
+to stay manual on its own: `Project` pays it (`ProjectAuthorizationGuardBean`) and still lives on
+the generated tier. `Department` still stays manual for now — same delegating-bean move would work
+for it too, just not done yet. `app`'s own test-only `Doohickey` fixture (see
+[Modules](#modules) for why entity-specific test fixtures live in `app` at all) shows the
+delegate-free case — its guard is hand-written *for* `Doohickey` specifically, not generic.
 
 ```mermaid
 flowchart TD
-    Start["Adding a new entity"] --> Q1{"Entity-specific create/update/delete<br/>logic, a custom read action, or<br/>authorization needed?"}
-    Q1 -- "No" --> A["Compile-time generated<br/>write Entity + DTOs + Mapper only,<br/>RestlessEntityProcessor generates the rest"]
+    Start["Adding a new entity"] --> Q1{"Entity-specific create/update/delete<br/>logic, or a custom read action needed?"}
+    Q1 -- "No" --> A["Compile-time generated<br/>write Entity + DTOs only,<br/>RestlessEntityProcessor generates the rest<br/>(Mapper and AuthorizationGuard included)"]
     Q1 -- "Yes" --> Q2{"OK depending on the<br/>processor module?"}
     Q2 -- "Yes" --> B["Generated resource, pointed at a<br/>hand-written *DataSource override<br/>via the annotation's attributes"]
-    Q2 -- "No, want no codegen,<br/>or need an AuthorizationGuard" --> C["Manual: hand-wire a<br/>RestlessResourceHandler subclass directly"]
+    Q2 -- "No, or want no codegen<br/>at all" --> C["Manual: hand-wire a<br/>RestlessResourceHandler subclass directly"]
 ```
 
-### Simplest — compile-time generated
+### Simplest — compile-time generated (`Doohickey`, `Project`)
 
-Write the entity + DTOs + `Mapper`, following the naming convention; everything else is
-generated at compile time by `RestlessEntityProcessor` (see `target/generated-sources/annotations`
-after a build):
+Write the entity + DTOs, following the naming convention; everything else is generated at
+compile time by `RestlessEntityProcessor` (see `target/generated-sources/annotations` after a
+build) — Repository, Mapper, resource, guard wiring included:
 
 1. **Entity** — `@Entity` with a no-arg constructor, annotated `@RestlessEntity(basePath = "...")`.
-2. **DTOs + Mapper** — `{Entity}CreateModel`, `{Entity}UpdateModel`, `{Entity}SearchDto`,
-   `{Entity}Dto`, `{Entity}Mapper`, all in the same package, named exactly `{Entity}{Suffix}`.
+2. **DTOs** — `{Entity}CreateModel`, `{Entity}UpdateModel`, `{Entity}SearchDto`, `{Entity}Dto`,
+   all in the same package, named exactly `{Entity}{Suffix}`. Response *shape* is the one thing
+   that's always hand-written here — see `Mapper`'s javadoc — everything else about it is optional.
 
-That's it — a missing `{Entity}Repository` and `{Entity}RestlessResource` are both generated.
+That's it — a missing `{Entity}Repository` **and now a missing `{Entity}Mapper`** are both
+generated: a reflective `BeanUtils.copyProperties(entity, dto)`, matching fields by name onto the
+DTO you already wrote. Mark a DTO field `@RestlessMapperExclude` to keep the generated mapper from
+touching it at all (it's left at its Java default, e.g. `null`) — for a field a blind copy
+genuinely shouldn't populate, not for per-caller access control (that's a different, runtime
+concern — see [`@CerbosHiddenField`](#tutorial-hiding-fields-with-cerboshiddenfield), which this
+isn't a substitute for).
 
 For logic a generated default can't express, hand-write a class and point the annotation at it
 instead of relying on the naming convention — every attribute defaults to "use the convention/
 generated default":
 
 ```java
-@RestlessEntity(basePath = "/widgets", createDataSource = WidgetCreateDataSource.class)
+@RestlessEntity(basePath = "/widgets", createDataSource = WidgetCreateDataSource.class,
+        authorizationGuard = WidgetAuthorizationGuard.class)
 ```
 
-`createModel`/`updateModel`/`searchDto`/`mapper` work the same way for DTOs that don't follow
-the naming convention — the generated resource injects the hand-written class as a constructor
-parameter, exactly like a hand-written resource bean would.
+`createModel`/`updateModel`/`searchDto`/`dto`/`mapper` work the same way for DTOs/mappers that
+don't follow the naming convention — the generated resource injects the hand-written class as a
+constructor parameter, exactly like a hand-written resource bean would. `authorizationGuard` does
+too: point it at a hand-written `AuthorizationGuard<Entity>` `@Component` and the generated
+resource overrides `getAuthorizationGuard()` to return it, exactly like `Doohickey`'s
+`DoohickeyAuthorizationGuard` — leave it unset and `RestlessResourceHandler`'s own
+default-permissive `AuthorizationGuard.allowAll()` applies, same as always. One real limit worth
+knowing: `Class<?>` attributes name one concrete class, not a parameterized type, so a *generic*
+guard meant to back more than one entity (`CerbosAuthorizationGuard<E>` — see
+[Cerbos-backed authorization](#tutorial-cerbos-backed-authorization) — is exactly this case) needs
+a small named `@Component` per entity that implements `AuthorizationGuard<Entity>` and delegates
+to it, rather than pointing this attribute at the generic class itself.
 
-### Manual — runtime defaults, no codegen (`Department`, `Project`)
+**API versioning** (Spring Framework's own — `@RequestMapping(version = ...)`, backing Spring
+Boot 4): `@RestlessEntity(version = "1")` forwards verbatim onto the generated resource's own
+`@RestlessResource(version = "1")`, and every route `RestlessRegistrar` registers for it carries
+that version via `RequestMappingInfo.Builder.version(...)` — real routing, not just a stored
+string; `Doohickey` declares `version = "1"` for exactly this proof (see
+`DynamicRouteVersionTest`). Left unset (the default), a resource's routes carry no version
+constraint at all, exactly like an unversioned `@RequestMapping`. This only declares *which*
+version a resource belongs to — *how* a request's version is resolved (header, path segment,
+query param, media type parameter) is an app-wide `ApiVersionConfigurer` concern, same as any
+hand-written `@RequestMapping(version = ...)` controller needs; see
+`SpringBootRestlessApplication`'s `apiVersioningConfigurer()` bean (`app`'s own test config) for a
+worked example, header-based. One real gotcha it also documents: `detectSupportedVersions(true)`
+won't see a version a `@RestlessEntity`/`@RestlessResource` declares — that auto-detection scans
+ordinary `@RequestMapping` beans during `RequestMappingHandlerMapping`'s own startup pass, before
+`RestlessRegistrar` has dynamically registered anything at all. List a resource's versions
+explicitly via `addSupportedVersions(...)` instead.
+
+`Project` is the worked example of that delegating-bean case: `ProjectAuthorizationGuardBean`
+wraps a `CerbosAuthorizationGuard<Project>` (row-scoped by department for non-managers, see
+[Tutorial: Cerbos-backed authorization](#tutorial-cerbos-backed-authorization) below), and
+`@RestlessEntity(createDataSource = ProjectCreateDataSource.class, authorizationGuard =
+ProjectAuthorizationGuardBean.class)` on `Project` itself wires both hand-written pieces in.
+Nothing else about `Project` is hand-written any more — no `ProjectRestlessResource`, no
+`ProjectRepository`, no `ProjectMapper` (its DTO's fields already matched the entity's own by
+name, so the generated reflective one needed no `@RestlessMapperExclude` either).
+
+### Manual — runtime defaults, no codegen (`Department`)
 
 Same generated-default CUD behavior, wired by hand instead of by the processor — useful for
 understanding what the generated code actually does, avoiding the `processor` module dependency,
-or (as here) wiring an `AuthorizationGuard` a generated resource can't carry:
+or avoiding a delegating wrapper bean for a generic guard implementation (the move `Project` above
+makes instead):
 
 1. **Entity + Repository + DTOs + Mapper** — same as above, plus
    `{Entity}Repository extends SpecificationRepository<{Entity}, Long>` by hand.
@@ -305,11 +360,8 @@ or (as here) wiring an `AuthorizationGuard` a generated resource can't carry:
    `@Component @RestlessResource(basePath = "...")`, constructing the four `Default*DataSource`
    instances directly in its constructor, and overriding `getAuthorizationGuard()`.
 
-`Department` is the plainest version (every verb is a `Default*DataSource`, a role-only guard with
-no row-scoping — see `policies/department.yaml`). `Project` adds one hand-written
-`ProjectCreateDataSource` (defaulting a blank description, the same escape hatch the annotation's
-`createDataSource` attribute would point at) and a guard scoped by department for non-managers —
-see [Tutorial: Cerbos-backed authorization](#tutorial-cerbos-backed-authorization) below.
+Every verb is a `Default*DataSource`; the guard is role-only, no row-scoping — see
+`policies/department.yaml`.
 
 ### Full manual (`Employee`)
 
@@ -462,16 +514,16 @@ Map<String, AttributeValue>>` called after `CerbosPrincipalResolver` builds the 
 principal, merged on top of it additively:
 
 ```java
-@Override
-protected AuthorizationGuard<Project> getAuthorizationGuard() {
-    return new CerbosAuthorizationGuard<>(cerbosClient, "project", Project::getId,
+public ProjectAuthorizationGuardBean(CerbosBlockingClient cerbosClient, EmployeeRepository employeeRepository) {
+    this.employeeRepository = employeeRepository;
+    this.delegate = new CerbosAuthorizationGuard<>(cerbosClient, "project", Project::getId,
             project -> Map.of("departmentCode", AttributeValue.stringValue(project.getDepartmentCode())),
             CerbosActionNaming.DEFAULT,
-            request -> ownDepartmentAttribute()); // looks up the caller's own Employee row
+            this::ownDepartmentAttribute); // looks up the caller's own Employee row
 }
 ```
 
-`example`'s `ProjectRestlessResource` uses exactly this to back `policies/project.yaml`: a
+`example`'s `ProjectAuthorizationGuardBean` uses exactly this to back `policies/project.yaml`: a
 non-manager can only read projects in their own department, where "their own department" comes
 from looking up the authenticated principal's own `Employee` row (matched by the JWT's `email`
 claim) rather than a claim Keycloak issues directly — see its javadoc for the full lookup and why
@@ -612,18 +664,23 @@ docker compose down   # when you're done
 
 ## Project status
 
-Working proof of the runtime-registration mechanism, the compile-time generator, the
-library/example split, and a real Cerbos + Keycloak-backed authorization demo. Every entity
-`example` exposes now carries a real `CerbosAuthorizationGuard` backed by its own policy
-(`employee`/`department`/`project`) — row-level scoping (by JWT claim for `employee.yaml`, by a
-principal attribute resolved from another entity's own row for `project.yaml`, see
-[step 5](#5-principal-attributes-that-arent-jwt-claims)) and field-level masking both. The full
-reactor's `mvn test` is green, including every Testcontainers-backed class (a live Cerbos PDP is
-started automatically for those): `app`'s own suite (`app/src/test/.../fixtures/`,
-`.../registry/`) proves the framework mechanism in isolation via `Gadget`/`Gizmo`/`Sprocket`;
-`cerbos`'s suite proves the query-plan translator, the field masker, the guard's three hook
-points, and `principalAttributesExtender`, all against a real PDP; `example`'s suite proves the
-same mechanism through realistic, business-named usage — full route coverage, cross-resource
-isolation, duplicate-`basePath` detection, error-response parity against a hand-written baseline,
+Working proof of the runtime-registration mechanism, the compile-time generator (now including a
+reflective default `Mapper` and annotation-wired `AuthorizationGuard`), the library/example split,
+and a real Cerbos + Keycloak-backed authorization demo. Every entity `example` exposes now carries
+a real `CerbosAuthorizationGuard` backed by its own policy (`employee`/`department`/`project`) —
+row-level scoping (by JWT claim for `employee.yaml`, by a principal attribute resolved from
+another entity's own row for `project.yaml`, see
+[step 5](#5-principal-attributes-that-arent-jwt-claims)) and field-level masking both; `Project`
+carries it while staying fully compile-time generated, via the delegating-bean pattern
+`authorizationGuard` needs for a generic guard implementation (see
+[Tutorial: adding a new entity](#tutorial-adding-a-new-entity)). The full reactor's `mvn test` is
+green, including every Testcontainers-backed class (a live Cerbos PDP is started automatically for
+those): `app`'s own suite (`app/src/test/.../fixtures/`, `.../registry/`) proves the framework
+mechanism in isolation via `Gadget`/`Gizmo`/`Sprocket`/`Doohickey` — the last exercising the
+generated default `Mapper`, `@RestlessMapperExclude`, and an annotation-wired guard; `cerbos`'s
+suite proves the query-plan translator, the field masker, the guard's three hook points, and
+`principalAttributesExtender`, all against a real PDP; `example`'s suite proves the same mechanism
+through realistic, business-named usage — full route coverage, cross-resource isolation,
+duplicate-`basePath` detection, error-response parity against a hand-written baseline,
 default-CUD end-to-end behavior, custom read actions, and every guard's row-scoping and (for
 Employee) field-masking scenarios.

@@ -39,7 +39,7 @@ public class Employee {
      * Which {@link ro.cristivoicu.springbootrestless.example.entity.department.Department}'s
      * {@code code} this employee belongs to - not a JPA {@code @ManyToOne} (this codebase keeps
      * every entity flat, no mapped associations anywhere), just a matching natural key. Read back
-     * by {@code ProjectRestlessResource}'s guard (via {@code EmployeeRepository.findByEmail}, the
+     * by {@code ProjectAuthorizationGuardBean} (via {@code EmployeeRepository.findByEmail}, the
      * authenticated principal's own row) to answer "what's my department" for {@code
      * policies/project.yaml}'s row-scoping rule - see its javadoc.
      */

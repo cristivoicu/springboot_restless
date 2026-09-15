@@ -17,18 +17,16 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * Proof: {@code ProjectRestlessResource}'s real {@code CerbosAuthorizationGuard<Project>},
- * backed by a real Cerbos PDP ({@link CerbosBackedTest}) evaluating this module's own {@code
+ * Proof: {@code Project}'s real {@code CerbosAuthorizationGuard<Project>} (wrapped by {@code
+ * ProjectAuthorizationGuardBean} and wired into the compile-time-generated {@code
+ * ProjectRestlessResource} via {@code @RestlessEntity(authorizationGuard = ...)}), backed by a
+ * real Cerbos PDP ({@link CerbosBackedTest}) evaluating this module's own {@code
  * src/main/resources/policies/project.yaml}. {@code admin}/{@code manager} are unconditionally
  * allowed; {@code employee} is scoped to {@code departmentCode == <their own department>}, where
  * "their own department" is resolved from the authenticated principal's own {@code Employee} row
  * (matched by the JWT {@code email} claim) rather than a JWT claim Keycloak itself issues - see
- * {@code ProjectRestlessResource}'s javadoc for why that needs {@code
+ * {@code ProjectAuthorizationGuardBean}'s javadoc for why that needs {@code
  * principalAttributesExtender} rather than a plain resource-attributes mapper.
- * <p>
- * Replaces the old {@code ProjectGeneratedResourceTest}: {@code Project} moved from a
- * compile-time-generated resource to a hand-wired manual one specifically to carry this guard -
- * see {@code Project}'s javadoc.
  */
 @SpringBootTest
 @AutoConfigureMockMvc

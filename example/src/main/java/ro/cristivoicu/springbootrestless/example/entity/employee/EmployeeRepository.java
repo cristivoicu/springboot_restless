@@ -10,8 +10,8 @@ public interface EmployeeRepository extends SpecificationRepository<Employee, Lo
 
     /**
      * Correlates the authenticated principal (JWT {@code email} claim) back to their own
-     * {@link Employee} row - used by {@code ProjectRestlessResource}'s guard to resolve "what's
-     * my department" for a principal attribute Keycloak itself never issues as a claim.
+     * {@link Employee} row - used by {@code ProjectAuthorizationGuardBean} to resolve "what's my
+     * department" for a principal attribute Keycloak itself never issues as a claim.
      */
     Optional<Employee> findByEmail(String email);
 }
