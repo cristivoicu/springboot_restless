@@ -12,6 +12,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.BeanPropertyBindingResult;
 import org.springframework.validation.BindingResult;
@@ -27,6 +29,8 @@ import ro.cristivoicu.springbootrestless.controller.patch.PatchDataSource;
 import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
 import ro.cristivoicu.springbootrestless.controller.update.UpdateDataSource;
 import ro.cristivoicu.springbootrestless.datasource.TypedDataSource;
+import ro.cristivoicu.springbootrestless.embed.RestlessEmbed;
+import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.models.CreateModel;
 import ro.cristivoicu.springbootrestless.models.DeleteModel;
@@ -49,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 
 /**
@@ -121,6 +126,8 @@ public abstract class RestlessResourceHandler<E, K> {
     private Constructor<?> searchDtoConstructor;
     private Map<String, Constructor<?>> customActionSearchDtoConstructors;
     private Class<?> patchModelType;
+    private RestlessEmbedResolver embedResolver = RestlessEmbedResolver.NONE;
+    private PlatformTransactionManager transactionManager;
 
     /**
      * Wires this resource's infra collaborators. Called once by whichever registrar discovered
@@ -129,10 +136,47 @@ public abstract class RestlessResourceHandler<E, K> {
      */
     public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
                             ConversionService conversionService, Validator validator) {
+        init(metadata, objectMapper, conversionService, validator, RestlessEmbedResolver.NONE, null);
+    }
+
+    /**
+     * Same as the four-arg {@link #init}, plus the {@link RestlessEmbedResolver} {@code
+     * findOne()} uses to resolve {@code expand=} - a separate overload (not a fifth required
+     * parameter on the original) purely so every pre-existing caller/test that constructs a
+     * {@code RestlessResourceHandler} by hand keeps compiling unchanged, defaulted to {@link
+     * RestlessEmbedResolver#NONE}. Only {@code RestlessRegistrar} calls this overload, with the
+     * real, Spring-wired resolver bean.
+     */
+    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
+                            ConversionService conversionService, Validator validator,
+                            RestlessEmbedResolver embedResolver) {
+        init(metadata, objectMapper, conversionService, validator, embedResolver, null);
+    }
+
+    /**
+     * Same as the five-arg {@link #init}, plus the {@link PlatformTransactionManager} {@link
+     * #createBulk}/{@link #updateBulk}/{@link #deleteAll} wrap their actual database write in -
+     * <b>not</b> {@code @Transactional}: every handler method here is deliberately {@code final}
+     * (one shared {@link Method} object dispatched reflectively across every resource instance,
+     * see this class's own javadoc), and Spring's proxy-based {@code @Transactional} support
+     * cannot intercept a final method at all - CGLIB can't override it, so the annotation would
+     * silently do nothing while still triggering a (useless) proxy and its own startup warnings
+     * for every other final method here. {@code null} (the four/five-arg overloads' default) runs
+     * a bulk write with no transaction boundary at all - today's original behavior, not a broken
+     * one: every {@code Default*DataSource}/hand-written {@code *DataSource} still worked before
+     * this existed, just without the atomicity guarantee a genuinely large batch benefits from.
+     * Only {@code RestlessRegistrar} calls this overload, with the real
+     * {@code JpaTransactionManager} Spring Data JPA already auto-configures.
+     */
+    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
+                            ConversionService conversionService, Validator validator,
+                            RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager) {
         this.metadata = metadata;
         this.objectMapper = objectMapper;
         this.conversionService = conversionService;
         this.validator = validator;
+        this.embedResolver = embedResolver;
+        this.transactionManager = transactionManager;
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
 
         this.customActionSearchDtoConstructors = new HashMap<>();
@@ -158,6 +202,19 @@ public abstract class RestlessResourceHandler<E, K> {
     }
 
     /**
+     * The {@code PatchModel} type {@link #getPatchDataSource} exchanges over HTTP - resolved once
+     * in {@link #init}, {@code null} whenever {@link #getPatchDataSource} is {@link
+     * java.util.Optional#empty()} (no {@code PATCH} route registered at all, see its own
+     * javadoc). Public for the same reason {@link #getCustomReadActions}/{@link
+     * #getPatchDataSource} already are: read from a different package - {@code
+     * ro.cristivoicu.springbootrestless.openapi}'s default document generation, describing the
+     * {@code PATCH} route's request body - not just {@code RestlessRegistrar}.
+     */
+    public final Class<?> getPatchModelType() {
+        return patchModelType;
+    }
+
+    /**
      * Resolves this resource's entity/id/DTO {@link Class} tokens via reflection off the
      * concrete subclass's own generics — {@code E}/{@code K} from this class's superclass
      * type arguments, each DTO type from the corresponding {@code *DataSource} subclass's
@@ -171,13 +228,26 @@ public abstract class RestlessResourceHandler<E, K> {
             throw new IllegalStateException(getClass() + " must extend RestlessResourceHandler<E, K> with concrete type arguments");
         }
 
-        Class<?> createModelType = resolveDtoType(getCreateDataSource(), CreateDataSource.class);
-        Class<?> updateModelType = resolveDtoType(getUpdateDataSource(), UpdateDataSource.class);
-        Class<?> deleteModelType = resolveDtoType(getDeleteDataSource(), DeleteDataSource.class);
+        // Gated by getEnabledOperations(), not called unconditionally: a resource that disables
+        // an operation (e.g. ProjectAssignmentRestlessResource excluding UPDATE) is entitled to
+        // not override that operation's get*DataSource() accessor at all (see their now-non-
+        // abstract, throwing defaults) - calling it anyway here, purely to resolve a DTO type
+        // nothing will ever use, would crash every such resource at startup before a single
+        // request arrives. null is safe: the only readers of these three fields are the
+        // corresponding handler methods, and RestlessRegistrar never registers a route to reach
+        // one whose operation is disabled.
+        Set<AuthorizationGuard.Action> enabled = getEnabledOperations();
+        Class<?> createModelType = enabled.contains(AuthorizationGuard.Action.CREATE)
+                ? resolveDtoType(getCreateDataSource(), CreateDataSource.class) : null;
+        Class<?> updateModelType = enabled.contains(AuthorizationGuard.Action.UPDATE)
+                ? resolveDtoType(getUpdateDataSource(), UpdateDataSource.class) : null;
+        Class<?> deleteModelType = (enabled.contains(AuthorizationGuard.Action.DELETE_ONE)
+                || enabled.contains(AuthorizationGuard.Action.DELETE_ALL))
+                ? resolveDtoType(getDeleteDataSource(), DeleteDataSource.class) : null;
         Class<?> searchDtoType = resolveDtoType(getReadDataSource(), ReadDataSource.class);
 
         return new ResourceMetadata(basePath, entityAndId[0], entityAndId[1],
-                createModelType, updateModelType, deleteModelType, searchDtoType);
+                createModelType, updateModelType, deleteModelType, searchDtoType, resolveResponseDtoType());
     }
 
     /**
@@ -191,6 +261,20 @@ public abstract class RestlessResourceHandler<E, K> {
             return typed.getDtoType();
         }
         return GenericTypeResolver.resolveTypeArguments(dataSource.getClass(), declaringClass)[2];
+    }
+
+    /**
+     * Same idiom as {@link #resolveDtoType}, off {@link #getEntityMapper}'s concrete class
+     * instead of a {@code *DataSource} - {@code Mapper} has no {@link TypedDataSource} equivalent
+     * (nothing generates a directly-instantiated default {@code Mapper} the way {@code
+     * Default*DataSource} does), so this is always the {@link GenericTypeResolver} path. Best-
+     * effort: {@code null}, not a thrown exception, for a {@code Mapper} whose generic signature
+     * isn't reifiable (an anonymous class, a lambda) - see {@link ResourceMetadata#responseDtoType}'s
+     * own javadoc for who actually reads this and how they're expected to handle {@code null}.
+     */
+    private Class<?> resolveResponseDtoType() {
+        Class<?>[] mapperArgs = GenericTypeResolver.resolveTypeArguments(getEntityMapper().getClass(), Mapper.class);
+        return mapperArgs == null ? null : mapperArgs[1];
     }
 
     /**
@@ -349,6 +433,14 @@ public abstract class RestlessResourceHandler<E, K> {
      * have, since none of these rows exist yet for a per-instance check to run against. Every
      * item is validated before any of them are created (fail-fast, same spirit as {@link
      * #deleteAll}'s per-id guard check running entirely before the first delete).
+     * <p>
+     * {@link #inTransaction}: {@link CreateDataSource#createAll}'s default is a plain loop of
+     * {@link CreateDataSource#create} calls, each independently committing via {@code
+     * JpaRepository.save()} unless something wraps the whole request in one transaction - without
+     * this, item 9,999 of a 10,000-row batch failing (a duplicate, an invalid reference, ...)
+     * would leave the first 9,998 committed instead of rolling back. A bulk write should be
+     * all-or-nothing at the database level, not just "validated up front" - the two aren't the
+     * same guarantee.
      */
     public final ResponseEntity<?> createBulk(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
@@ -358,8 +450,11 @@ public abstract class RestlessResourceHandler<E, K> {
         }
         @SuppressWarnings({"unchecked", "rawtypes"})
         CreateDataSource rawDataSource = getCreateDataSource();
-        @SuppressWarnings("unchecked")
-        List<E> created = rawDataSource.createAll(bodies);
+        List<E> created = inTransaction(() -> {
+            @SuppressWarnings("unchecked")
+            List<E> result = rawDataSource.createAll(bodies);
+            return result;
+        });
         return ResponseEntity.ok(getEntityMapper().map(created));
     }
 
@@ -371,7 +466,11 @@ public abstract class RestlessResourceHandler<E, K> {
             return ResponseEntity.notFound().build();
         }
         checkCanAccess(AuthorizationGuard.Action.READ_ONE, request, found);
-        return ResponseEntity.ok(getEntityMapper().map(found));
+        Object dto = getEntityMapper().map(found);
+        // Opt-in (?expand=name,...), see RestlessEmbed - a no-op for a request that doesn't ask
+        // for anything, and for a resource whose DTO declares no @RestlessEmbed field at all.
+        embedResolver.resolve(dto, found, request);
+        return ResponseEntity.ok(dto);
     }
 
     public final ResponseEntity<List<?>> findList(HttpServletRequest request) throws Exception {
@@ -480,7 +579,12 @@ public abstract class RestlessResourceHandler<E, K> {
      * {basePath}/{id}} takes. Every target is loaded and guard-checked before any of them are
      * updated - fail-fast, same reasoning as {@link #deleteAll}'s per-id check running entirely
      * before the first delete: a bulk write should never partially apply because item #7 of 10
-     * turned out to be denied.
+     * turned out to be denied. {@link #inTransaction} for the same reason {@link #createBulk}
+     * needs it: the guard check happening up front doesn't protect against a later item's own
+     * {@code UpdateDataSource#update} call failing partway through a large batch - the guard-check
+     * loop and the actual write both run inside the same transaction here (unlike {@code
+     * createBulk}, which has no pre-write reads to include), so a row can't change between being
+     * checked and being written either.
      */
     public final ResponseEntity<?> updateBulk(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
@@ -491,18 +595,21 @@ public abstract class RestlessResourceHandler<E, K> {
             validate(entry.getValue());
             byId.put(convertId(entry.getKey()), entry.getValue());
         }
-        if (hasGuard()) {
-            for (K id : byId.keySet()) {
-                E existing = getReadDataSource().findOne(id);
-                if (existing != null) {
-                    checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
-                }
-            }
-        }
         @SuppressWarnings({"unchecked", "rawtypes"})
         UpdateDataSource rawDataSource = getUpdateDataSource();
-        @SuppressWarnings("unchecked")
-        List<E> updated = rawDataSource.updateAll(byId);
+        List<E> updated = inTransaction(() -> {
+            if (hasGuard()) {
+                for (K id : byId.keySet()) {
+                    E existing = getReadDataSource().findOne(id);
+                    if (existing != null) {
+                        checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
+                    }
+                }
+            }
+            @SuppressWarnings("unchecked")
+            List<E> result = rawDataSource.updateAll(byId);
+            return result;
+        });
         return ResponseEntity.ok(getEntityMapper().map(updated));
     }
 
@@ -526,20 +633,25 @@ public abstract class RestlessResourceHandler<E, K> {
         checkPreCheck(AuthorizationGuard.Action.DELETE_ALL, null, request);
         Object body = readBody(request, metadata.deleteModelType());
         DeleteModel deleteModel = (DeleteModel) body;
-        // Fail-fast, before deleting anything: check every targeted entity up front so a bulk
-        // delete never partially completes before hitting a denied id. Skipped entirely (the
-        // whole loop, not just the check) when no guard is configured.
-        if (hasGuard()) {
-            for (String rawId : deleteModel.getIds()) {
-                E existing = getReadDataSource().findOne(convertId(rawId));
-                if (existing != null) {
-                    checkCanAccess(AuthorizationGuard.Action.DELETE_ALL, request, existing);
-                }
-            }
-        }
         @SuppressWarnings({"unchecked", "rawtypes"})
         DeleteDataSource rawDataSource = getDeleteDataSource();
-        rawDataSource.deleteAll(deleteModel);
+        // Fail-fast, before deleting anything: check every targeted entity up front so a bulk
+        // delete never partially completes before hitting a denied id. Skipped entirely (the
+        // whole loop, not just the check) when no guard is configured. Both the check loop and
+        // the actual delete run inside the same transaction (see #inTransaction) - a row can't
+        // change between being checked and being deleted either.
+        this.<Void>inTransaction(() -> {
+            if (hasGuard()) {
+                for (String rawId : deleteModel.getIds()) {
+                    E existing = getReadDataSource().findOne(convertId(rawId));
+                    if (existing != null) {
+                        checkCanAccess(AuthorizationGuard.Action.DELETE_ALL, request, existing);
+                    }
+                }
+            }
+            rawDataSource.deleteAll(deleteModel);
+            return null;
+        });
         return ResponseEntity.noContent().build();
     }
 
@@ -714,5 +826,87 @@ public abstract class RestlessResourceHandler<E, K> {
     private Specification<E> withScope(Specification<E> spec, AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {
         Specification<E> scope = getAuthorizationGuard().scope(action, customActionName, request);
         return scope == null ? spec : spec.and(scope);
+    }
+
+    // ---- explicit transaction demarcation for the three bulk-write routes ----
+
+    /**
+     * Runs {@code work} inside a real transaction when {@link #init} was given a {@link
+     * PlatformTransactionManager} (see the six-arg overload's javadoc for why this - not {@code
+     * @Transactional} - is how {@link #createBulk}/{@link #updateBulk}/{@link #deleteAll} get
+     * atomicity); runs it directly, no transaction boundary at all, when it wasn't. {@link
+     * Callable}, not a plain {@link java.util.function.Supplier}, specifically because {@code
+     * CreateDataSource#createAll}/{@code UpdateDataSource#updateAll}/{@code
+     * DeleteDataSource#deleteAll} all declare {@code throws Exception} - {@code
+     * TransactionCallback#doInTransaction} has no {@code throws} clause of its own, so a checked
+     * exception thrown inside has to be wrapped to escape the callback, then unwrapped back to
+     * its original type once outside the transaction (any {@code RuntimeException} - including
+     * the wrapper - already triggers rollback on the way out, which is exactly the point).
+     */
+    private <T> T inTransaction(Callable<T> work) throws Exception {
+        if (transactionManager == null) {
+            return work.call();
+        }
+        try {
+            return new TransactionTemplate(transactionManager).execute(status -> {
+                try {
+                    return work.call();
+                } catch (Exception e) {
+                    throw new TransactionRollbackWrapper(e);
+                }
+            });
+        } catch (TransactionRollbackWrapper wrapper) {
+            throw wrapper.cause;
+        }
+    }
+
+    /** See {@link #inTransaction}'s own javadoc for why this exists at all. */
+    private static final class TransactionRollbackWrapper extends RuntimeException {
+        private final Exception cause;
+
+        TransactionRollbackWrapper(Exception cause) {
+            this.cause = cause;
+        }
+    }
+
+    // ---- RestlessEmbed support: called from another resource's RestlessEmbedResolver, never ----
+    // ---- directly by RestlessRegistrar - see RestlessEmbed's javadoc. ----
+
+    /**
+     * Runs THIS resource's own {@code findList()} logic (coarse {@code preCheck}, {@code
+     * joinFilter} ANDed with this resource's own {@code scope()}, fetch, map) for a caller
+     * embedding it via {@link RestlessEmbed}. Public - {@link RestlessEmbedResolver} lives in a
+     * different package and isn't a subclass. Unlike {@link #findList}, a denied {@code
+     * preCheck()} returns an empty list rather than throwing: a relation the caller can't see
+     * should read as "nothing here" on the *embedding* resource's response, not fail it outright.
+     */
+    public final List<?> findEmbeddedList(Specification<E> joinFilter, HttpServletRequest request) {
+        if (!getAuthorizationGuard().preCheck(AuthorizationGuard.Action.READ_LIST, null, request)) {
+            return List.of();
+        }
+        Specification<E> spec = withScope(joinFilter, AuthorizationGuard.Action.READ_LIST, null, request);
+        return getEntityMapper().map(getReadDataSource().findAll(spec));
+    }
+
+    /**
+     * Same as {@link #findEmbeddedList}, for a {@code many = false} {@link RestlessEmbed} field:
+     * {@code joinFilter} is expected to match at most one row (a natural-key equality check, the
+     * same assumption every other natural-key "join" in this codebase already makes) - the first
+     * match if more than one somehow satisfies it. {@code null} (not 404/403) for no match, a
+     * denied {@code preCheck}, or a denied {@code canAccess} on the row that did match.
+     */
+    public final Object findEmbeddedOne(Specification<E> joinFilter, HttpServletRequest request) {
+        if (!getAuthorizationGuard().preCheck(AuthorizationGuard.Action.READ_ONE, null, request)) {
+            return null;
+        }
+        List<E> matches = getReadDataSource().findAll(joinFilter);
+        if (matches.isEmpty()) {
+            return null;
+        }
+        E found = matches.get(0);
+        if (!getAuthorizationGuard().canAccess(AuthorizationGuard.Action.READ_ONE, request, found)) {
+            return null;
+        }
+        return getEntityMapper().map(found);
     }
 }

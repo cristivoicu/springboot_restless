@@ -6,6 +6,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.convert.ConversionService;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.Validator;
 import org.springframework.web.bind.annotation.RequestMethod;
@@ -13,13 +14,13 @@ import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import ro.cristivoicu.springbootrestless.annotation.RestlessResource;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
+import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.resource.ResourceMetadata;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
 import tools.jackson.databind.ObjectMapper;
 
 import java.lang.reflect.Method;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 
 /**
@@ -33,51 +34,28 @@ import java.util.Set;
 @Component
 public class RestlessRegistrar implements SmartInitializingSingleton {
 
-    /**
-     * {@code operation}: which {@link RestlessResourceHandler#getEnabledOperations} entry gates
-     * this route - shared by more than one {@code RouteDefinition} where a bulk route rides along
-     * with its single-item counterpart ({@code createBulk} with {@code CREATE}, {@code
-     * updateBulk} with {@code UPDATE}), so disabling one disables both together.
-     */
-    private record RouteDefinition(String handlerMethodName, String pathSuffix, RequestMethod httpMethod,
-                                    AuthorizationGuard.Action operation) {
-    }
-
-    // One entry per route RestlessResourceHandler exposes - mirrors the nine endpoints the
-    // four Stage-0 *Controller classes used to provide by hand, plus bulk create/update
-    // (createAll()/updateAll() default methods on CreateDataSource/UpdateDataSource - every
-    // resource already has one of each, so unlike PATCH these aren't opt-in, only individually
-    // disable-able via getEnabledOperations()).
-    private static final List<RouteDefinition> ROUTES = List.of(
-            new RouteDefinition("create", "", RequestMethod.POST, AuthorizationGuard.Action.CREATE),
-            new RouteDefinition("createBulk", "/bulk", RequestMethod.POST, AuthorizationGuard.Action.CREATE),
-            new RouteDefinition("findOne", "/{id}", RequestMethod.GET, AuthorizationGuard.Action.READ_ONE),
-            new RouteDefinition("findList", "/list", RequestMethod.GET, AuthorizationGuard.Action.READ_LIST),
-            new RouteDefinition("findPage", "", RequestMethod.GET, AuthorizationGuard.Action.READ_PAGE),
-            new RouteDefinition("findPageOverview", "/overview", RequestMethod.GET, AuthorizationGuard.Action.READ_PAGE_OVERVIEW),
-            new RouteDefinition("findPageSelect", "/select/async", RequestMethod.GET, AuthorizationGuard.Action.READ_PAGE_SELECT),
-            new RouteDefinition("update", "/{id}", RequestMethod.PUT, AuthorizationGuard.Action.UPDATE),
-            new RouteDefinition("updateBulk", "/bulk", RequestMethod.PUT, AuthorizationGuard.Action.UPDATE),
-            new RouteDefinition("deleteById", "/{id}", RequestMethod.DELETE, AuthorizationGuard.Action.DELETE_ONE),
-            new RouteDefinition("deleteAll", "", RequestMethod.DELETE, AuthorizationGuard.Action.DELETE_ALL)
-    );
-
     private final ApplicationContext applicationContext;
     private final RequestMappingHandlerMapping requestMappingHandlerMapping;
     private final ObjectMapper objectMapper;
     private final ConversionService conversionService;
     private final Validator validator;
+    private final RestlessEmbedResolver embedResolver;
+    private final PlatformTransactionManager transactionManager;
 
     public RestlessRegistrar(ApplicationContext applicationContext,
                               RequestMappingHandlerMapping requestMappingHandlerMapping,
                               ObjectMapper objectMapper,
                               ConversionService conversionService,
-                              Validator validator) {
+                              Validator validator,
+                              RestlessEmbedResolver embedResolver,
+                              PlatformTransactionManager transactionManager) {
         this.applicationContext = applicationContext;
         this.requestMappingHandlerMapping = requestMappingHandlerMapping;
         this.objectMapper = objectMapper;
         this.conversionService = conversionService;
         this.validator = validator;
+        this.embedResolver = embedResolver;
+        this.transactionManager = transactionManager;
     }
 
     @Override
@@ -103,12 +81,12 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         String version = annotation.version();
 
         ResourceMetadata metadata = resource.resolveMetadata(basePath);
-        resource.init(metadata, objectMapper, conversionService, validator);
+        resource.init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager);
 
         // getEnabledOperations() defaults to ALL_OPERATIONS (today's behavior, unchanged) -
         // overriding it to a subset is how a resource opts out of the routes it doesn't want.
         Set<AuthorizationGuard.Action> enabledOperations = resource.getEnabledOperations();
-        ROUTES.stream()
+        RestlessRoutes.FIXED.stream()
                 .filter(route -> enabledOperations.contains(route.operation()))
                 .forEach(route -> registerRoute(resource, basePath + route.pathSuffix(), route.httpMethod(), route.handlerMethodName(), version));
 

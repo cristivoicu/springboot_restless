@@ -9,7 +9,7 @@ import ro.cristivoicu.springbootrestless.mapper.Mapper;
 
 @RestController
 @RequestMapping("/gadgets")
-public class GadgetReadController extends ReadController<Gadget, Long, GadgetSearchDto> {
+public class GadgetReadController extends ReadController<Gadget, Long, GadgetSearchDto, GadgetDto> {
 
     private final GadgetMapper mapper;
 
@@ -26,17 +26,17 @@ public class GadgetReadController extends ReadController<Gadget, Long, GadgetSea
     }
 
     @Override
-    protected Mapper<Gadget, ?> getSelectMapper() {
+    protected Mapper<Gadget, GadgetDto> getSelectMapper() {
         return mapper;
     }
 
     @Override
-    protected Mapper<Gadget, ?> getOverviewMapper() {
+    protected Mapper<Gadget, GadgetDto> getOverviewMapper() {
         return mapper;
     }
 
     @Override
-    protected Mapper<Gadget, ?> getEntityMapper() {
+    protected Mapper<Gadget, GadgetDto> getEntityMapper() {
         return mapper;
     }
 }

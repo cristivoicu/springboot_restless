@@ -7,6 +7,12 @@ import ro.cristivoicu.springbootrestless.mapper.Mapper;
 public class GizmoMapper implements Mapper<Gizmo, GizmoDto> {
     @Override
     public GizmoDto map(Gizmo source) {
-        return new GizmoDto(source.getId(), source.getName(), source.getCode());
+        // Setters, not the all-args constructor: `gadgets` is populated later, by
+        // RestlessEmbedResolver, only when a caller asks for it via ?expand=gadgets.
+        GizmoDto dto = new GizmoDto();
+        dto.setId(source.getId());
+        dto.setName(source.getName());
+        dto.setCode(source.getCode());
+        return dto;
     }
 }

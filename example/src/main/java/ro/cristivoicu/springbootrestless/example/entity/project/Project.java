@@ -11,17 +11,14 @@ import lombok.Setter;
 import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
 
 /**
- * Compile-time generated again, now that a generated resource can carry a real {@code
- * AuthorizationGuard} too: {@code RestlessEntityProcessor} generates {@code ProjectRepository},
- * {@code ProjectMapper} (reflective - {@link ProjectDto}'s fields already match this entity's own
- * by name, so no {@code @RestlessMapperExclude} is needed anywhere), and {@code
- * ProjectRestlessResource} from just this annotation. Only two hand-written pieces remain, both
- * pointed at explicitly since neither follows a "generate a sensible default" convention:
- * {@link ProjectCreateDataSource} (defaulting a blank description) and {@link
- * ProjectAuthorizationGuardBean} (row-scoped by department for non-managers, see {@code
- * policies/project.yaml} - a generic {@code CerbosAuthorizationGuard<E>} needs a small named
- * delegating bean to satisfy {@code authorizationGuard}'s one-concrete-class limit; see that
- * bean's own javadoc).
+ * Back to compile-time generated with just one hand-written piece plus the guard - a project no
+ * longer owns "its" employee at all: {@link ro.cristivoicu.springbootrestless.example.entity.assignment.ProjectAssignment}
+ * is the many-to-many between {@code Project} and {@link
+ * ro.cristivoicu.springbootrestless.example.entity.employee.Employee} now (a team can be large -
+ * see that class's own javadoc for why this isn't a JPA {@code @ManyToMany} or a {@code
+ * @RestlessEmbed} list here). {@code RestlessEntityProcessor} generates {@code ProjectRepository},
+ * {@code ProjectMapper} (reflective again - {@link ProjectDto}'s fields match this entity's own by
+ * name), and {@code ProjectRestlessResource} from just this annotation.
  */
 @Entity
 @Getter

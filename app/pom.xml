@@ -76,6 +76,20 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- optional=true: compiled against so ro.cristivoicu.springbootrestless.openapi can
+             build a real OpenAPI document for dynamically-registered routes (see that package's
+             javadoc for why springdoc's own @RestController scanning can't find them on its
+             own), but never forced onto a consumer that doesn't want Swagger at all - Maven's
+             optional flag keeps it out of anything depending on this artifact transitively.
+             RestlessOpenApiCustomizer's own @ConditionalOnClass is what makes this a no-op,
+             not an error, when the consumer genuinely has no springdoc on their classpath. -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>3.0.0</version>
+            <optional>true</optional>
+        </dependency>
+
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>

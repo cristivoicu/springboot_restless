@@ -42,6 +42,21 @@ resourcePolicy:
             !has(request.resource.attr.lastName) ||
             request.resource.attr.lastName == request.principal.attr.scopedLastName
 
+    # employee: read-only "company directory" access - unlike manager (scoped to their own
+    # reports via scopedLastName above), a plain employee can look up any colleague's record but
+    # never write one. This is what makes GET /employees-dynamic/{id}?expand=projects,department
+    # reachable for an "employee" principal at all (see EmployeeEmbedTest) - the row-scoping that
+    # differs by relation happens one level down, inside the embedded project/department reads
+    # themselves (policies/project.yaml/department.yaml), not here.
+    - actions:
+        - read_one
+        - read_list
+        - read_page
+        - read_page_overview
+        - read_page_select
+      effect: EFFECT_ALLOW
+      roles: ["employee"]
+
     # "view" isn't one of AuthorizationGuard's CRUD actions - EmployeeMapper checks it
     # separately, purely to read back the output below (see CerbosFieldMasker). It's not a
     # substitute for the row-level rule above: a manager only ever reaches this check for a
@@ -55,3 +70,14 @@ resourcePolicy:
         when:
           ruleActivated: |-
             request.principal.attr.canViewSalary == true ? [] : ["salary"]
+
+    # A plain employee's "view" rule always hides salary - no canViewSalary escape hatch at all,
+    # unlike manager above. Without this rule, CerbosFieldMasker's fail-open-on-no-match behavior
+    # (see its own javadoc) would leave salary fully unmasked for the "employee" role the moment
+    # the read-only rule above started granting it access to other employees' records at all.
+    - actions: ["view"]
+      effect: EFFECT_ALLOW
+      roles: ["employee"]
+      output:
+        when:
+          ruleActivated: "['salary']"

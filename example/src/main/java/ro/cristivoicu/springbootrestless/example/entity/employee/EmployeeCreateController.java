@@ -7,7 +7,7 @@ import ro.cristivoicu.springbootrestless.mapper.Mapper;
 
 @RestController
 @RequestMapping("/employees")
-public class EmployeeCreateController extends CreateController<Employee, Long, EmployeeCreateModel> {
+public class EmployeeCreateController extends CreateController<Employee, Long, EmployeeCreateModel, EmployeeDto> {
 
     private final EmployeeMapper mapper;
 
@@ -17,7 +17,7 @@ public class EmployeeCreateController extends CreateController<Employee, Long, E
     }
 
     @Override
-    protected Mapper<Employee, ?> getEntityMapper() {
+    protected Mapper<Employee, EmployeeDto> getEntityMapper() {
         return mapper;
     }
 }

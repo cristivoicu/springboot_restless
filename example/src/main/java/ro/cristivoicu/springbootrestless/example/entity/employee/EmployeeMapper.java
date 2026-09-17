@@ -66,7 +66,15 @@ public class EmployeeMapper implements Mapper<Employee, EmployeeDto> {
     }
 
     private EmployeeDto toDto(Employee source) {
-        return new EmployeeDto(source.getId(), source.getFirstName(), source.getLastName(),
-                source.getEmail(), source.getSalary(), source.getDepartmentCode());
+        // Setters, not the all-args constructor: `projects`/`department` are populated later, by
+        // RestlessEmbedResolver, only when a caller asks for them via ?expand=.
+        EmployeeDto dto = new EmployeeDto();
+        dto.setId(source.getId());
+        dto.setFirstName(source.getFirstName());
+        dto.setLastName(source.getLastName());
+        dto.setEmail(source.getEmail());
+        dto.setSalary(source.getSalary());
+        dto.setDepartmentCode(source.getDepartmentCode());
+        return dto;
     }
 }

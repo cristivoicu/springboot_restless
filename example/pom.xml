@@ -90,15 +90,18 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- Spike (see OpenApiDiscoverySpikeTest): does springdoc's usual @RestController
-             scanning see routes RestlessRegistrar registers dynamically via
-             RequestMappingHandlerMapping.registerMapping(...)? Test-scoped until the answer is
-             known - not committed as a real runtime dependency yet. -->
+        <!-- A real runtime dependency now, not test-scoped: the spike that used to justify the
+             test scope (see OpenApiDiscoveryTest, formerly OpenApiDiscoverySpikeTest) found that
+             springdoc's own @RestController scanning does NOT see routes RestlessRegistrar
+             registers dynamically - app's own RestlessOpenApiCustomizer (a springdoc
+             GlobalOpenApiCustomizer, @ConditionalOnClass-gated on springdoc being present, see
+             its javadoc) is what fixes that, and it needs springdoc actually on the classpath at
+             runtime to ever activate. /swagger-ui.html and /v3/api-docs both work out of the box
+             the moment this dependency is added - no extra configuration. -->
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>3.0.0</version>
-            <scope>test</scope>
         </dependency>
 
         <dependency>

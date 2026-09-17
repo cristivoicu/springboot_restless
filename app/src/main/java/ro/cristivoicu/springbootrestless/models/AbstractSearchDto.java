@@ -1,5 +1,6 @@
 package ro.cristivoicu.springbootrestless.models;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.data.domain.PageRequest;
@@ -31,7 +32,9 @@ public abstract class AbstractSearchDto implements SearchDto {
     protected int size = 20;
     protected List<String> sort = new ArrayList<>();
 
+    /** {@code @Schema(hidden)} - a derived convenience, not a real request field; without this it leaks Spring Data's own {@link Pageable} shape (pageNumber/pageSize/unpaged/offset/...) into every search DTO's schema, duplicating {@link #page}/{@link #size}/{@link #sort} under a confusing "pageable" property. */
     @Override
+    @Schema(hidden = true)
     public Pageable getPageable() {
         return PageRequest.of(page, size, sort.isEmpty()
                 ? Sort.by(Sort.Direction.ASC, "id")

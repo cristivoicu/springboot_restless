@@ -7,7 +7,7 @@ import ro.cristivoicu.springbootrestless.mapper.Mapper;
 
 @RestController
 @RequestMapping("/gadgets")
-public class GadgetUpdateController extends UpdateController<Gadget, Long, GadgetUpdateModel> {
+public class GadgetUpdateController extends UpdateController<Gadget, Long, GadgetUpdateModel, GadgetDto> {
 
     private final GadgetMapper mapper;
 
@@ -17,7 +17,7 @@ public class GadgetUpdateController extends UpdateController<Gadget, Long, Gadge
     }
 
     @Override
-    protected Mapper<Gadget, ?> getEntityMapper() {
+    protected Mapper<Gadget, GadgetDto> getEntityMapper() {
         return mapper;
     }
 }

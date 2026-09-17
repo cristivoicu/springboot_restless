@@ -1,0 +1,37 @@
+---
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: project_assignment
+  rules:
+    # admin: unconditional access to everything.
+    - actions: ["*"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+
+    # manager: also unconditional - who's on which team is a management action, same reasoning
+    # policies/project.yaml already applies to the projects themselves. Note this covers create/
+    # delete too, unlike employee below, which gets read only: adding/removing team members isn't
+    # something a plain employee can do to their own department's projects.
+    - actions: ["*"]
+      effect: EFFECT_ALLOW
+      roles: ["manager"]
+
+    # employee: read-only, scoped to their own department - identical shape to
+    # policies/project.yaml's own employee rule (see its comments for the "!has(...) ||"/
+    # "has(...) &&" reasoning, unchanged here). departmentCode is denormalized straight onto
+    # ProjectAssignment itself (see that entity's javadoc), so this needs no join back to Project.
+    - actions:
+        - read_one
+        - read_list
+        - read_page
+        - read_page_overview
+        - read_page_select
+      effect: EFFECT_ALLOW
+      roles: ["employee"]
+      condition:
+        match:
+          expr: >
+            !has(request.resource.attr.departmentCode) ||
+            (has(request.principal.attr.departmentCode) &&
+             request.resource.attr.departmentCode == request.principal.attr.departmentCode)

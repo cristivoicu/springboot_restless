@@ -733,14 +733,25 @@ principal, since this demo has no such role modeled.
   messages when relevant, empty otherwise). Before this existed, "the same error shape either way"
   (`ErrorResponseParityTest`'s whole premise) meant "the same shape Spring Boot's own defaults
   happened to produce" — undocumented and not this framework's to version.
-- **OpenAPI discovery — a documented gap, not a fix.** `OpenApiDiscoverySpikeTest` (`example`
-  module) confirms springdoc-openapi's usual `@RestController` scanning sees hand-written routes
-  (`/employees`) but *not* routes `RestlessRegistrar` registers dynamically via
-  `RequestMappingHandlerMapping.registerMapping(...)` — including `/projects`, even though it's
-  compile-time generated, since the generated class is still a plain `@Component`, not a
-  `@RestController`. A real fix needs a custom springdoc contributor walking
-  `RequestMappingHandlerMapping` for Restless-owned routes; out of scope here, but the finding (and
-  a regression-proof test for it) is checked in.
+- **Default Swagger/OpenAPI documentation.** `OpenApiDiscoveryTest` (`example` module, formerly
+  `OpenApiDiscoverySpikeTest`) confirmed springdoc-openapi's usual `@RestController` scanning sees
+  hand-written routes (`/employees`) but *not* routes `RestlessRegistrar` registers dynamically —
+  including `/projects`, even though it's compile-time generated, since the generated class is
+  still a plain `@Component`, not a `@RestController`. `RestlessOpenApiCustomizer` (`app` module)
+  fixes this for real: a springdoc `GlobalOpenApiCustomizer` that walks every registered
+  `RestlessResourceHandler` and describes its actual routes — fixed CRUD/bulk (filtered by
+  `getEnabledOperations()`, so a disabled operation is genuinely undocumented, not just
+  unreachable), named custom read actions, the opt-in `PATCH` route — with real request/response
+  schemas (via `swagger-core`'s `ModelConverters`, the same machinery springdoc itself uses) and
+  query parameters for search filters and paging. `app` compiles against springdoc as an
+  `optional` Maven dependency and the customizer is `@ConditionalOnClass`-gated, so a consumer
+  with no springdoc on their classpath gets no bean at all, not a `ClassNotFoundException` — add
+  `springdoc-openapi-starter-webmvc-ui` yourself (as `example`'s own `pom.xml` does) and
+  `/v3/api-docs`/`/swagger-ui.html` just work, no extra configuration. Known simplifications: the
+  three page-read variants all document the same response item schema (the overview/select
+  projections' own mapper types aren't separately resolved anywhere), and a versioned route
+  (`@RestlessResource(version = ...)`) documents its path with no version distinction — OpenAPI has
+  no native way to express Spring's header-based resolution strategy without a vendor extension.
 
 ## Project status
 
@@ -763,5 +774,7 @@ the guard's three hook points (including fail-closed behavior against a killed P
 indicator, and `principalAttributesExtender`, all against a real PDP; `example`'s suite proves the
 same mechanism through realistic, business-named usage — full route coverage, cross-resource
 isolation, duplicate-`basePath` detection, error-response parity against a hand-written baseline,
-default-CUD end-to-end behavior, custom read actions, bulk create/update, multi-field sort, and
-every guard's row-scoping and (for Employee) field-masking scenarios. 106 tests across the reactor.
+default-CUD end-to-end behavior, custom read actions, bulk create/update, multi-field sort, the
+many-to-many `ProjectAssignment` bridge resource (bulk-add at scale, transactional rollback on a
+bad row, pagination), default OpenAPI document generation, and every guard's row-scoping and (for
+Employee) field-masking scenarios. 130 tests across the reactor.

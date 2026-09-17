@@ -128,7 +128,9 @@ class RestlessRegistrarDuplicateBasePathTest {
                     public void validate(Object target, Errors errors) {
                         // unused: registration never invokes handler methods
                     }
-                });
+                },
+                ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver.NONE,
+                null);
 
         assertThatThrownBy(registrar::afterSingletonsInstantiated)
                 .isInstanceOf(IllegalStateException.class)

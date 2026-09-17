@@ -96,10 +96,23 @@ public class RestlessEntityProcessor extends AbstractProcessor {
             return;
         }
 
-        String createModel = resolveDtoType(entityType, "createModel", packageName, entityName, "CreateModel");
-        String updateModel = resolveDtoType(entityType, "updateModel", packageName, entityName, "UpdateModel");
+        RestlessEntity restlessEntity = entityType.getAnnotation(RestlessEntity.class);
+        Set<RestlessOperation> operationSet = Set.of(restlessEntity.operations());
+        boolean createEnabled = operationSet.contains(RestlessOperation.CREATE);
+        boolean updateEnabled = operationSet.contains(RestlessOperation.UPDATE);
+
+        // createModel/updateModel only need to resolve (convention or override) when their verb
+        // is actually enabled - excluding UPDATE from operations() is exactly what lets an entity
+        // with no {Entity}UpdateModel (e.g. a link/bridge row nothing ever edits in place) still
+        // use the generated tier, instead of needing a phantom DTO class no route ever reaches.
+        String createModel = createEnabled
+                ? resolveDtoType(entityType, "createModel", packageName, entityName, "CreateModel")
+                : null;
+        String updateModel = updateEnabled
+                ? resolveDtoType(entityType, "updateModel", packageName, entityName, "UpdateModel")
+                : null;
         String searchDto = resolveDtoType(entityType, "searchDto", packageName, entityName, "SearchDto");
-        if (createModel == null || updateModel == null || searchDto == null) {
+        if ((createEnabled && createModel == null) || (updateEnabled && updateModel == null) || searchDto == null) {
             return; // errors already reported via the messager
         }
 
@@ -117,11 +130,10 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         VerbOverride authorizationGuard = resolveVerbOverride(entityType, "authorizationGuard");
         VerbOverride patchDataSource = resolveVerbOverride(entityType, "patchDataSource");
 
-        RestlessEntity restlessEntity = entityType.getAnnotation(RestlessEntity.class);
         writeResourceClass(packageName, entityName, idType, createModel, updateModel, searchDto, mapper,
                 repository, restlessEntity.basePath(), restlessEntity.version(), restlessEntity.operations(),
-                createDataSource, readDataSource, updateDataSource, deleteDataSource, authorizationGuard,
-                patchDataSource, entityType);
+                createEnabled, updateEnabled, createDataSource, readDataSource, updateDataSource,
+                deleteDataSource, authorizationGuard, patchDataSource, entityType);
     }
 
     /**
@@ -314,7 +326,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
     private void writeResourceClass(String packageName, String entityName, String idType,
                                      String createModel, String updateModel, String searchDto, String mapper,
                                      String repository, String basePath, String version,
-                                     RestlessOperation[] operations,
+                                     RestlessOperation[] operations, boolean createEnabled, boolean updateEnabled,
                                      VerbOverride createDataSource, VerbOverride readDataSource,
                                      VerbOverride updateDataSource, VerbOverride deleteDataSource,
                                      VerbOverride authorizationGuard, VerbOverride patchDataSource,
@@ -330,14 +342,49 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                 : "basePath = \"%s\"".formatted(basePath);
 
         StringBuilder extraParams = new StringBuilder();
-        String createInit = verbInit(createDataSource, extraParams, "createDataSource",
-                "new DefaultCreateDataSource<>(repository, %s.class, %s.class)".formatted(entityName, createModel));
+        // create/update only get a field/constructor-param/init at all when their verb is
+        // enabled - see the "createEnabled"/"updateEnabled" javadoc note in generate(). Unlike
+        // guard/patch below, RestlessResourceHandler#getCreateDataSource/getUpdateDataSource
+        // aren't abstract (they throw a "never overrides" default), so simply not overriding them
+        // here when disabled is exactly the hand-written-resource-class shape too.
+        String createInit = createEnabled
+                ? verbInit(createDataSource, extraParams, "createDataSource",
+                        "new DefaultCreateDataSource<>(repository, %s.class, %s.class)".formatted(entityName, createModel))
+                : null;
         String readInit = verbInit(readDataSource, extraParams, "readDataSource",
                 "new DefaultReadDataSource<>(repository, %s.class)".formatted(searchDto));
-        String updateInit = verbInit(updateDataSource, extraParams, "updateDataSource",
-                "new DefaultUpdateDataSource<>(repository, %s.class)".formatted(updateModel));
+        String updateInit = updateEnabled
+                ? verbInit(updateDataSource, extraParams, "updateDataSource",
+                        "new DefaultUpdateDataSource<>(repository, %s.class)".formatted(updateModel))
+                : null;
         String deleteInit = verbInit(deleteDataSource, extraParams, "deleteDataSource",
                 "new DefaultDeleteDataSource<>(repository, %s.class)".formatted(idType));
+
+        String createFieldDecl = "";
+        String createAssignment = "";
+        String createGetterMethod = "";
+        if (createEnabled) {
+            createFieldDecl = "    private final CreateDataSource<" + entityName + ", " + idType + ", ?> createDataSource;";
+            createAssignment = "        this.createDataSource = " + createInit + ";";
+            createGetterMethod = "\n"
+                    + "    @Override\n"
+                    + "    protected CreateDataSource<" + entityName + ", " + idType + ", ?> getCreateDataSource() {\n"
+                    + "        return createDataSource;\n"
+                    + "    }\n";
+        }
+
+        String updateFieldDecl = "";
+        String updateAssignment = "";
+        String updateGetterMethod = "";
+        if (updateEnabled) {
+            updateFieldDecl = "    private final UpdateDataSource<" + entityName + ", " + idType + ", ?> updateDataSource;";
+            updateAssignment = "        this.updateDataSource = " + updateInit + ";";
+            updateGetterMethod = "\n"
+                    + "    @Override\n"
+                    + "    protected UpdateDataSource<" + entityName + ", " + idType + ", ?> getUpdateDataSource() {\n"
+                    + "        return updateDataSource;\n"
+                    + "    }\n";
+        }
 
         // Unlike the four *DataSource verbs above (always present, defaulting to a Default*
         // instance when not overridden), an unset authorizationGuard means "no override at all" -
@@ -435,35 +482,25 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                     @RestlessResource(%3$s)
                     public class %4$s extends RestlessResourceHandler<%2$s, %5$s> {
 
-                        private final CreateDataSource<%2$s, %5$s, ?> createDataSource;
+                    %19$s
                         private final ReadDataSource<%2$s, %5$s, ?> readDataSource;
-                        private final UpdateDataSource<%2$s, %5$s, ?> updateDataSource;
+                    %20$s
                         private final DeleteDataSource<%2$s, %5$s, ?> deleteDataSource;
                         private final %9$s mapper;
                     %16$s
                         public %4$s(%10$s repository, %9$s mapper%11$s) {
-                            this.createDataSource = %12$s;
+                    %21$s
                             this.readDataSource = %13$s;
-                            this.updateDataSource = %14$s;
+                    %22$s
                             this.deleteDataSource = %15$s;
                             this.mapper = mapper;
                     %17$s    }
-
-                        @Override
-                        protected CreateDataSource<%2$s, %5$s, ?> getCreateDataSource() {
-                            return createDataSource;
-                        }
-
+                    %23$s
                         @Override
                         protected ReadDataSource<%2$s, %5$s, ?> getReadDataSource() {
                             return readDataSource;
                         }
-
-                        @Override
-                        protected UpdateDataSource<%2$s, %5$s, ?> getUpdateDataSource() {
-                            return updateDataSource;
-                        }
-
+                    %24$s
                         @Override
                         protected DeleteDataSource<%2$s, %5$s, ?> getDeleteDataSource() {
                             return deleteDataSource;
@@ -488,7 +525,9 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                     createModel, searchDto, updateModel, mapper, repository, extraParams,
                     createInit, readInit, updateInit, deleteInit,
                     guardFieldDecl + patchFieldDecl, guardAssignment + patchAssignment,
-                    guardMethod + patchMethod + operationsMethod));
+                    guardMethod + patchMethod + operationsMethod,
+                    createFieldDecl, updateFieldDecl, createAssignment, updateAssignment,
+                    createGetterMethod, updateGetterMethod));
         }
     }
 

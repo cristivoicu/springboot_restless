@@ -9,7 +9,7 @@ import ro.cristivoicu.springbootrestless.mapper.Mapper;
 
 @RestController
 @RequestMapping("/employees")
-public class EmployeeReadController extends ReadController<Employee, Long, EmployeeSearchDto> {
+public class EmployeeReadController extends ReadController<Employee, Long, EmployeeSearchDto, EmployeeDto> {
 
     private final EmployeeMapper mapper;
 
@@ -26,17 +26,17 @@ public class EmployeeReadController extends ReadController<Employee, Long, Emplo
     }
 
     @Override
-    protected Mapper<Employee, ?> getSelectMapper() {
+    protected Mapper<Employee, EmployeeDto> getSelectMapper() {
         return mapper;
     }
 
     @Override
-    protected Mapper<Employee, ?> getOverviewMapper() {
+    protected Mapper<Employee, EmployeeDto> getOverviewMapper() {
         return mapper;
     }
 
     @Override
-    protected Mapper<Employee, ?> getEntityMapper() {
+    protected Mapper<Employee, EmployeeDto> getEntityMapper() {
         return mapper;
     }
 }

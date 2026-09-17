@@ -42,6 +42,14 @@ public class Employee {
      * by {@code ProjectAuthorizationGuardBean} (via {@code EmployeeRepository.findByEmail}, the
      * authenticated principal's own row) to answer "what's my department" for {@code
      * policies/project.yaml}'s row-scoping rule - see its javadoc.
+     * <p>
+     * No {@code @OneToMany List<Project> projects} here (there was one, briefly) - which projects
+     * this employee is on is a many-to-many now (see {@link
+     * ro.cristivoicu.springbootrestless.example.entity.assignment.ProjectAssignment}), and a
+     * person's own assignment count is unbounded on this codebase's own terms too (nothing stops
+     * someone being added to hundreds of projects) - so it gets the same paginated-resource
+     * treatment as the project side: {@code GET /project-assignments?employeeId={id}}, not a field
+     * on this entity or an embed on {@code EmployeeDto}.
      */
     private String departmentCode;
 }
