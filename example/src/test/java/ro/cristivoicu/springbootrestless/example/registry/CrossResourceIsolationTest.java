@@ -17,13 +17,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Stage 3 proof: Employee ("/employees-dynamic", added in Stage 2) and Department
+ * Stage 3 proof: Employee ("/employees", added in Stage 2) and Department
  * ("/departments", added purely by writing its own beans in Stage 3) both route correctly
  * through the same {@link RestlessRegistrar} with no cross-talk between resources - i.e. no
  * accidental shared mutable state in {@code RestlessResourceHandler}.
  * <p>
  * {@code @WithMockUser}+{@link CerbosBackedTest}: see {@link Stage1DynamicRegistrationTest}'s
- * javadoc - both {@code /employees-dynamic} and {@code /departments} now go through a real
+ * javadoc - both {@code /employees} and {@code /departments} now go through a real
  * {@code CerbosAuthorizationGuard}; {@code admin} is unconditionally allowed on both policies, so
  * this stays a pure routing/isolation test, not an authorization one.
  */
@@ -46,7 +46,7 @@ class CrossResourceIsolationTest extends CerbosBackedTest {
         employee.setLastName("Liskov");
         employee.setEmail("barbara@example.com");
 
-        String employeeResponse = mockMvc.perform(post("/employees-dynamic")
+        String employeeResponse = mockMvc.perform(post("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(employee)))
                 .andExpect(status().isOk())
@@ -65,7 +65,7 @@ class CrossResourceIsolationTest extends CerbosBackedTest {
         long departmentId = objectMapper.readTree(departmentResponse).get("id").asLong();
 
         // each resource only sees its own data
-        mockMvc.perform(get("/employees-dynamic"))
+        mockMvc.perform(get("/employees"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].firstName").value("Barbara"));
@@ -75,7 +75,7 @@ class CrossResourceIsolationTest extends CerbosBackedTest {
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].name").value("Engineering"));
 
-        mockMvc.perform(get("/employees-dynamic/{id}", employeeId))
+        mockMvc.perform(get("/employees/{id}", employeeId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lastName").value("Liskov"));
 

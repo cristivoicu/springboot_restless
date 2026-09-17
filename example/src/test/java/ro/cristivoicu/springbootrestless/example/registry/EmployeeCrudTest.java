@@ -1,24 +1,34 @@
-package ro.cristivoicu.springbootrestless.example.entity.employee;
+package ro.cristivoicu.springbootrestless.example.registry;
 
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.transaction.annotation.Transactional;
+import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeCreateModel;
+import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeDeleteModel;
+import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeUpdateModel;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * Stage 0 proof-of-concept: hand-wired Create/Read/Update/Delete controllers
- * for one entity, exercising all five verbs end to end against H2.
+ * Basic CRUD smoke test against `/employees` - every verb (create, single/list/page/overview/
+ * select reads, update, single/bulk delete), plus validation and not-found handling, as an
+ * {@code admin} principal (unconditionally allowed by {@code policies/employee.yaml}). Row-scoping,
+ * field-masking, and every other role-specific scenario live in {@link EmployeeAuthorizationGuardTest}
+ * instead - this class exists purely to prove the plumbing itself works end to end against H2,
+ * independent of which role is asking.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
-class EmployeeCrudTest {
+class EmployeeCrudTest extends CerbosBackedTest {
 
     @Autowired
     private MockMvc mockMvc;
@@ -34,6 +44,7 @@ class EmployeeCrudTest {
         create.setEmail("ada@example.com");
 
         String createResponse = mockMvc.perform(post("/employees")
+                        .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isOk())
@@ -42,31 +53,31 @@ class EmployeeCrudTest {
 
         long id = objectMapper.readTree(createResponse).get("id").asLong();
 
-        mockMvc.perform(get("/employees/{id}", id))
+        mockMvc.perform(get("/employees/{id}", id).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lastName").value("Lovelace"));
 
-        mockMvc.perform(get("/employees/{id}", 999_999L))
+        mockMvc.perform(get("/employees/{id}", 999_999L).with(admin()))
                 .andExpect(status().isNotFound());
 
-        mockMvc.perform(get("/employees"))
+        mockMvc.perform(get("/employees").with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].firstName").value("Ada"));
 
-        mockMvc.perform(get("/employees/list"))
+        mockMvc.perform(get("/employees/list").with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].lastName").value("Lovelace"));
 
-        mockMvc.perform(get("/employees/overview"))
+        mockMvc.perform(get("/employees/overview").with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.body[0].email").value("ada@example.com"));
 
-        mockMvc.perform(get("/employees/select/async"))
+        mockMvc.perform(get("/employees/select/async").with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1));
 
-        mockMvc.perform(get("/employees").param("lastName", "Nobody"))
+        mockMvc.perform(get("/employees").with(admin()).param("lastName", "Nobody"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(0));
 
@@ -76,15 +87,16 @@ class EmployeeCrudTest {
         update.setEmail("augusta@example.com");
 
         mockMvc.perform(put("/employees/{id}", id)
+                        .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(update)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.firstName").value("Augusta"));
 
-        mockMvc.perform(delete("/employees/{id}", id))
+        mockMvc.perform(delete("/employees/{id}", id).with(admin()))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/employees/{id}", id))
+        mockMvc.perform(get("/employees/{id}", id).with(admin()))
                 .andExpect(status().isNotFound());
     }
 
@@ -96,6 +108,7 @@ class EmployeeCrudTest {
         create.setEmail("not-an-email");
 
         mockMvc.perform(post("/employees")
+                        .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isBadRequest());
@@ -110,12 +123,13 @@ class EmployeeCrudTest {
         deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
         mockMvc.perform(delete("/employees")
+                        .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/employees/{id}", first)).andExpect(status().isNotFound());
-        mockMvc.perform(get("/employees/{id}", second)).andExpect(status().isNotFound());
+        mockMvc.perform(get("/employees/{id}", first).with(admin())).andExpect(status().isNotFound());
+        mockMvc.perform(get("/employees/{id}", second).with(admin())).andExpect(status().isNotFound());
     }
 
     @Test
@@ -124,6 +138,7 @@ class EmployeeCrudTest {
         deleteModel.setIds(java.util.List.of("not-a-number"));
 
         mockMvc.perform(delete("/employees")
+                        .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isBadRequest());
@@ -136,11 +151,16 @@ class EmployeeCrudTest {
         create.setEmail(email);
 
         String response = mockMvc.perform(post("/employees")
+                        .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
         return objectMapper.readTree(response).get("id").asLong();
+    }
+
+    private static RequestPostProcessor admin() {
+        return jwt().authorities(new SimpleGrantedAuthority("admin"));
     }
 }

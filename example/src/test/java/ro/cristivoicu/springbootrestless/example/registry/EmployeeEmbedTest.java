@@ -41,7 +41,7 @@ class EmployeeEmbedTest extends CerbosBackedTest {
     void unrequestedEmbedStaysAbsent() throws Exception {
         long id = createEmployee(admin(), "Dana", "Scully", "dana@example.com", "ENG");
 
-        mockMvc.perform(get("/employees-dynamic/{id}", id).with(admin()))
+        mockMvc.perform(get("/employees/{id}", id).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.department").doesNotExist());
     }
@@ -51,7 +51,7 @@ class EmployeeEmbedTest extends CerbosBackedTest {
         createDepartment(admin(), "Engineering", "ENG");
         long id = createEmployee(admin(), "Dana", "Scully", "dana@example.com", "ENG");
 
-        mockMvc.perform(get("/employees-dynamic/{id}", id).with(admin()).param("expand", "department"))
+        mockMvc.perform(get("/employees/{id}", id).with(admin()).param("expand", "department"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.department.code").value("ENG"))
                 .andExpect(jsonPath("$.department.name").value("Engineering"));
@@ -65,7 +65,7 @@ class EmployeeEmbedTest extends CerbosBackedTest {
         createEmployee(admin(), "Fox", "Mulder", "fox@example.com", "SALES");
         long dana = createEmployee(admin(), "Dana", "Scully", "dana@example.com", "ENG");
 
-        mockMvc.perform(get("/employees-dynamic/{id}", dana).with(employee("fox@example.com"))
+        mockMvc.perform(get("/employees/{id}", dana).with(employee("fox@example.com"))
                         .param("expand", "department"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.department.code").value("ENG"));
@@ -79,7 +79,7 @@ class EmployeeEmbedTest extends CerbosBackedTest {
         create.setEmail(email);
         create.setDepartmentCode(departmentCode);
 
-        String response = mockMvc.perform(post("/employees-dynamic")
+        String response = mockMvc.perform(post("/employees")
                         .with(authentication)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))

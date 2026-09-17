@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -82,6 +83,21 @@ public class RestlessExceptionHandler {
     public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex, HttpServletRequest request) {
         String message = "Failed to convert '" + ex.getName() + "' to the expected type";
         return respond(HttpStatus.BAD_REQUEST, message, request, List.of());
+    }
+
+    /**
+     * A JPA {@code @Version}-annotated entity racing a concurrent write: Hibernate/Spring Data
+     * JPA already throw this on a stale {@code save()} with zero framework code needed once an
+     * entity author adds the annotation - this handler is the only piece that was missing (see
+     * {@code RestlessResourceHandler}'s own {@code readVersion}/{@code checkIfMatch}, the
+     * <em>opt-in, precondition-based</em> counterpart to this <em>always-on, write-time</em> one -
+     * this fires regardless of whether the client ever sent an {@code If-Match} header at all).
+     * 409, not 412: unlike a failed {@code If-Match} precondition (checked before any write is
+     * attempted), this reports a write that was actually attempted and rejected by the database.
+     */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(OptimisticLockingFailureException ex, HttpServletRequest request) {
+        return respond(HttpStatus.CONFLICT, "The resource was modified concurrently - reload and try again", request, List.of());
     }
 
     /**

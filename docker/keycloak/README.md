@@ -30,7 +30,7 @@ policies (`employee`/`department`/`project`), so `alice-admin` has no need for a
 these attributes; `manager` is unconditional on `department`/`project` too, only
 `employee` (`policies/employee.yaml`) scopes it by `scopedLastName`.
 
-`dave-employee`'s `employee` role has no direct access to `/employees-dynamic/**` at
+`dave-employee`'s `employee` role has no direct access to `/employees/**` at
 all (no rule in `policies/employee.yaml` grants it), and is scoped to their own
 department on `/projects` (`policies/project.yaml`) - but "their own department" isn't
 a JWT claim like `scopedLastName` is. It's resolved by `ProjectRestlessResource` from
@@ -52,14 +52,14 @@ curl -s http://localhost:8080/realms/restless-demo/protocol/openid-connect/token
 ```
 
 Use the returned token as a `Bearer` token against `example`'s
-`/employees-dynamic/**` routes, e.g.:
+`/employees/**` routes, e.g.:
 
 ```bash
 TOKEN=$(curl -s http://localhost:8080/realms/restless-demo/protocol/openid-connect/token \
   -d grant_type=password -d client_id=restless-example \
   -d username=bob-manager -d password=bob-manager-pw | jq -r .access_token)
 
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/employees-dynamic/list | jq
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/employees/list | jq
 ```
 
 (Port depends on how `example` is run - `mvn spring-boot:run`'s default is `8080`,

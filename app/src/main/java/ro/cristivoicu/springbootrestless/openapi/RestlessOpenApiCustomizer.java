@@ -22,6 +22,7 @@ import io.swagger.v3.oas.models.responses.ApiResponses;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springdoc.core.customizers.GlobalOpenApiCustomizer;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
@@ -58,15 +59,17 @@ import java.util.Set;
  * exist, but a consumer with no springdoc on their own classpath gets no bean here at all, not a
  * {@code ClassNotFoundException} - see {@code app}'s {@code pom.xml} for the full reasoning.
  * <p>
- * <b>Known simplifications, not oversights:</b> {@code findPage}/{@code findPageOverview}/{@code
- * findPageSelect} all document {@link ResourceMetadata#responseDtoType()} as their item schema,
- * even though overview/select projections can genuinely differ in a hand-written resource - the
- * mapper each one is actually built from isn't separately resolved anywhere (see {@code
- * RestlessResourceHandler#resolveMetadata}'s own javadoc, which only resolves {@code
- * getEntityMapper()}'s type). API-versioned routes ({@code @RestlessResource(version = ...)})
- * document their path with no version distinction at all - OpenAPI has no native way to express
- * Spring's header-based version resolution strategy without a custom vendor extension, not
- * attempted here. Both are real, currently-permanent gaps, not bugs to report.
+ * <b>Two formerly-known simplifications, now addressed:</b> {@code findPage}/{@code
+ * findPageOverview}/{@code findPageSelect} each document their own projection's actual response
+ * schema ({@link ResourceMetadata#responseDtoType()}/{@link ResourceMetadata#overviewResponseDtoType()}/
+ * {@link ResourceMetadata#selectResponseDtoType()} respectively - each resolved the same way, see
+ * {@code RestlessResourceHandler#resolveMetadata}), rather than all three sharing one. Every
+ * operation also carries {@link ResourceMetadata#version()} when the resource declared one - via
+ * {@code x-api-version} (see {@link #applyVersion}), since OpenAPI still has no native axis for
+ * Spring's header-based version resolution strategy; a vendor extension plus a human-readable
+ * summary suffix is the honest ceiling here, not a full fix - a client reading the raw spec still
+ * can't tell OpenAPI itself "this operation only exists for version X" the way a path- or
+ * query-parameter-based versioning scheme could.
  */
 @Component
 @ConditionalOnClass(GlobalOpenApiCustomizer.class)
@@ -145,11 +148,23 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
                 operation.responses(new ApiResponses().addApiResponse("200",
                         jsonResponse(arraySchema(refSchema(openApi, metadata.responseDtoType())))));
             }
-            case "findPage", "findPageOverview", "findPageSelect" -> {
+            case "findPage" -> {
                 addSearchParameters(operation, openApi, metadata.searchDtoType());
                 addPagingParameters(operation, openApi);
                 operation.responses(new ApiResponses().addApiResponse("200",
                         jsonResponse(pageSchema(refSchema(openApi, metadata.responseDtoType())))));
+            }
+            case "findPageOverview" -> {
+                addSearchParameters(operation, openApi, metadata.searchDtoType());
+                addPagingParameters(operation, openApi);
+                operation.responses(new ApiResponses().addApiResponse("200",
+                        jsonResponse(pageSchema(refSchema(openApi, metadata.overviewResponseDtoType())))));
+            }
+            case "findPageSelect" -> {
+                addSearchParameters(operation, openApi, metadata.searchDtoType());
+                addPagingParameters(operation, openApi);
+                operation.responses(new ApiResponses().addApiResponse("200",
+                        jsonResponse(pageSchema(refSchema(openApi, metadata.selectResponseDtoType())))));
             }
             case "update" -> {
                 operation.addParametersItem(idParameter(openApi, metadata.idType()));
@@ -173,6 +188,7 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
             default -> throw new IllegalStateException("RestlessRoutes lists an unknown handler method: " + route.handlerMethodName());
         }
 
+        applyVersion(operation, metadata.version());
         putOperation(openApi, path, route.httpMethod(), operation);
     }
 
@@ -186,6 +202,7 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
         addPagingParameters(operation, openApi);
         operation.responses(new ApiResponses().addApiResponse("200",
                 jsonResponse(pageSchema(refSchema(openApi, metadata.responseDtoType())))));
+        applyVersion(operation, metadata.version());
         putOperation(openApi, path, RequestMethod.GET, operation);
     }
 
@@ -199,7 +216,24 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
         operation.requestBody(jsonBody(refSchema(openApi, resource.getPatchModelType()), true));
         operation.responses(new ApiResponses().addApiResponse("200",
                 jsonResponse(refSchema(openApi, metadata.responseDtoType()))));
+        applyVersion(operation, metadata.version());
         putOperation(openApi, path, RequestMethod.PATCH, operation);
+    }
+
+    /**
+     * Surfaces {@code version} (a resource's {@code @RestlessResource(version = ...)} value) on
+     * {@code operation} - a no-op when unset (the common case). {@code x-api-version} is a plain
+     * vendor extension (OpenAPI's own escape hatch for exactly "no native field for this"), and
+     * the summary suffix makes it visible in Swagger UI without a reader needing to know to look
+     * for a vendor extension at all - see this class's own javadoc for why this, not a native
+     * per-operation version field, is the ceiling for a header-based versioning strategy.
+     */
+    private void applyVersion(Operation operation, String version) {
+        if (!StringUtils.hasText(version)) {
+            return;
+        }
+        operation.addExtension("x-api-version", version);
+        operation.summary(operation.getSummary() + " (API version: " + version + ")");
     }
 
     // ---- shared building blocks ----
@@ -209,8 +243,8 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
      * the {@link PathItem} if this is the first route documented at that path - but only if
      * nothing's there yet for that method. The guard matters for one real case: springdoc's own
      * scan may already have found a hand-written {@code @RestController} at the very same literal
-     * path (the parity-testing pattern several of this reactor's own fixtures use, e.g. {@code
-     * /employees} hand-written next to {@code /employees-dynamic} generated) - this must never
+     * path (the parity-testing pattern this reactor's own {@code app} fixtures use, e.g. {@code
+     * /gadgets} hand-written next to {@code /gadgets-dynamic} generated) - this must never
      * overwrite what springdoc already documented correctly for that case.
      */
     private void putOperation(OpenAPI openApi, String path, RequestMethod httpMethod, Operation operation) {

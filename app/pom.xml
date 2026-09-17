@@ -95,6 +95,18 @@
             <artifactId>h2</artifactId>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- optional=true, same reasoning as springdoc above: compiled against so
+             ro.cristivoicu.springbootrestless.metrics can record an authorization-denial counter
+             via Micrometer's MeterRegistry (riding in transitively with this), but never forced
+             onto a consumer with no Actuator on their classpath - RestlessAuthorizationMetrics's
+             own @ConditionalOnClass(MeterRegistry.class) is what makes that a no-op, not an
+             error. Same block cerbos/pom.xml already uses for CerbosHealthIndicator. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 
     <build>

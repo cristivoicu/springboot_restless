@@ -9,6 +9,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
+import ro.cristivoicu.springbootrestless.models.AbstractAuditableEntity;
 
 /**
  * Back to compile-time generated with just one hand-written piece plus the guard - a project no
@@ -18,7 +19,12 @@ import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
  * see that class's own javadoc for why this isn't a JPA {@code @ManyToMany} or a {@code
  * @RestlessEmbed} list here). {@code RestlessEntityProcessor} generates {@code ProjectRepository},
  * {@code ProjectMapper} (reflective again - {@link ProjectDto}'s fields match this entity's own by
- * name), and {@code ProjectRestlessResource} from just this annotation.
+ * name, inherited {@code createdDate}/{@code lastModifiedDate} included), and {@code
+ * ProjectRestlessResource} from just this annotation.
+ * <p>
+ * Also this codebase's one demo of {@link AbstractAuditableEntity} - see its own javadoc for why
+ * this stays opt-in per entity rather than something every entity gets; {@code
+ * ExampleApplication}'s {@code @EnableJpaAuditing} is the other half of the setup.
  */
 @Entity
 @Getter
@@ -27,7 +33,7 @@ import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
 @AllArgsConstructor
 @RestlessEntity(basePath = "/projects", createDataSource = ProjectCreateDataSource.class,
         authorizationGuard = ProjectAuthorizationGuardBean.class)
-public class Project {
+public class Project extends AbstractAuditableEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

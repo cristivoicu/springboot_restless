@@ -38,6 +38,7 @@ action: fine-grained authorization.
 - [Resilience and observability](#resilience-and-observability)
 - [API completeness](#api-completeness)
 - [Project status](#project-status)
+- [Versioning and API stability](VERSIONING.md)
 
 ## Scope
 
@@ -70,7 +71,7 @@ hand-wired.
 - **Java 25** and **Maven 3.9+** (a wrapper — `./mvnw` — is included, so a local Maven install
   isn't strictly required).
 - **Docker** and **Docker Compose**, only if you want to run the `example` module's Cerbos +
-  Keycloak-backed demo (`/employees-dynamic/**`) against real infrastructure instead of just the
+  Keycloak-backed demo (`/employees/**`) against real infrastructure instead of just the
   automated test suite. Nothing else in the reactor needs Docker — every module's own `mvn test`
   either needs no external service at all, or starts one itself via Testcontainers.
 - No other IDP, database, or message broker needed — `example` runs against an in-memory H2
@@ -176,7 +177,7 @@ sequenceDiagram
     participant D as ReadDataSource
     participant M as Mapper
 
-    C->>H: GET /employees-dynamic/list
+    C->>H: GET /employees/list
     H->>G: preCheck(READ_LIST)
     G-->>H: allowed
     H->>H: bind SearchDto,<br/>build equality Specification
@@ -200,7 +201,7 @@ sequenceDiagram
     participant D as ReadDataSource
     participant M as Mapper
 
-    C->>H: GET /employees-dynamic/{id}
+    C->>H: GET /employees/{id}
     H->>G: preCheck(READ_ONE)
     G-->>H: allowed
     H->>D: findOne(id)
@@ -255,7 +256,7 @@ From the repo root:
 cd example && ../mvnw spring-boot:run
 ```
 
-The `/employees-dynamic/**` routes are the exception — they're wired to a real
+The `/employees/**` routes are the exception — they're wired to a real
 `CerbosAuthorizationGuard` and require a live Cerbos PDP (and, for real JWTs rather than
 `MockMvc`'s test helpers, a real IdP) to answer authorization checks at all. See
 [Running the full demo](#running-the-full-demo-docker-compose--keycloak) below to exercise those
@@ -389,12 +390,16 @@ makes instead):
 Every verb is a `Default*DataSource`; the guard is role-only, no row-scoping — see
 `policies/department.yaml`.
 
-### Full manual (`Employee`)
+### Manual, with entity-specific logic (`Employee`)
 
-Hand-written `*DataSource` classes for entity-specific create/update/delete logic, a named
-custom read action, and an authorization guard — see `EmployeeRestlessResource`. Also keeps the
-original hand-written `@RestController` classes at `/employees` (vs. `/employees-dynamic` for
-the dynamic route) purely as a parity-testing baseline for `example`'s own test suite.
+Same "manual, no codegen" branch as `Department` above, taken to its other extreme: instead of
+four `Default*DataSource` instances, `EmployeeRestlessResource` constructs hand-written
+`Employee*DataSource` classes for entity-specific create/update/delete logic, adds a named custom
+read action (`getCustomReadActions()` — a suffix `LIKE` on email domain, something the default
+equality filter can't express), and wires a real `CerbosAuthorizationGuard`. Every verb still
+funnels through the one dynamically-registered `RestlessResourceHandler` at `/employees` — nothing
+here needs a hand-written `@RestController` or a second base path; that's exactly the boilerplate
+this framework exists to remove, business-specific CRUD logic included.
 
 ## Tutorial: authorization with `AuthorizationGuard`
 
@@ -474,6 +479,23 @@ sequenceDiagram
     <artifactId>spring-boot-restless-cerbos</artifactId>
     <version>0.0.1-SNAPSHOT</version>
 </dependency>
+```
+
+Or import the BOM once and drop the version from every `spring-boot-restless*` dependency you
+declare (`spring-boot-restless`, `spring-boot-restless-cerbos`, `spring-boot-restless-test`):
+
+```xml
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>ro.cristivoicu</groupId>
+            <artifactId>spring-boot-restless-dependencies</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
 ```
 
 ### 2. Write a resource policy
@@ -610,7 +632,7 @@ leaves it alone for admins and for managers who have it).
 
 ## Running the full demo: Docker Compose + Keycloak
 
-`example`'s `/employees-dynamic/**`, `/departments/**`, and `/projects/**` routes are all secured
+`example`'s `/employees/**`, `/departments/**`, and `/projects/**` routes are all secured
 end-to-end with real infrastructure: a real Cerbos PDP evaluating every policy under
 `policies/`, and a real [Keycloak](https://www.keycloak.org/) realm issuing JWTs that
 `SecurityConfig` validates against Keycloak's own OIDC discovery document
@@ -642,7 +664,7 @@ TOKEN=$(curl -s http://localhost:8080/realms/restless-demo/protocol/openid-conne
   -d grant_type=password -d client_id=restless-example \
   -d username=carol-manager -d password=carol-manager-pw | jq -r .access_token)
 
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/employees-dynamic/list | jq
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/employees/list | jq
 ```
 
 `bob-manager` only sees employees whose `lastName` is `Hopper` (row-level `scope`), and always
@@ -665,7 +687,7 @@ ADMIN_TOKEN=$(curl -s http://localhost:8080/realms/restless-demo/protocol/openid
 # dave-employee's own record - email must match the Keycloak user's email exactly.
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
   -d '{"firstName":"Dave","lastName":"Employee","email":"dave@restless-demo.example","departmentCode":"ENG"}' \
-  http://localhost:8081/employees-dynamic
+  http://localhost:8081/employees
 
 # One project per department.
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
@@ -747,11 +769,33 @@ principal, since this demo has no such role modeled.
   `optional` Maven dependency and the customizer is `@ConditionalOnClass`-gated, so a consumer
   with no springdoc on their classpath gets no bean at all, not a `ClassNotFoundException` — add
   `springdoc-openapi-starter-webmvc-ui` yourself (as `example`'s own `pom.xml` does) and
-  `/v3/api-docs`/`/swagger-ui.html` just work, no extra configuration. Known simplifications: the
-  three page-read variants all document the same response item schema (the overview/select
-  projections' own mapper types aren't separately resolved anywhere), and a versioned route
-  (`@RestlessResource(version = ...)`) documents its path with no version distinction — OpenAPI has
-  no native way to express Spring's header-based resolution strategy without a vendor extension.
+  `/v3/api-docs`/`/swagger-ui.html` just work, no extra configuration. The three page-read
+  variants each document their own projection's actual response schema, and a versioned route's
+  operations carry an `x-api-version` extension plus a summary suffix — see
+  `RestlessOpenApiCustomizer`'s own javadoc for the residual limit (still no native OpenAPI axis
+  for header-based versioning).
+- **Optimistic concurrency.** Add `@jakarta.persistence.Version` to an entity and nothing else —
+  `RestlessExceptionHandler` maps a stale concurrent write to 409 automatically. Opt further into
+  an `If-Match` precondition on single-item `PUT`/`PATCH`/`DELETE` (412 on a stale value, silently
+  skipped for an entity with no `@Version` field or a request with no header) — see
+  `RestlessResourceHandler#checkIfMatch`.
+- **Soft delete.** Implement `SoftDeletable` on an entity and point `deleteDataSource` at
+  `DefaultSoftDeleteDataSource` instead of the hard-deleting default — flags a `deleted` column
+  instead of removing the row, and `RestlessResourceHandler` automatically excludes flagged rows
+  from `findList`/`findPage*`/custom-read results (still fetchable by id, on purpose — see
+  `excludeSoftDeleted`'s own javadoc).
+- **Auditing.** Extend `AbstractAuditableEntity` (`app`) for automatic `createdDate`/`lastModifiedDate`
+  via Spring Data JPA's own auditing — add `@EnableJpaAuditing` on your own application, same as
+  any Spring Data JPA app. See `Project` in `example` for the worked example.
+- **Authorization-denial metrics.** Add `spring-boot-starter-actuator` and every `AuthorizationGuard`
+  denial increments `restless.authorization.denials` (tagged `resource`/`action`/`hook`) via
+  Micrometer — the one signal generic `http.server.requests` metrics can't provide. See
+  `RestlessAuthorizationMetrics`.
+- **Test support.** `spring-boot-restless-test` ships `RestlessErrorAssertions`/
+  `RestlessPageAssertions` — MockMvc `ResultMatcher`s for the standard error and page-envelope
+  shapes, for your own tests against your own Restless resources.
+- **A BOM.** `spring-boot-restless-dependencies` — see the dependency step of
+  [Tutorial: Cerbos-backed authorization](#tutorial-cerbos-backed-authorization) above.
 
 ## Project status
 

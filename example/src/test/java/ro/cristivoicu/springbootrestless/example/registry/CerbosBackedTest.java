@@ -6,7 +6,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.BindMode;
 
 /**
- * Shared base for every test that exercises {@code /employees-dynamic}: since {@code
+ * Shared base for every test that exercises {@code /employees}: since {@code
  * EmployeeRestlessResource} now delegates every action to a real {@link
  * ro.cristivoicu.springbootrestless.cerbos.CerbosAuthorizationGuard}, those routes need an actual
  * Cerbos PDP answering - not just an authenticated principal - to behave as before.

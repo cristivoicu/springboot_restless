@@ -20,12 +20,16 @@ import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
 import java.util.Map;
 
 /**
- * Stage 1/2 proof-of-concept: the same Employee create/read/update/delete data sources and
- * mapper the Stage-0 controllers use, collapsed onto one {@link RestlessResourceHandler}
- * so its HTTP routes can be registered dynamically instead of via four hand-written controllers.
+ * Employee's real, single REST surface: hand-written create/read/update/delete data sources and
+ * mapper (entity-specific logic, not the reflective defaults - see each {@code Employee*DataSource}
+ * class), a named custom read action, and a real Cerbos-backed guard, all collapsed onto one
+ * {@link RestlessResourceHandler} so its HTTP routes are registered dynamically rather than via
+ * hand-written {@code @RestController} classes - the "manual: hand-wire a RestlessResourceHandler
+ * subclass directly" tier the README's own tutorial describes, same branch {@code Department}
+ * lives on, just with hand-written {@code *DataSource}s instead of {@code Default*DataSource}s.
  */
 @Component
-@RestlessResource(basePath = "/employees-dynamic")
+@RestlessResource(basePath = "/employees")
 public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, Long> {
 
     private final EmployeeCreateDataSource createDataSource;

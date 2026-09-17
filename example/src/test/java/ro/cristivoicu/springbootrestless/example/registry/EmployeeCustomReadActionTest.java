@@ -41,17 +41,17 @@ class EmployeeCustomReadActionTest extends CerbosBackedTest {
         createEmployee("Ada", "Lovelace", "ada@example.com");
         createEmployee("Grace", "Hopper", "grace@other.org");
 
-        mockMvc.perform(get("/employees-dynamic/actions/byEmailDomain").param("domain", "example.com"))
+        mockMvc.perform(get("/employees/actions/byEmailDomain").param("domain", "example.com"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].firstName").value("Ada"));
 
-        mockMvc.perform(get("/employees-dynamic/actions/byEmailDomain").param("domain", "other.org"))
+        mockMvc.perform(get("/employees/actions/byEmailDomain").param("domain", "other.org"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].firstName").value("Grace"));
 
-        mockMvc.perform(get("/employees-dynamic/actions/byEmailDomain").param("domain", "nowhere.com"))
+        mockMvc.perform(get("/employees/actions/byEmailDomain").param("domain", "nowhere.com"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(0));
     }
@@ -68,7 +68,7 @@ class EmployeeCustomReadActionTest extends CerbosBackedTest {
         create.setLastName(lastName);
         create.setEmail(email);
 
-        mockMvc.perform(post("/employees-dynamic")
+        mockMvc.perform(post("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isOk());

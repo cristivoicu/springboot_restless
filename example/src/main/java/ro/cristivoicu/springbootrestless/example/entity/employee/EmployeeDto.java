@@ -50,7 +50,7 @@ public class EmployeeDto implements EntityDto {
     private String departmentCode;
 
     /**
-     * {@code GET /employees-dynamic/{id}?expand=department} - joined on {@link
+     * {@code GET /employees/{id}?expand=department} - joined on {@link
      * Employee#getDepartmentCode()} {@code ==} {@link Department#getCode()}, run through {@code
      * DepartmentRestlessResource}'s own {@code AuthorizationGuard} ({@code policies/department.yaml}:
      * role-only, every authenticated employee/manager/admin already passes it).

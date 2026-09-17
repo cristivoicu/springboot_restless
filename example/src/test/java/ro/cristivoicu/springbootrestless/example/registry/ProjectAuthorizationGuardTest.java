@@ -1,5 +1,6 @@
 package ro.cristivoicu.springbootrestless.example.registry;
 
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -10,8 +11,12 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.transaction.annotation.Transactional;
 import ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeCreateModel;
 import ro.cristivoicu.springbootrestless.example.entity.project.ProjectCreateModel;
+import ro.cristivoicu.springbootrestless.example.entity.project.ProjectUpdateModel;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -35,6 +40,9 @@ class ProjectAuthorizationGuardTest extends CerbosBackedTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private EntityManager entityManager;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -151,6 +159,46 @@ class ProjectAuthorizationGuardTest extends CerbosBackedTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test
+    void createdDateAndLastModifiedDatePopulateAutomatically() throws Exception {
+        // Project is this codebase's one AbstractAuditableEntity demo (see its own javadoc) -
+        // ExampleApplication's @EnableJpaAuditing is what actually makes these populate.
+        long id = createProject(admin(), "Apollo", "ENG");
+
+        String afterCreate = mockMvc.perform(get("/projects/{id}", id).with(admin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Instant createdDate = Instant.parse(objectMapper.readTree(afterCreate).get("createdDate").asString());
+        Instant firstModified = Instant.parse(objectMapper.readTree(afterCreate).get("lastModifiedDate").asString());
+        assertThat(createdDate).isNotNull();
+        assertThat(firstModified).isNotNull();
+
+        Thread.sleep(10); // guards against two timestamps landing in the same clock tick
+        ProjectUpdateModel update = new ProjectUpdateModel();
+        update.setName("Apollo 2");
+        update.setDepartmentCode("ENG");
+        mockMvc.perform(put("/projects/{id}", id)
+                        .with(admin())
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(update)))
+                .andExpect(status().isOk());
+        // The whole test method runs in one shared transaction/persistence context (@Transactional
+        // test rollback) - @LastModifiedDate is applied by AuditingHandler at pre-update/flush
+        // time, which a plain save() doesn't force, so an explicit flush is needed here for the
+        // bumped timestamp to be observable within a single test method at all. A real, separate
+        // HTTP request in production needs no such thing - each gets its own transaction.
+        entityManager.flush();
+
+        String afterUpdate = mockMvc.perform(get("/projects/{id}", id).with(admin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Instant unchangedCreatedDate = Instant.parse(objectMapper.readTree(afterUpdate).get("createdDate").asString());
+        Instant secondModified = Instant.parse(objectMapper.readTree(afterUpdate).get("lastModifiedDate").asString());
+
+        assertThat(unchangedCreatedDate).isEqualTo(createdDate);
+        assertThat(secondModified).isAfter(firstModified);
+    }
+
     private long createProject(RequestPostProcessor authentication, String name, String departmentCode) throws Exception {
         ProjectCreateModel create = new ProjectCreateModel();
         create.setName(name);
@@ -174,7 +222,7 @@ class ProjectAuthorizationGuardTest extends CerbosBackedTest {
         create.setEmail(email);
         create.setDepartmentCode(departmentCode);
 
-        mockMvc.perform(post("/employees-dynamic")
+        mockMvc.perform(post("/employees")
                         .with(authentication)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))

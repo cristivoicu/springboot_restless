@@ -22,13 +22,11 @@ import java.util.Optional;
  * specifically to call {@link CerbosFieldMasker#maskAll} - one batched Cerbos RPC for the whole
  * list/page, instead of one {@code check()} per row.
  * <p>
- * This mapper is shared by both {@code EmployeeRestlessResource} (behind a Cerbos-backed guard,
- * on an authenticated-only route) <em>and</em> the older, deliberately-open Stage-0 {@code
- * EmployeeCreateController}/etc. at {@code /employees}. {@link CerbosPrincipalResolver#tryResolve()}
- * - not {@link CerbosPrincipalResolver#resolve()} - is used for exactly that reason: no
- * authenticated principal means no security is being enforced on this particular route at all, so
- * there's nothing to check against Cerbos either - the DTO passes through unmasked rather than
- * every response through the open route turning into a 401.
+ * {@link CerbosPrincipalResolver#tryResolve()} - not {@link CerbosPrincipalResolver#resolve()} -
+ * is used defensively: {@code /employees} itself is authenticated-only (see {@code SecurityConfig}),
+ * so a missing principal shouldn't happen in practice, but a mapper has no business throwing on it
+ * either - an absent principal means the DTO passes through unmasked rather than every call site
+ * that maps an {@link Employee} needing to handle a resolution failure.
  */
 @Component
 public class EmployeeMapper implements Mapper<Employee, EmployeeDto> {

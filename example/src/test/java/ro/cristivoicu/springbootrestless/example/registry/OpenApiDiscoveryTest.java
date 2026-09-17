@@ -16,7 +16,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @RestController} scanning does <em>not</em> see routes {@code RestlessRegistrar} registers
  * dynamically, only routes backed by a real annotated controller bean. {@code
  * RestlessOpenApiCustomizer} ({@code app} module, a springdoc {@code GlobalOpenApiCustomizer})
- * fixes that - this is the real assertion-based test proving it, not just a printed finding.
+ * fixes that - this is the real assertion-based test proving it, not just a printed finding. The
+ * "springdoc's native scan alone misses a dynamically-registered route" half of that finding is
+ * proved directly against a genuinely hand-written controller in {@code app}'s own test suite
+ * (the {@code Gadget} fixture, {@code /gadgets} vs {@code /gadgets-dynamic}) - every entity here
+ * in {@code example} is dynamically registered, so this class only proves the other half: that
+ * the customizer's generated document is actually correct and complete.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -27,21 +32,12 @@ class OpenApiDiscoveryTest {
     private MockMvc mockMvc;
 
     @Test
-    void handWrittenParityRouteIsDocumented() throws Exception {
-        // Unaffected baseline: springdoc's own scan already found this one before
-        // RestlessOpenApiCustomizer ever existed - proves it isn't clobbered by the customizer.
-        mockMvc.perform(get("/v3/api-docs"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.paths['/employees']").exists());
-    }
-
-    @Test
     void dynamicallyRegisteredRouteIsDocumented() throws Exception {
         mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.paths['/employees-dynamic']").exists())
-                .andExpect(jsonPath("$.paths['/employees-dynamic/{id}'].get.parameters[0].name").value("id"))
-                .andExpect(jsonPath("$.paths['/employees-dynamic'].post.requestBody.content['application/json'].schema['$ref']")
+                .andExpect(jsonPath("$.paths['/employees']").exists())
+                .andExpect(jsonPath("$.paths['/employees/{id}'].get.parameters[0].name").value("id"))
+                .andExpect(jsonPath("$.paths['/employees'].post.requestBody.content['application/json'].schema['$ref']")
                         .value("#/components/schemas/EmployeeCreateModel"))
                 .andExpect(jsonPath("$.components.schemas.EmployeeCreateModel").exists());
     }
@@ -61,7 +57,7 @@ class OpenApiDiscoveryTest {
     void namedCustomReadActionIsDocumented() throws Exception {
         mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.paths['/employees-dynamic/actions/byEmailDomain'].get").exists());
+                .andExpect(jsonPath("$.paths['/employees/actions/byEmailDomain'].get").exists());
     }
 
     @Test

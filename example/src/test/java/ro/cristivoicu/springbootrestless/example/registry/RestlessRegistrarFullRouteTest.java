@@ -17,7 +17,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Stage 2 proof: every one of the nine routes {@code RestlessRegistrar} registers dynamically
- * for {@code EmployeeRestlessResource} at "/employees-dynamic" behaves the same as the
+ * for {@code EmployeeRestlessResource} at "/employees" behaves the same as the
  * hand-written Stage-0 controllers at "/employees" (see {@code EmployeeCrudTest}) - full route
  * parity, not just the one route Stage 1 proved.
  * <p>
@@ -43,7 +43,7 @@ class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
         create.setLastName("Perlman");
         create.setEmail("radia@example.com");
 
-        String createResponse = mockMvc.perform(post("/employees-dynamic")
+        String createResponse = mockMvc.perform(post("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isOk())
@@ -51,28 +51,28 @@ class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
                 .andReturn().getResponse().getContentAsString();
         long id = objectMapper.readTree(createResponse).get("id").asLong();
 
-        mockMvc.perform(get("/employees-dynamic/{id}", id))
+        mockMvc.perform(get("/employees/{id}", id))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lastName").value("Perlman"));
 
-        mockMvc.perform(get("/employees-dynamic/list"))
+        mockMvc.perform(get("/employees/list"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].firstName").value("Radia"));
 
-        mockMvc.perform(get("/employees-dynamic"))
+        mockMvc.perform(get("/employees"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].firstName").value("Radia"));
 
-        mockMvc.perform(get("/employees-dynamic/overview"))
+        mockMvc.perform(get("/employees/overview"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.body[0].email").value("radia@example.com"));
 
-        mockMvc.perform(get("/employees-dynamic/select/async"))
+        mockMvc.perform(get("/employees/select/async"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1));
 
-        mockMvc.perform(get("/employees-dynamic").param("lastName", "Nobody"))
+        mockMvc.perform(get("/employees").param("lastName", "Nobody"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(0));
 
@@ -81,16 +81,16 @@ class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
         update.setLastName("Updated");
         update.setEmail("radia.updated@example.com");
 
-        mockMvc.perform(put("/employees-dynamic/{id}", id)
+        mockMvc.perform(put("/employees/{id}", id)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(update)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lastName").value("Updated"));
 
-        mockMvc.perform(delete("/employees-dynamic/{id}", id))
+        mockMvc.perform(delete("/employees/{id}", id))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/employees-dynamic/{id}", id))
+        mockMvc.perform(get("/employees/{id}", id))
                 .andExpect(status().isNotFound());
     }
 
@@ -102,13 +102,13 @@ class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
         EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
-        mockMvc.perform(delete("/employees-dynamic")
+        mockMvc.perform(delete("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/employees-dynamic/{id}", first)).andExpect(status().isNotFound());
-        mockMvc.perform(get("/employees-dynamic/{id}", second)).andExpect(status().isNotFound());
+        mockMvc.perform(get("/employees/{id}", first)).andExpect(status().isNotFound());
+        mockMvc.perform(get("/employees/{id}", second)).andExpect(status().isNotFound());
     }
 
     private long createEmployee(String firstName, String lastName, String email) throws Exception {
@@ -117,7 +117,7 @@ class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
         create.setLastName(lastName);
         create.setEmail(email);
 
-        String response = mockMvc.perform(post("/employees-dynamic")
+        String response = mockMvc.perform(post("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isOk())

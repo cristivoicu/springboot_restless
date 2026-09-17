@@ -114,6 +114,12 @@ class RestlessRegistrarDuplicateBasePathTest {
         RequestMappingHandlerMapping requestMappingHandlerMapping = mock(RequestMappingHandlerMapping.class);
         when(requestMappingHandlerMapping.getBuilderConfiguration()).thenReturn(new RequestMappingInfo.BuilderConfiguration());
 
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics> metricsProvider =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(metricsProvider.getIfAvailable(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics.NONE);
+
         RestlessRegistrar registrar = new RestlessRegistrar(
                 applicationContext, requestMappingHandlerMapping,
                 new tools.jackson.databind.ObjectMapper(),
@@ -130,7 +136,8 @@ class RestlessRegistrarDuplicateBasePathTest {
                     }
                 },
                 ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver.NONE,
-                null);
+                null,
+                metricsProvider);
 
         assertThatThrownBy(registrar::afterSingletonsInstantiated)
                 .isInstanceOf(IllegalStateException.class)

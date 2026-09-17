@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>ro.cristivoicu</groupId>
+    <artifactId>spring-boot-restless-dependencies</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>spring-boot-restless-dependencies</name>
+    <description>Bill of materials for spring-boot-restless: import this into a consuming
+        application's own &lt;dependencyManagement&gt; to pull in matching, tested-together
+        versions of "spring-boot-restless" (the core library), "spring-boot-restless-cerbos"
+        (optional Cerbos-backed authorization), and "spring-boot-restless-test" (MockMvc/AssertJ
+        test helpers) without hand-pinning each one's version separately. Deliberately no
+        &lt;parent&gt; (a BOM's whole point is being importable by a consumer whose own parent is
+        something else entirely, e.g. their own company parent POM) and no &lt;dependencies&gt; -
+        only &lt;dependencyManagement&gt;, so importing it never forces any of these three
+        artifacts onto the classpath by itself; a consumer still declares whichever ones they
+        actually want, just without a version.
+    </description>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>ro.cristivoicu</groupId>
+                <artifactId>spring-boot-restless</artifactId>
+                <version>0.0.1-SNAPSHOT</version>
+            </dependency>
+            <dependency>
+                <groupId>ro.cristivoicu</groupId>
+                <artifactId>spring-boot-restless-cerbos</artifactId>
+                <version>0.0.1-SNAPSHOT</version>
+            </dependency>
+            <dependency>
+                <groupId>ro.cristivoicu</groupId>
+                <artifactId>spring-boot-restless-test</artifactId>
+                <version>0.0.1-SNAPSHOT</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>

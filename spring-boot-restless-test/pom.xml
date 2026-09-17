@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>ro.cristivoicu</groupId>
+    <artifactId>spring-boot-restless-test</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>spring-boot-restless-test</name>
+    <description>MockMvc-based assertion helpers for a consumer's own tests against their
+        Restless resources: the standard ErrorResponse shape (RestlessErrorAssertions) and the
+        standard PageableResponse envelope (RestlessPageAssertions). A main-scope library, not a
+        test-scoped module - other projects' *tests* depend on this at test scope, so its own
+        MockMvc/webmvc-test dependency below is compile scope on purpose.
+    </description>
+
+    <properties>
+        <java.version>25</java.version>
+    </properties>
+
+    <dependencies>
+        <!-- The framework itself - ErrorResponse/PageableResponse are the two shapes these
+             assertions describe. -->
+        <dependency>
+            <groupId>ro.cristivoicu</groupId>
+            <artifactId>spring-boot-restless</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+
+        <!-- Compile scope, not test scope: ResultMatcher/MockMvcResultMatchers/jsonPath are this
+             module's own public API surface (RestlessErrorAssertions/RestlessPageAssertions
+             return/use them directly), so a consumer depending on this module needs them on its
+             own compile classpath too, not just transitively at test time. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+        </dependency>
+
+        <!-- RestlessPageAssertions' explicit-target-type jsonPath(...).value(Matcher, Class)
+             overload needs a Hamcrest Matcher - compile scope for the same reason
+             webmvc-test above is: this module's own code uses it directly, not just its
+             transitive test-scoped presence in a consumer's build. Version managed by
+             spring-boot-starter-parent's own BOM. -->
+        <dependency>
+            <groupId>org.hamcrest</groupId>
+            <artifactId>hamcrest</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- No spring-boot-maven-plugin, same reasoning as "app"/"cerbos": this is a library
+                 module with no @SpringBootApplication in src/main. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

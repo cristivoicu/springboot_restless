@@ -44,7 +44,7 @@ resourcePolicy:
 
     # employee: read-only "company directory" access - unlike manager (scoped to their own
     # reports via scopedLastName above), a plain employee can look up any colleague's record but
-    # never write one. This is what makes GET /employees-dynamic/{id}?expand=projects,department
+    # never write one. This is what makes GET /employees/{id}?expand=projects,department
     # reachable for an "employee" principal at all (see EmployeeEmbedTest) - the row-scoping that
     # differs by relation happens one level down, inside the embedded project/department reads
     # themselves (policies/project.yaml/department.yaml), not here.

@@ -17,6 +17,8 @@
         <module>processor</module>
         <module>app</module>
         <module>cerbos</module>
+        <module>spring-boot-restless-test</module>
+        <module>spring-boot-restless-dependencies</module>
         <module>example</module>
     </modules>
 </project>

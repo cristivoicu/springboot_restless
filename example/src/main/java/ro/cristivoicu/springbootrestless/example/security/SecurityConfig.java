@@ -16,11 +16,10 @@ import java.util.Map;
 
 /**
  * JWT Bearer auth (OAuth2 Resource Server) against a real Keycloak realm, scoped to the three
- * Cerbos-guarded resources - {@code /employees-dynamic/**}, {@code /departments/**}, {@code
- * /projects/**} - only; everything else (the Stage-0 parity-testing {@code /employees/**}
- * controllers) stays {@code permitAll()}, same "opt-in per resource" spirit as {@code
- * AuthorizationGuard} itself: this locks down exactly the resources wired to a real Cerbos-backed
- * guard ({@link ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeRestlessResource},
+ * Cerbos-guarded resources - {@code /employees/**}, {@code /departments/**}, {@code
+ * /projects/**} - only; everything else stays {@code permitAll()}, same "opt-in per resource"
+ * spirit as {@code AuthorizationGuard} itself: this locks down exactly the resources wired to a
+ * real Cerbos-backed guard ({@link ro.cristivoicu.springbootrestless.example.entity.employee.EmployeeRestlessResource},
  * {@link ro.cristivoicu.springbootrestless.example.entity.department.DepartmentRestlessResource},
  * {@link ro.cristivoicu.springbootrestless.example.entity.project.ProjectRestlessResource}), not a
  * blanket lockdown of every entity this module happens to also expose.
@@ -46,7 +45,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/employees-dynamic/**", "/departments/**", "/projects/**").authenticated()
+                        .requestMatchers("/employees/**", "/departments/**", "/projects/**").authenticated()
                         .anyRequest().permitAll())
                 // Stateless JSON API with no cookie-based session and no browser form post - the
                 // CSRF token flow CSRF protection assumes doesn't apply here, same reasoning

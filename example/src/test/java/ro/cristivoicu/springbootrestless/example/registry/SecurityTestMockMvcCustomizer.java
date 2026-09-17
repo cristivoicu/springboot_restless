@@ -11,7 +11,7 @@ import org.springframework.test.web.servlet.setup.ConfigurableMockMvcBuilder;
  * .apply(springSecurity())}, those annotations/post-processors populate {@code
  * TestSecurityContextHolder} but nothing ever copies that into the actual request the security
  * filter chain sees - every request still lands as anonymous, which is exactly why every
- * {@code /employees-dynamic} test kept getting 401 despite {@code @WithMockUser} until this was
+ * {@code /employees} test kept getting 401 despite {@code @WithMockUser} until this was
  * added. Auto-detected via {@link MockMvcBuilderCustomizer} (no explicit wiring needed per test
  * class) since it's a plain {@code @Component} in this already-component-scanned package.
  */

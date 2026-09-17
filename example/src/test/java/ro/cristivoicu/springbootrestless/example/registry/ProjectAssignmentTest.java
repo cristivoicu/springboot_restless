@@ -223,7 +223,7 @@ class ProjectAssignmentTest extends CerbosBackedTest {
         create.setEmail(email);
         create.setDepartmentCode(departmentCode);
 
-        String response = mockMvc.perform(post("/employees-dynamic").with(authentication)
+        String response = mockMvc.perform(post("/employees").with(authentication)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
                 .andExpect(status().isOk())

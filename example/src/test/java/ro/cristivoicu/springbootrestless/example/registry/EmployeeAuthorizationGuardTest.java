@@ -45,7 +45,7 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
 
     @Test
     void unauthenticatedRequestIsRejected() throws Exception {
-        mockMvc.perform(get("/employees-dynamic"))
+        mockMvc.perform(get("/employees"))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -54,7 +54,7 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
         createEmployee(admin(), "Ada", "Lovelace", "ada@example.com");
         createEmployee(admin(), "Grace", "Hopper", "grace@example.com");
 
-        mockMvc.perform(get("/employees-dynamic").with(admin()))
+        mockMvc.perform(get("/employees").with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(2));
     }
@@ -64,12 +64,12 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
         createEmployee(admin(), "Ada", "Lovelace", "ada@example.com");
         createEmployee(admin(), "Grace", "Hopper", "grace@example.com");
 
-        mockMvc.perform(get("/employees-dynamic").with(manager("Lovelace")))
+        mockMvc.perform(get("/employees").with(manager("Lovelace")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.body[0].lastName").value("Lovelace"));
 
-        mockMvc.perform(get("/employees-dynamic/list").with(manager("Lovelace")))
+        mockMvc.perform(get("/employees/list").with(manager("Lovelace")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1));
     }
@@ -78,7 +78,7 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
     void managerOutOfScopeDirectFetchIsForbidden() throws Exception {
         long grace = createEmployee(admin(), "Grace", "Hopper", "grace@example.com");
 
-        mockMvc.perform(get("/employees-dynamic/{id}", grace).with(manager("Lovelace")))
+        mockMvc.perform(get("/employees/{id}", grace).with(manager("Lovelace")))
                 .andExpect(status().isForbidden());
     }
 
@@ -90,16 +90,16 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
         EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(ada), String.valueOf(grace)));
 
-        mockMvc.perform(delete("/employees-dynamic")
+        mockMvc.perform(delete("/employees")
                         .with(manager("Lovelace"))
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isForbidden());
 
         // nothing was deleted - not even Ada, whose lastName matches the scope
-        mockMvc.perform(get("/employees-dynamic/{id}", ada).with(admin()))
+        mockMvc.perform(get("/employees/{id}", ada).with(admin()))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/employees-dynamic/{id}", grace).with(admin()))
+        mockMvc.perform(get("/employees/{id}", grace).with(admin()))
                 .andExpect(status().isOk());
     }
 
@@ -107,7 +107,7 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
     void adminSeesSalaryOnASingleFetch() throws Exception {
         long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com", new BigDecimal("95000"));
 
-        String response = mockMvc.perform(get("/employees-dynamic/{id}", id).with(admin()))
+        String response = mockMvc.perform(get("/employees/{id}", id).with(admin()))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
@@ -118,7 +118,7 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
     void managerWithoutCanViewSalaryGetsItMaskedOnASingleFetch() throws Exception {
         long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com", new BigDecimal("95000"));
 
-        String response = mockMvc.perform(get("/employees-dynamic/{id}", id).with(manager("Lovelace", false)))
+        String response = mockMvc.perform(get("/employees/{id}", id).with(manager("Lovelace", false)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
@@ -129,7 +129,7 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
     void managerWithCanViewSalarySeesTheRealValueOnASingleFetch() throws Exception {
         long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com", new BigDecimal("95000"));
 
-        String response = mockMvc.perform(get("/employees-dynamic/{id}", id).with(manager("Lovelace", true)))
+        String response = mockMvc.perform(get("/employees/{id}", id).with(manager("Lovelace", true)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
@@ -142,7 +142,7 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
 
         // /list uses EmployeeMapper.map(List<Employee>) - CerbosFieldMasker.maskAll's one
         // batched RPC path, not the single-entity one the tests above exercise.
-        String response = mockMvc.perform(get("/employees-dynamic/list").with(manager("Lovelace", false)))
+        String response = mockMvc.perform(get("/employees/list").with(manager("Lovelace", false)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
@@ -161,7 +161,7 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
         create.setEmail(email);
         create.setSalary(salary);
 
-        String response = mockMvc.perform(post("/employees-dynamic")
+        String response = mockMvc.perform(post("/employees")
                         .with(authentication)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))

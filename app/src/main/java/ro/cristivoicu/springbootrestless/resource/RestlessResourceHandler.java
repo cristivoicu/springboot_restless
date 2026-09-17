@@ -1,5 +1,6 @@
 package ro.cristivoicu.springbootrestless.resource;
 
+import jakarta.persistence.Version;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.GenericTypeResolver;
@@ -10,6 +11,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -28,10 +30,12 @@ import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
 import ro.cristivoicu.springbootrestless.controller.patch.PatchDataSource;
 import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
 import ro.cristivoicu.springbootrestless.controller.update.UpdateDataSource;
+import ro.cristivoicu.springbootrestless.datasource.SoftDeletable;
 import ro.cristivoicu.springbootrestless.datasource.TypedDataSource;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbed;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
+import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
 import ro.cristivoicu.springbootrestless.models.CreateModel;
 import ro.cristivoicu.springbootrestless.models.DeleteModel;
 import ro.cristivoicu.springbootrestless.models.PageableResponse;
@@ -128,6 +132,7 @@ public abstract class RestlessResourceHandler<E, K> {
     private Class<?> patchModelType;
     private RestlessEmbedResolver embedResolver = RestlessEmbedResolver.NONE;
     private PlatformTransactionManager transactionManager;
+    private RestlessAuthorizationMetrics metrics = RestlessAuthorizationMetrics.NONE;
 
     /**
      * Wires this resource's infra collaborators. Called once by whichever registrar discovered
@@ -171,12 +176,28 @@ public abstract class RestlessResourceHandler<E, K> {
     public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
                             ConversionService conversionService, Validator validator,
                             RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager) {
+        init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, RestlessAuthorizationMetrics.NONE);
+    }
+
+    /**
+     * Same as the six-arg {@link #init}, plus the {@link RestlessAuthorizationMetrics} {@link
+     * #checkPreCheck}/{@link #checkCanAccess} record an authorization-denial count to - a separate
+     * overload for the same reason the five/six-arg ones are, defaulted to {@link
+     * RestlessAuthorizationMetrics#NONE} (a no-op) for every pre-existing caller. Only {@code
+     * RestlessRegistrar} calls this overload, with the real conditionally-registered bean (or its
+     * own {@code NONE} fallback when Micrometer/Actuator aren't on the consumer's classpath).
+     */
+    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
+                            ConversionService conversionService, Validator validator,
+                            RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager,
+                            RestlessAuthorizationMetrics metrics) {
         this.metadata = metadata;
         this.objectMapper = objectMapper;
         this.conversionService = conversionService;
         this.validator = validator;
         this.embedResolver = embedResolver;
         this.transactionManager = transactionManager;
+        this.metrics = metrics == null ? RestlessAuthorizationMetrics.NONE : metrics;
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
 
         this.customActionSearchDtoConstructors = new HashMap<>();
@@ -223,6 +244,18 @@ public abstract class RestlessResourceHandler<E, K> {
      * {@code getXDataSource()} accessors.
      */
     public final ResourceMetadata resolveMetadata(String basePath) {
+        return resolveMetadata(basePath, "");
+    }
+
+    /**
+     * Same as the one-arg {@link #resolveMetadata}, plus the resource's own {@code
+     * @RestlessResource(version = ...)} value (empty string when unset) - carried into {@link
+     * ResourceMetadata} purely for {@code RestlessOpenApiCustomizer} to surface in generated
+     * documentation; every pre-existing caller of the one-arg overload keeps compiling unchanged,
+     * defaulted to no version. Only {@code RestlessRegistrar} calls this overload, since it's the
+     * only place that already has the annotation's {@code version()} in hand.
+     */
+    public final ResourceMetadata resolveMetadata(String basePath, String version) {
         Class<?>[] entityAndId = GenericTypeResolver.resolveTypeArguments(getClass(), RestlessResourceHandler.class);
         if (entityAndId == null) {
             throw new IllegalStateException(getClass() + " must extend RestlessResourceHandler<E, K> with concrete type arguments");
@@ -247,7 +280,11 @@ public abstract class RestlessResourceHandler<E, K> {
         Class<?> searchDtoType = resolveDtoType(getReadDataSource(), ReadDataSource.class);
 
         return new ResourceMetadata(basePath, entityAndId[0], entityAndId[1],
-                createModelType, updateModelType, deleteModelType, searchDtoType, resolveResponseDtoType());
+                createModelType, updateModelType, deleteModelType, searchDtoType,
+                resolveDtoTypeFromMapper(getEntityMapper()),
+                resolveDtoTypeFromMapper(getOverviewMapper()),
+                resolveDtoTypeFromMapper(getSelectMapper()),
+                version == null ? "" : version);
     }
 
     /**
@@ -264,16 +301,19 @@ public abstract class RestlessResourceHandler<E, K> {
     }
 
     /**
-     * Same idiom as {@link #resolveDtoType}, off {@link #getEntityMapper}'s concrete class
-     * instead of a {@code *DataSource} - {@code Mapper} has no {@link TypedDataSource} equivalent
-     * (nothing generates a directly-instantiated default {@code Mapper} the way {@code
-     * Default*DataSource} does), so this is always the {@link GenericTypeResolver} path. Best-
-     * effort: {@code null}, not a thrown exception, for a {@code Mapper} whose generic signature
-     * isn't reifiable (an anonymous class, a lambda) - see {@link ResourceMetadata#responseDtoType}'s
-     * own javadoc for who actually reads this and how they're expected to handle {@code null}.
+     * Same idiom as {@link #resolveDtoType}, off a {@code Mapper}'s own concrete class instead of
+     * a {@code *DataSource} - {@code Mapper} has no {@link TypedDataSource} equivalent (nothing
+     * generates a directly-instantiated default {@code Mapper} the way {@code Default*DataSource}
+     * does), so this is always the {@link GenericTypeResolver} path. Best-effort: {@code null}, not
+     * a thrown exception, for a {@code Mapper} whose generic signature isn't reifiable (an
+     * anonymous class, a lambda) - see {@link ResourceMetadata#responseDtoType}'s own javadoc for
+     * who actually reads this and how they're expected to handle {@code null}. Shared by {@link
+     * #resolveMetadata} for all three of {@link #getEntityMapper}/{@link #getOverviewMapper}/
+     * {@link #getSelectMapper} - each page-read variant's own response schema, rather than every
+     * variant sharing {@code getEntityMapper()}'s.
      */
-    private Class<?> resolveResponseDtoType() {
-        Class<?>[] mapperArgs = GenericTypeResolver.resolveTypeArguments(getEntityMapper().getClass(), Mapper.class);
+    private static Class<?> resolveDtoTypeFromMapper(Mapper<?, ?> mapper) {
+        Class<?>[] mapperArgs = GenericTypeResolver.resolveTypeArguments(mapper.getClass(), Mapper.class);
         return mapperArgs == null ? null : mapperArgs[1];
     }
 
@@ -476,7 +516,7 @@ public abstract class RestlessResourceHandler<E, K> {
     public final ResponseEntity<List<?>> findList(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.READ_LIST, null, request);
         SearchDto searchDto = bindSearchDto(searchDtoConstructor, request);
-        Specification<E> spec = withScope(getSpecification(searchDto), AuthorizationGuard.Action.READ_LIST, null, request);
+        Specification<E> spec = withScope(excludeSoftDeleted(getSpecification(searchDto)), AuthorizationGuard.Action.READ_LIST, null, request);
         List<E> data = getReadDataSource().findAll(spec);
         return ResponseEntity.ok(getOverviewMapper().map(data));
     }
@@ -518,7 +558,7 @@ public abstract class RestlessResourceHandler<E, K> {
         ReadAction rawAction = action;
         @SuppressWarnings("unchecked")
         Specification<E> spec = (Specification<E>) rawAction.buildSpecification(searchDto);
-        spec = withScope(spec, AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
+        spec = withScope(excludeSoftDeleted(spec), AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
 
         return ResponseEntity.ok(paginate(getOverviewMapper(), spec, pageableOf(searchDto)));
     }
@@ -526,14 +566,19 @@ public abstract class RestlessResourceHandler<E, K> {
     public final ResponseEntity<?> update(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
         K id = extractId(request);
-        // Loaded purely for the guard check - UpdateDataSource.update() loads/mutates/saves as
-        // one atomic unit and never hands the entity back to us beforehand. Skipped entirely
-        // (not just short-circuited on a denial) when no guard is configured, so resources that
-        // never opted into authorization don't pay for an extra SELECT on every write.
-        if (hasGuard()) {
+        String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
+        // Loaded purely for the guard check and/or the If-Match precondition (see checkIfMatch) -
+        // UpdateDataSource.update() loads/mutates/saves as one atomic unit and never hands the
+        // entity back to us beforehand. Skipped entirely (not just short-circuited on a denial)
+        // when neither applies, so a resource with no guard and no @Version field doesn't pay
+        // for an extra SELECT on every write.
+        if (hasGuard() || ifMatch != null) {
             E existing = getReadDataSource().findOne(id);
             if (existing != null) {
-                checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
+                if (hasGuard()) {
+                    checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
+                }
+                checkIfMatch(ifMatch, existing);
             }
         }
         Object body = readBody(request, metadata.updateModelType());
@@ -557,10 +602,14 @@ public abstract class RestlessResourceHandler<E, K> {
     public final ResponseEntity<?> patch(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.PATCH, null, request);
         K id = extractId(request);
-        if (hasGuard()) {
+        String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
+        if (hasGuard() || ifMatch != null) {
             E existing = getReadDataSource().findOne(id);
             if (existing != null) {
-                checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
+                if (hasGuard()) {
+                    checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
+                }
+                checkIfMatch(ifMatch, existing);
             }
         }
         Object body = readBody(request, patchModelType);
@@ -616,13 +665,17 @@ public abstract class RestlessResourceHandler<E, K> {
     public final ResponseEntity<?> deleteById(HttpServletRequest request) {
         checkPreCheck(AuthorizationGuard.Action.DELETE_ONE, null, request);
         K id = extractId(request);
-        // Same reasoning as update(): loaded purely for the guard check, skipped entirely when
-        // no guard is configured; not found falls through unchanged to DeleteDataSource's own
-        // (today: silent) not-found behavior.
-        if (hasGuard()) {
+        String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
+        // Same reasoning as update(): loaded purely for the guard check and/or If-Match, skipped
+        // entirely when neither applies; not found falls through unchanged to DeleteDataSource's
+        // own (today: silent) not-found behavior.
+        if (hasGuard() || ifMatch != null) {
             E existing = getReadDataSource().findOne(id);
             if (existing != null) {
-                checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
+                if (hasGuard()) {
+                    checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
+                }
+                checkIfMatch(ifMatch, existing);
             }
         }
         getDeleteDataSource().deleteById(id);
@@ -659,7 +712,7 @@ public abstract class RestlessResourceHandler<E, K> {
 
     private PageableResponse<List<?>> paginate(HttpServletRequest request, Mapper<E, ?> mapper, AuthorizationGuard.Action action) throws Exception {
         SearchDto searchDto = bindSearchDto(searchDtoConstructor, request);
-        Specification<E> spec = withScope(getSpecification(searchDto), action, null, request);
+        Specification<E> spec = withScope(excludeSoftDeleted(getSpecification(searchDto)), action, null, request);
         return paginate(mapper, spec, pageableOf(searchDto));
     }
 
@@ -811,14 +864,75 @@ public abstract class RestlessResourceHandler<E, K> {
         return getAuthorizationGuard() != AuthorizationGuard.allowAll();
     }
 
+    /**
+     * Opt-in optimistic-concurrency precondition for single-item {@link #update}/{@link
+     * #patch}/{@link #deleteById}: a no-op whenever {@code ifMatch} is {@code null} (no header
+     * sent) or {@code entity}'s type has no {@code @jakarta.persistence.Version} field at all (see
+     * {@link #readVersion}) - fully backward compatible with every entity that predates this
+     * feature. When both are present and disagree, this is the client racing a stale read against
+     * a write that already landed - reported as 412, not the 409 a raw {@code
+     * ObjectOptimisticLockingFailureException} from an actual concurrent {@code save()} maps to
+     * (see {@code RestlessExceptionHandler}), since this check runs before any write is even
+     * attempted.
+     */
+    private void checkIfMatch(String ifMatch, E entity) {
+        if (ifMatch == null) {
+            return;
+        }
+        String expected = stripEtagWrapper(ifMatch);
+        readVersion(entity).ifPresent(actual -> {
+            if (!expected.equals(actual)) {
+                throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,
+                        "If-Match '" + ifMatch + "' does not match current version '" + actual + "'");
+            }
+        });
+    }
+
+    /**
+     * Reflectively finds {@code entity}'s {@code @jakarta.persistence.Version} field (if any) and
+     * returns its current value as a string - the same "scan declared fields for an annotation"
+     * idiom {@link #getSpecification}'s default equality filter already uses. {@link
+     * Optional#empty()} for an entity type with no such field, which {@link #checkIfMatch} treats
+     * as "this entity doesn't support optimistic locking, so an If-Match header on it can't be
+     * honored" rather than an error.
+     */
+    private Optional<String> readVersion(E entity) {
+        for (Field field : entity.getClass().getDeclaredFields()) {
+            if (field.isAnnotationPresent(Version.class)) {
+                field.setAccessible(true);
+                try {
+                    Object value = field.get(entity);
+                    return value == null ? Optional.empty() : Optional.of(String.valueOf(value));
+                } catch (IllegalAccessException e) {
+                    throw new IllegalStateException("Could not read @Version field " + field + " for If-Match support", e);
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** Strips a leading weak-validator marker ({@code W/}) and surrounding quotes, so both a raw version number and a properly-quoted HTTP ETag are accepted as {@code If-Match}. */
+    private static String stripEtagWrapper(String etag) {
+        String value = etag.trim();
+        if (value.startsWith("W/")) {
+            value = value.substring(2);
+        }
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+
     private void checkPreCheck(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {
         if (!getAuthorizationGuard().preCheck(action, customActionName, request)) {
+            metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "preCheck");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to perform " + action);
         }
     }
 
     private void checkCanAccess(AuthorizationGuard.Action action, HttpServletRequest request, E entity) {
         if (!getAuthorizationGuard().canAccess(action, request, entity)) {
+            metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
         }
     }
@@ -826,6 +940,23 @@ public abstract class RestlessResourceHandler<E, K> {
     private Specification<E> withScope(Specification<E> spec, AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {
         Specification<E> scope = getAuthorizationGuard().scope(action, customActionName, request);
         return scope == null ? spec : spec.and(scope);
+    }
+
+    /**
+     * ANDs in a {@code deleted = false} predicate for entities implementing {@link
+     * SoftDeletable} - a no-op for every other entity. Applied to every list/page/custom-read
+     * filter (see the three {@code getSpecification(...)}/{@code buildSpecification(...)} call
+     * sites above), the same {@code .and(...)} composition idiom {@link #withScope} already uses
+     * for authorization scoping. Deliberately <b>not</b> applied to {@link #findOne}/{@link
+     * #update}/{@link #patch} (all of which load by id via {@link #getReadDataSource()} directly,
+     * bypassing {@code Specification} filtering entirely) - a soft-deleted row stays fetchable and
+     * restorable by id on purpose, only excluded from listing/searching.
+     */
+    private Specification<E> excludeSoftDeleted(Specification<E> spec) {
+        if (!SoftDeletable.class.isAssignableFrom(metadata.entityType())) {
+            return spec;
+        }
+        return spec.and((root, query, cb) -> cb.equal(root.get("deleted"), false));
     }
 
     // ---- explicit transaction demarcation for the three bulk-write routes ----

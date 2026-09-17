@@ -1,6 +1,7 @@
 package ro.cristivoicu.springbootrestless.registry;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
@@ -15,6 +16,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 import ro.cristivoicu.springbootrestless.annotation.RestlessResource;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
+import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
 import ro.cristivoicu.springbootrestless.resource.ResourceMetadata;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
 import tools.jackson.databind.ObjectMapper;
@@ -41,6 +43,7 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
     private final Validator validator;
     private final RestlessEmbedResolver embedResolver;
     private final PlatformTransactionManager transactionManager;
+    private final RestlessAuthorizationMetrics metrics;
 
     public RestlessRegistrar(ApplicationContext applicationContext,
                               RequestMappingHandlerMapping requestMappingHandlerMapping,
@@ -48,7 +51,8 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
                               ConversionService conversionService,
                               Validator validator,
                               RestlessEmbedResolver embedResolver,
-                              PlatformTransactionManager transactionManager) {
+                              PlatformTransactionManager transactionManager,
+                              ObjectProvider<RestlessAuthorizationMetrics> metricsProvider) {
         this.applicationContext = applicationContext;
         this.requestMappingHandlerMapping = requestMappingHandlerMapping;
         this.objectMapper = objectMapper;
@@ -56,6 +60,11 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         this.validator = validator;
         this.embedResolver = embedResolver;
         this.transactionManager = transactionManager;
+        // ObjectProvider, not a direct RestlessAuthorizationMetrics dependency: its own bean
+        // registration is @ConditionalOnClass(MeterRegistry.class) - absent that (no
+        // Actuator/Micrometer on the consumer's classpath), getIfAvailable() returns null and
+        // every resource gets the shared no-op NONE instance instead.
+        this.metrics = metricsProvider.getIfAvailable(() -> RestlessAuthorizationMetrics.NONE);
     }
 
     @Override
@@ -80,8 +89,8 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         }
         String version = annotation.version();
 
-        ResourceMetadata metadata = resource.resolveMetadata(basePath);
-        resource.init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager);
+        ResourceMetadata metadata = resource.resolveMetadata(basePath, version);
+        resource.init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics);
 
         // getEnabledOperations() defaults to ALL_OPERATIONS (today's behavior, unchanged) -
         // overriding it to a subset is how a resource opts out of the routes it doesn't want.
