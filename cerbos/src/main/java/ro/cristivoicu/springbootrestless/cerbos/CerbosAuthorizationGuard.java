@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.jpa.domain.Specification;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
+import ro.cristivoicu.springbootrestless.mapper.Mapper;
 
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -89,6 +90,8 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
     private final String resourceKind;
     private final Function<E, ?> idExtractor;
     private final CerbosResourceAttributesMapper<E> attributesMapper;
+    private final Mapper<E, ?> mapper;
+    private final CerbosDtoResourceAttributesMapper dtoAttributesMapper;
     private final BiFunction<Action, String, String> actionNaming;
     private final Function<HttpServletRequest, Map<String, AttributeValue>> principalAttributesExtender;
 
@@ -111,6 +114,42 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
         this.resourceKind = resourceKind;
         this.idExtractor = idExtractor;
         this.attributesMapper = attributesMapper;
+        this.mapper = null;
+        this.dtoAttributesMapper = null;
+        this.actionNaming = actionNaming;
+        this.principalAttributesExtender = principalAttributesExtender;
+    }
+
+    /**
+     * DTO-aware sibling of the entity-only constructors above - for a policy condition that needs
+     * a computed attribute only the response DTO carries, not the entity (see {@link
+     * CerbosDtoResourceAttributesMapper}'s own javadoc). {@code <D>} is this constructor's own type
+     * parameter, distinct from the class's {@code <E>} - deliberately, so {@code
+     * CerbosAuthorizationGuard<E>} stays a drop-in field/variable type everywhere it's already
+     * declared (e.g. {@code ProjectAuthorizationGuardBean}), unaffected by which constructor a
+     * particular instance happens to have been built with.
+     */
+    public <D> CerbosAuthorizationGuard(CerbosBlockingClient client, String resourceKind, Function<E, ?> idExtractor,
+                                         Mapper<E, D> mapper, CerbosDtoResourceAttributesMapper<E, D> dtoAttributesMapper) {
+        this(client, resourceKind, idExtractor, mapper, dtoAttributesMapper, CerbosActionNaming.DEFAULT);
+    }
+
+    public <D> CerbosAuthorizationGuard(CerbosBlockingClient client, String resourceKind, Function<E, ?> idExtractor,
+                                         Mapper<E, D> mapper, CerbosDtoResourceAttributesMapper<E, D> dtoAttributesMapper,
+                                         BiFunction<Action, String, String> actionNaming) {
+        this(client, resourceKind, idExtractor, mapper, dtoAttributesMapper, actionNaming, request -> Map.of());
+    }
+
+    public <D> CerbosAuthorizationGuard(CerbosBlockingClient client, String resourceKind, Function<E, ?> idExtractor,
+                                         Mapper<E, D> mapper, CerbosDtoResourceAttributesMapper<E, D> dtoAttributesMapper,
+                                         BiFunction<Action, String, String> actionNaming,
+                                         Function<HttpServletRequest, Map<String, AttributeValue>> principalAttributesExtender) {
+        this.client = client;
+        this.resourceKind = resourceKind;
+        this.idExtractor = idExtractor;
+        this.attributesMapper = null;
+        this.mapper = mapper;
+        this.dtoAttributesMapper = dtoAttributesMapper;
         this.actionNaming = actionNaming;
         this.principalAttributesExtender = principalAttributesExtender;
     }
@@ -130,7 +169,19 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
 
     @Override
     public boolean canAccess(Action action, HttpServletRequest request, E entity) {
-        String cerbosAction = actionNaming.apply(action, null);
+        return canAccess(action, null, request, entity);
+    }
+
+    /**
+     * The name-aware overload {@link AuthorizationGuard#canAccess(Action, String, HttpServletRequest, Object)}
+     * added for {@link Action#NAMED_VIEW} - forwards {@code customActionName} into {@code
+     * actionNaming} the same way {@link #preCheck}/{@link #scope} already do, so a policy can
+     * grant/deny each named view independently (e.g. {@code view_billing} vs {@code
+     * view_fulfillment}) rather than every named view sharing one {@code NAMED_VIEW} decision.
+     */
+    @Override
+    public boolean canAccess(Action action, String customActionName, HttpServletRequest request, E entity) {
+        String cerbosAction = actionNaming.apply(action, customActionName);
         Principal principal = principalOf(request);
         Resource resource = resourceOf(entity);
         try {
@@ -182,7 +233,16 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
     private Resource resourceOf(E entity) {
         Object id = idExtractor.apply(entity);
         Resource resource = Resource.newInstance(resourceKind, String.valueOf(id));
-        Map<String, AttributeValue> attributes = attributesMapper.attributesOf(entity);
+        Map<String, AttributeValue> attributes = attributesMapper != null
+                ? attributesMapper.attributesOf(entity)
+                : dtoAttributesOf(entity);
         return attributes.isEmpty() ? resource : resource.withAttributes(attributes);
+    }
+
+    /** {@code mapper}/{@code dtoAttributesMapper} are only ever both non-null or both null - set together by the DTO-aware constructors, {@link #resourceOf}'s own {@code attributesMapper != null} branch is what guarantees this is only reached when they are. */
+    @SuppressWarnings("unchecked")
+    private Map<String, AttributeValue> dtoAttributesOf(E entity) {
+        Object dto = mapper.map(entity);
+        return dtoAttributesMapper.attributesOf(entity, dto);
     }
 }

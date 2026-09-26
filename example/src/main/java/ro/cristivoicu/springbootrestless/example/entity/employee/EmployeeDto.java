@@ -32,6 +32,9 @@ public class EmployeeDto implements EntityDto {
     @Schema(description = "Unique identifier, assigned by the server on create.", example = "42")
     private Long id;
 
+    @Schema(description = "Optimistic-concurrency version. Send back as the If-Match header on PUT/PATCH/DELETE to guard against overwriting a concurrent change.", example = "0")
+    private Long version;
+
     @Schema(description = "Legal first name.", example = "Ada")
     private String firstName;
 
@@ -40,6 +43,16 @@ public class EmployeeDto implements EntityDto {
 
     @Schema(description = "Work email address, unique across employees.", example = "ada.lovelace@example.com")
     private String email;
+
+    /**
+     * Computed by {@link EmployeeMapper}, not copied from {@link Employee} (which has no such
+     * field) - the worked example of a DTO-only attribute a Cerbos policy condition can reference
+     * via {@link ro.cristivoicu.springbootrestless.cerbos.CerbosDtoResourceAttributesMapper},
+     * which {@code EmployeeRestlessResource}'s guard is wired with for exactly this. See {@code
+     * policies/employee.yaml}'s {@code contact} action rule.
+     */
+    @Schema(description = "First letters of firstName and lastName, uppercased - a computed, DTO-only field.", example = "AL")
+    private String initials;
 
     /** Masked by {@link EmployeeMapper} via {@code CerbosFieldMasker} - see {@link Employee#getSalary()}. */
     @CerbosHiddenField

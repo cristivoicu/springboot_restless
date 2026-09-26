@@ -149,6 +149,42 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
         assertThat(objectMapper.readTree(response).get(0).get("salary").isNull()).isTrue();
     }
 
+    @Test
+    void adminSeesContactViewUnconditionally() throws Exception {
+        long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com");
+
+        mockMvc.perform(get("/employees/{id}/contact", id).with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.firstName").value("Ada"))
+                .andExpect(jsonPath("$.initials").value("AL"));
+    }
+
+    @Test
+    void managerWithMatchingExpectedInitialsCanViewContact() throws Exception {
+        long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com");
+
+        // "initials" only exists on the mapped EmployeeContactDto (see CerbosDtoResourceAttributesMapper
+        // in EmployeeRestlessResource) - this is the proof a DTO-only attribute reaches the PDP:
+        // the employee table has no "initials" column for this condition to match against directly.
+        mockMvc.perform(get("/employees/{id}/contact", id).with(managerWithExpectedInitials("AL")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.initials").value("AL"));
+    }
+
+    @Test
+    void managerWithMismatchedExpectedInitialsCannotViewContact() throws Exception {
+        long id = createEmployee(admin(), "Ada", "Lovelace", "ada@example.com");
+
+        mockMvc.perform(get("/employees/{id}/contact", id).with(managerWithExpectedInitials("XY")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void contactViewOnMissingIdReturnsNotFound() throws Exception {
+        mockMvc.perform(get("/employees/{id}/contact", 999_999L).with(admin()))
+                .andExpect(status().isNotFound());
+    }
+
     private long createEmployee(RequestPostProcessor authentication, String firstName, String lastName, String email) throws Exception {
         return createEmployee(authentication, firstName, lastName, email, null);
     }
@@ -182,6 +218,12 @@ class EmployeeAuthorizationGuardTest extends CerbosBackedTest {
     private static RequestPostProcessor manager(String scopedLastName, boolean canViewSalary) {
         return jwt()
                 .jwt(builder -> builder.claim("scopedLastName", scopedLastName).claim("canViewSalary", canViewSalary))
+                .authorities(new SimpleGrantedAuthority("manager"));
+    }
+
+    private static RequestPostProcessor managerWithExpectedInitials(String expectedInitials) {
+        return jwt()
+                .jwt(builder -> builder.claim("expectedInitials", expectedInitials))
                 .authorities(new SimpleGrantedAuthority("manager"));
     }
 }

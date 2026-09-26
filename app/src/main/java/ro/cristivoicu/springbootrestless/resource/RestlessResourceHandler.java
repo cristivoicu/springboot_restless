@@ -361,6 +361,26 @@ public abstract class RestlessResourceHandler<E, K> {
     }
 
     /**
+     * Named single-item views beyond the default {@code findOne}, each an alternate {@link
+     * Mapper} for the same entity - the DDD-bounded-context case: {@code
+     * GET {basePath}/{id}/billing} and {@code GET {basePath}/{id}/fulfillment} as two different
+     * shapes of the same aggregate, keyed by name, each registered as its own route by {@code
+     * RestlessRegistrar}. {@code getCustomReadActions()}'s counterpart for a single item rather
+     * than a filtered collection - no {@link SearchDto}/{@link org.springframework.data.jpa.domain.Specification}
+     * involved, since a view doesn't change *which* row is loaded, only *what shape* comes back.
+     * Empty by default. <b>Public, not protected</b> - same reasoning as {@link
+     * #getCustomReadActions}. Checked against {@link AuthorizationGuard.Action#NAMED_VIEW}, not
+     * inherited from {@code READ_ONE} - a guard can grant the default view without silently
+     * granting every named one too, the same "no silent inheritance between actions" reasoning
+     * {@code PATCH} not inheriting {@code UPDATE} already documents; see {@link
+     * AuthorizationGuard#canAccess(AuthorizationGuard.Action, String, HttpServletRequest, Object)}
+     * for how a guard differentiates by view name.
+     */
+    public Map<String, Mapper<E, ?>> getNamedViews() {
+        return Map.of();
+    }
+
+    /**
      * Partial-update ({@code PATCH}) support — entirely opt-in, unlike Create/Read/Update/Delete:
      * empty by default, meaning no {@code PATCH} route gets registered for this resource at all
      * (see {@code RestlessRegistrar}). Override (also {@code public}, same reasoning as {@link
@@ -561,6 +581,33 @@ public abstract class RestlessResourceHandler<E, K> {
         spec = withScope(excludeSoftDeleted(spec), AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
 
         return ResponseEntity.ok(paginate(getOverviewMapper(), spec, pageableOf(searchDto)));
+    }
+
+    /**
+     * Shared entry point for every named view in {@link #getNamedViews()} - same one-{@link
+     * Method}-per-name dispatch idiom as {@link #customRead}, reusing {@link #resolveActionName}
+     * unchanged (it already just recovers "whatever the last literal path segment was," nothing
+     * custom-read-specific about it despite the name). Unlike {@link #customRead}, this loads by
+     * id ({@code {basePath}/{id}/{viewName}}) rather than filtering a collection, so it 404s the
+     * same way {@link #findOne} does for a missing row, and supports {@code ?expand=} the same way
+     * too.
+     */
+    public final ResponseEntity<?> namedView(HttpServletRequest request) {
+        String viewName = resolveActionName(request);
+        checkPreCheck(AuthorizationGuard.Action.NAMED_VIEW, viewName, request);
+        K id = extractId(request);
+        E found = getReadDataSource().findOne(id);
+        if (found == null) {
+            return ResponseEntity.notFound().build();
+        }
+        checkCanAccess(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found);
+        Mapper<E, ?> mapper = getNamedViews().get(viewName);
+        if (mapper == null) {
+            return ResponseEntity.notFound().build();
+        }
+        Object dto = mapper.map(found);
+        embedResolver.resolve(dto, found, request);
+        return ResponseEntity.ok(dto);
     }
 
     public final ResponseEntity<?> update(HttpServletRequest request) throws Exception {
@@ -932,6 +979,14 @@ public abstract class RestlessResourceHandler<E, K> {
 
     private void checkCanAccess(AuthorizationGuard.Action action, HttpServletRequest request, E entity) {
         if (!getAuthorizationGuard().canAccess(action, request, entity)) {
+            metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
+        }
+    }
+
+    /** Same as {@link #checkCanAccess(AuthorizationGuard.Action, HttpServletRequest, Object)}, threading a name through to the guard's own name-aware overload - see {@link #namedView}, the only caller. */
+    private void checkCanAccess(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request, E entity) {
+        if (!getAuthorizationGuard().canAccess(action, customActionName, request, entity)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
         }

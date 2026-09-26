@@ -25,13 +25,19 @@ import ro.cristivoicu.springbootrestless.models.AbstractAuditableEntity;
  * Also this codebase's one demo of {@link AbstractAuditableEntity} - see its own javadoc for why
  * this stays opt-in per entity rather than something every entity gets; {@code
  * ExampleApplication}'s {@code @EnableJpaAuditing} is the other half of the setup.
+ * <p>
+ * And this app's one demo of API versioning (see the root README's own tutorial section) -
+ * {@code version = "1"} forwards onto every route {@code RestlessRegistrar} registers for this
+ * resource, resolved by the header-based {@code ApiVersionConfigurer} bean in {@code
+ * ExampleApplication} ({@code X-API-Version}, not required - every other route in this app has no
+ * version constraint at all and must keep working with no header sent).
  */
 @Entity
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@RestlessEntity(basePath = "/projects", createDataSource = ProjectCreateDataSource.class,
+@RestlessEntity(basePath = "/projects", version = "1", createDataSource = ProjectCreateDataSource.class,
         authorizationGuard = ProjectAuthorizationGuardBean.class)
 public class Project extends AbstractAuditableEntity {
 

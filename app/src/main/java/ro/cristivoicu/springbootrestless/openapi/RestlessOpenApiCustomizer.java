@@ -26,6 +26,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springdoc.core.customizers.GlobalOpenApiCustomizer;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
+import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.registry.RestlessRoutes;
 import ro.cristivoicu.springbootrestless.resource.ReadAction;
 import ro.cristivoicu.springbootrestless.resource.ResourceMetadata;
@@ -113,6 +114,9 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
 
         resource.getCustomReadActions().forEach((actionName, action) ->
                 addCustomReadRoute(openApi, metadata, tag, actionName, action));
+
+        resource.getNamedViews().forEach((viewName, mapper) ->
+                addNamedViewRoute(openApi, metadata, tag, viewName, mapper));
 
         resource.getPatchDataSource().ifPresent(ignored -> addPatchRoute(openApi, metadata, tag, resource));
     }
@@ -204,6 +208,34 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
                 jsonResponse(pageSchema(refSchema(openApi, metadata.responseDtoType())))));
         applyVersion(operation, metadata.version());
         putOperation(openApi, path, RequestMethod.GET, operation);
+    }
+
+    private void addNamedViewRoute(OpenAPI openApi, ResourceMetadata metadata, String tag, String viewName, Mapper<?, ?> mapper) {
+        String path = metadata.basePath() + "/{id}/" + viewName;
+        Operation operation = new Operation()
+                .addTagsItem(tag)
+                .operationId(operationId("view_" + viewName, metadata))
+                .summary("Named view \"" + viewName + "\" of " + tag + " by id");
+        operation.addParametersItem(idParameter(openApi, metadata.idType()));
+        operation.responses(new ApiResponses()
+                .addApiResponse("200", jsonResponse(refSchema(openApi, viewResponseType(mapper))))
+                .addApiResponse("404", new ApiResponse().description("Not found")));
+        applyVersion(operation, metadata.version());
+        putOperation(openApi, path, RequestMethod.GET, operation);
+    }
+
+    /**
+     * Same {@link GenericTypeResolver}-off-{@code Mapper.class} idiom {@code
+     * RestlessResourceHandler#resolveDtoTypeFromMapper} already uses for {@code
+     * getEntityMapper()}/{@code getOverviewMapper()}/{@code getSelectMapper()} - a small local
+     * duplicate rather than a shared cross-package helper, since {@link
+     * RestlessResourceHandler#getNamedViews()} is resource-instance state read directly here
+     * (like {@link #addCustomReadRoute}'s {@code ReadAction}s), never funneled through {@link
+     * ResourceMetadata} the way the three fixed projections are.
+     */
+    private Class<?> viewResponseType(Mapper<?, ?> mapper) {
+        Class<?>[] mapperArgs = org.springframework.core.GenericTypeResolver.resolveTypeArguments(mapper.getClass(), Mapper.class);
+        return mapperArgs == null ? null : mapperArgs[1];
     }
 
     private void addPatchRoute(OpenAPI openApi, ResourceMetadata metadata, String tag, RestlessResourceHandler<?, ?> resource) {

@@ -20,19 +20,34 @@
         <java.version>25</java.version>
     </properties>
 
+    <!-- Imported, not hand-pinned per dependency below - example is the one place in this
+         reactor meant to look like a real external consumer, so it's also the one place that
+         demonstrates importing spring-boot-restless-dependencies instead of repeating
+         "0.0.1-SNAPSHOT" on every ro.cristivoicu dependency by hand (see the root README's
+         Cerbos-dependency step for the same snippet). -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>ro.cristivoicu</groupId>
+                <artifactId>spring-boot-restless-dependencies</artifactId>
+                <version>0.0.1-SNAPSHOT</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
-        <!-- The framework itself. -->
+        <!-- The framework itself - version resolved via the BOM import above. -->
         <dependency>
             <groupId>ro.cristivoicu</groupId>
             <artifactId>spring-boot-restless</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
         </dependency>
 
         <!-- The Cerbos-backed AuthorizationGuard, wired into EmployeeRestlessResource below. -->
         <dependency>
             <groupId>ro.cristivoicu</groupId>
             <artifactId>spring-boot-restless-cerbos</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
         </dependency>
 
         <!-- Activates CerbosHealthIndicator (cerbos module, @ConditionalOnClass on this) -
@@ -113,6 +128,14 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- RestlessErrorAssertions/RestlessPageAssertions - version resolved via the BOM import
+             above, same as spring-boot-restless/spring-boot-restless-cerbos. -->
+        <dependency>
+            <groupId>ro.cristivoicu</groupId>
+            <artifactId>spring-boot-restless-test</artifactId>
             <scope>test</scope>
         </dependency>
 

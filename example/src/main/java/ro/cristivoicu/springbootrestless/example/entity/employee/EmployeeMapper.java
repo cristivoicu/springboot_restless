@@ -68,11 +68,24 @@ public class EmployeeMapper implements Mapper<Employee, EmployeeDto> {
         // RestlessEmbedResolver, only when a caller asks for them via ?expand=.
         EmployeeDto dto = new EmployeeDto();
         dto.setId(source.getId());
+        dto.setVersion(source.getVersion());
         dto.setFirstName(source.getFirstName());
         dto.setLastName(source.getLastName());
         dto.setEmail(source.getEmail());
+        dto.setInitials(initialsOf(source));
         dto.setSalary(source.getSalary());
         dto.setDepartmentCode(source.getDepartmentCode());
         return dto;
+    }
+
+    /** See {@link EmployeeDto#getInitials()}'s own javadoc - the worked example of a DTO-only computed attribute. */
+    private static String initialsOf(Employee source) {
+        String first = initialOf(source.getFirstName());
+        String last = initialOf(source.getLastName());
+        return first + last;
+    }
+
+    private static String initialOf(String name) {
+        return name == null || name.isBlank() ? "" : name.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
     }
 }

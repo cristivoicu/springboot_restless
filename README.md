@@ -118,7 +118,9 @@ hand-wired.
   and `cerbos` as a real external project would (see `ExampleApplication`), demonstrating
   realistic usage with the original `Employee`/`Department`/`Project` entities under its own
   `ro.cristivoicu.springbootrestless.example` package, including a real Cerbos PDP and Keycloak
-  IAM wired up via the root `docker-compose.yml`.
+  IAM wired up via the root `docker-compose.yml`. See [`example/README.md`](example/README.md) for
+  a feature-by-feature map of this specific app (every framework capability, which entity
+  demonstrates it, and a curl example) - this document stays scoped to the framework itself.
 
 ## Architecture
 

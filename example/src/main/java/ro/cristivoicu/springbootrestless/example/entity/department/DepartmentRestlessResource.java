@@ -10,12 +10,16 @@ import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
 import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
 import ro.cristivoicu.springbootrestless.controller.update.UpdateDataSource;
+import ro.cristivoicu.springbootrestless.controller.patch.PatchDataSource;
 import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultCreateDataSource;
-import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultDeleteDataSource;
+import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultPatchDataSource;
 import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultReadDataSource;
+import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultSoftDeleteDataSource;
 import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultUpdateDataSource;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
+
+import java.util.Optional;
 
 /**
  * Stage 3 proof (runtime registration): a second entity exposed purely by writing its
@@ -31,6 +35,12 @@ import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
  * why): {@code policies/department.yaml} needs a real guard too, so this moved onto the "manual,
  * runtime defaults, no codegen" tier it was always demonstrating on the CUD side anyway - only
  * {@link #getAuthorizationGuard()} is new here.
+ * <p>
+ * Also this app's one demo of opt-in {@code PATCH} ({@link #getPatchDataSource()}, reflective
+ * default) and of {@link ro.cristivoicu.springbootrestless.datasource.SoftDeletable} ({@link
+ * #deleteDataSource} below is a {@code DefaultSoftDeleteDataSource}, not the hard-deleting
+ * default) - both entirely opt-in additions on top of the same manual tier, no new files beyond
+ * {@link DepartmentPatchModel} and {@link Department} implementing the marker interface.
  */
 @Component
 @RestlessResource(basePath = "/departments")
@@ -40,6 +50,7 @@ public class DepartmentRestlessResource extends RestlessResourceHandler<Departme
     private final ReadDataSource<Department, Long, DepartmentSearchDto> readDataSource;
     private final UpdateDataSource<Department, Long, DepartmentUpdateModel> updateDataSource;
     private final DeleteDataSource<Department, Long, ?> deleteDataSource;
+    private final PatchDataSource<Department, Long, DepartmentPatchModel> patchDataSource;
     private final DepartmentMapper mapper;
     private final CerbosBlockingClient cerbosClient;
 
@@ -48,7 +59,8 @@ public class DepartmentRestlessResource extends RestlessResourceHandler<Departme
         this.createDataSource = new DefaultCreateDataSource<>(repository, Department.class, DepartmentCreateModel.class);
         this.readDataSource = new DefaultReadDataSource<>(repository, DepartmentSearchDto.class);
         this.updateDataSource = new DefaultUpdateDataSource<>(repository, DepartmentUpdateModel.class);
-        this.deleteDataSource = new DefaultDeleteDataSource<>(repository, Long.class);
+        this.deleteDataSource = new DefaultSoftDeleteDataSource<>(repository, Long.class);
+        this.patchDataSource = new DefaultPatchDataSource<>(repository, DepartmentPatchModel.class);
         this.mapper = mapper;
         this.cerbosClient = cerbosClient;
     }
@@ -91,6 +103,11 @@ public class DepartmentRestlessResource extends RestlessResourceHandler<Departme
     // getSpecification() intentionally not overridden: RestlessResourceHandler's default
     // (equality-match on populated DepartmentSearchDto fields) is behavior-identical to the
     // hand-written StringUtils.hasText(name) check this used to have.
+
+    @Override
+    public Optional<PatchDataSource<Department, Long, ?>> getPatchDataSource() {
+        return Optional.of(patchDataSource);
+    }
 
     /**
      * {@code policies/department.yaml}: admin has full control; every other authenticated role

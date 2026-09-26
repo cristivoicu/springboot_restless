@@ -104,6 +104,12 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         resource.getCustomReadActions().keySet().forEach(actionName ->
                 registerRoute(resource, basePath + "/actions/" + actionName, RequestMethod.GET, "customRead", version));
 
+        // One extra route per named view, all sharing the single namedView Method - same
+        // no-op-by-default shape as custom read actions above, just single-item (by id) instead
+        // of a filtered collection.
+        resource.getNamedViews().keySet().forEach(viewName ->
+                registerRoute(resource, basePath + "/{id}/" + viewName, RequestMethod.GET, "namedView", version));
+
         // PATCH: entirely opt-in (see getPatchDataSource()'s own javadoc) - empty by default, so
         // this is a no-op for most resources, same spirit as custom read actions above.
         if (resource.getPatchDataSource().isPresent()) {

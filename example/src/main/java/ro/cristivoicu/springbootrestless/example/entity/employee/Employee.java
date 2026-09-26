@@ -4,6 +4,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Version;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -11,6 +12,15 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 
+/**
+ * This app's one demo of optimistic concurrency: {@link #version} is a plain {@code @Version}
+ * field - the framework needs no other code for {@code RestlessExceptionHandler} to map a stale
+ * concurrent write to 409 automatically. The opt-in half - an {@code If-Match} precondition on
+ * single-item {@code PUT}/{@code PATCH}/{@code DELETE}, 412 on a stale value - is what {@link
+ * EmployeeDto#getVersion()} exists for: a client reads the current version back, then sends it as
+ * {@code If-Match} on its next write. Two managers editing the same employee record at once is
+ * the realistic scenario this proves against.
+ */
 @Entity
 @Getter
 @Setter
@@ -21,6 +31,9 @@ public class Employee {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Version
+    private Long version;
 
     private String firstName;
 

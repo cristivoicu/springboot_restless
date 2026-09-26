@@ -19,7 +19,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * all three hand-wired manual resources, each with its own {@code CerbosAuthorizationGuard}),
  * plus {@code ProjectAssignment}'s nine (every fixed route except {@code update}/{@code
  * updateBulk} - see {@code ProjectAssignmentRestlessResource#getEnabledOperations}), plus one
- * extra route per named custom read action (Employee's {@code byEmailDomain}), no more, no fewer.
+ * extra route per named custom read action (Employee's {@code byEmailDomain}), plus one extra
+ * route per named view (Employee's {@code contact}), plus one extra opt-in {@code PATCH} route
+ * (Department's), no more, no fewer.
  */
 @SpringBootTest
 class DynamicRouteCountTest {
@@ -28,6 +30,8 @@ class DynamicRouteCountTest {
     private static final int FULL_CRUD_RESOURCE_COUNT = 3; // Employee, Department, Project
     private static final int NO_UPDATE_ROUTE_COUNT = 9; // ProjectAssignment: everything but update/updateBulk
     private static final int CUSTOM_READ_ACTION_COUNT = 1; // Employee's "byEmailDomain"
+    private static final int NAMED_VIEW_COUNT = 1; // Employee's "contact"
+    private static final int PATCH_ROUTE_COUNT = 1; // Department's
 
     @Autowired
     private RequestMappingHandlerMapping requestMappingHandlerMapping;
@@ -42,6 +46,7 @@ class DynamicRouteCountTest {
                 .count();
 
         assertThat(dynamicRouteCount).isEqualTo(
-                (long) (FIXED_ROUTES_PER_RESOURCE * FULL_CRUD_RESOURCE_COUNT) + NO_UPDATE_ROUTE_COUNT + CUSTOM_READ_ACTION_COUNT);
+                (long) (FIXED_ROUTES_PER_RESOURCE * FULL_CRUD_RESOURCE_COUNT) + NO_UPDATE_ROUTE_COUNT
+                        + CUSTOM_READ_ACTION_COUNT + NAMED_VIEW_COUNT + PATCH_ROUTE_COUNT);
     }
 }

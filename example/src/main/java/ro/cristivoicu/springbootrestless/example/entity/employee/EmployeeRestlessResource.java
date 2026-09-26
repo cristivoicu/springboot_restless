@@ -8,6 +8,7 @@ import org.springframework.util.StringUtils;
 import ro.cristivoicu.springbootrestless.annotation.RestlessResource;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
 import ro.cristivoicu.springbootrestless.cerbos.CerbosAuthorizationGuard;
+import ro.cristivoicu.springbootrestless.cerbos.CerbosDtoResourceAttributesMapper;
 import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
 import ro.cristivoicu.springbootrestless.controller.read.ReadDataSource;
@@ -37,6 +38,7 @@ public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, 
     private final EmployeeUpdateDataSource updateDataSource;
     private final EmployeeDeleteDataSource deleteDataSource;
     private final EmployeeMapper mapper;
+    private final EmployeeContactMapper contactMapper;
     private final CerbosBlockingClient cerbosClient;
 
     public EmployeeRestlessResource(EmployeeCreateDataSource createDataSource,
@@ -44,12 +46,14 @@ public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, 
                                      EmployeeUpdateDataSource updateDataSource,
                                      EmployeeDeleteDataSource deleteDataSource,
                                      EmployeeMapper mapper,
+                                     EmployeeContactMapper contactMapper,
                                      CerbosBlockingClient cerbosClient) {
         this.createDataSource = createDataSource;
         this.readDataSource = readDataSource;
         this.updateDataSource = updateDataSource;
         this.deleteDataSource = deleteDataSource;
         this.mapper = mapper;
+        this.contactMapper = contactMapper;
         this.cerbosClient = cerbosClient;
     }
 
@@ -118,6 +122,16 @@ public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, 
     }
 
     /**
+     * The {@code contact} named view - a different bounded-context shape of the same aggregate
+     * than {@link EmployeeDto}, at {@code GET /employees/{id}/contact}. See {@link
+     * EmployeeContactDto}'s own javadoc.
+     */
+    @Override
+    public Map<String, Mapper<Employee, ?>> getNamedViews() {
+        return Map.of("contact", contactMapper);
+    }
+
+    /**
      * Real Cerbos-backed guard, replacing the earlier header-based stand-in: {@code
      * policies/employee.yaml} grants {@code admin} unconditional access, and scopes {@code
      * manager} to only the employees whose {@code lastName} matches their own {@code
@@ -125,10 +139,21 @@ public class EmployeeRestlessResource extends RestlessResourceHandler<Employee, 
      * had, now a real policy evaluated by a real PDP instead of hand-rolled guard code. See
      * {@code CerbosAuthorizationGuard}'s javadoc for how {@code preCheck}/{@code canAccess}/
      * {@code scope} map onto Cerbos's check/plan calls.
+     * <p>
+     * The DTO-aware constructor, not the plain entity-only one: {@code policies/employee.yaml}'s
+     * {@code contact} action rule references {@code initials} - a field that only exists on a
+     * mapped DTO (see {@link EmployeeContactDto#getInitials()}), never on {@link Employee} itself
+     * - the worked example of {@link CerbosDtoResourceAttributesMapper}. {@link #contactMapper},
+     * not {@link #mapper}, computes that DTO here specifically to avoid a second, wasted {@code
+     * CerbosFieldMasker} round trip {@link EmployeeMapper#map} would otherwise trigger as a side
+     * effect on every guard check - {@code contactMapper} does no Cerbos calls of its own, it's a
+     * plain field copy plus the same {@code initials} computation.
      */
     @Override
     protected AuthorizationGuard<Employee> getAuthorizationGuard() {
-        return new CerbosAuthorizationGuard<>(cerbosClient, "employee", Employee::getId,
-                employee -> Map.of("lastName", AttributeValue.stringValue(employee.getLastName())));
+        CerbosDtoResourceAttributesMapper<Employee, EmployeeContactDto> attributesMapper = (employee, dto) -> Map.of(
+                "lastName", AttributeValue.stringValue(employee.getLastName()),
+                "initials", AttributeValue.stringValue(dto.getInitials()));
+        return new CerbosAuthorizationGuard<>(cerbosClient, "employee", Employee::getId, contactMapper, attributesMapper);
     }
 }

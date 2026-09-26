@@ -30,7 +30,7 @@ public interface AuthorizationGuard<E> {
 
     enum Action {
         CREATE, READ_ONE, READ_LIST, READ_PAGE, READ_PAGE_OVERVIEW, READ_PAGE_SELECT,
-        UPDATE, PATCH, DELETE_ONE, DELETE_ALL, CUSTOM_READ
+        UPDATE, PATCH, DELETE_ONE, DELETE_ALL, CUSTOM_READ, NAMED_VIEW
     }
 
     default boolean preCheck(Action action, String customActionName, HttpServletRequest request) {
@@ -43,6 +43,22 @@ public interface AuthorizationGuard<E> {
 
     default boolean canAccess(Action action, HttpServletRequest request, E entity) {
         return true;
+    }
+
+    /**
+     * Same as {@link #canAccess(Action, HttpServletRequest, Object)}, plus a name - the {@code
+     * canAccess} counterpart {@link #preCheck} already had via its own {@code customActionName}
+     * parameter, {@code canAccess} never did, since every action that reaches it (single read,
+     * update, patch, delete) was always exactly one per {@link Action}. {@link Action#NAMED_VIEW}
+     * (see {@code RestlessResourceHandler#getNamedViews}) is the first that isn't - several named
+     * views can share one {@code Action}, distinguished only by name, the same way {@link
+     * Action#CUSTOM_READ} already needed {@code customActionName} for {@link #preCheck}. Default
+     * delegates to the three-arg overload, ignoring the name - every existing implementation that
+     * only overrides that one keeps behaving identically here too; override this one instead of
+     * (or in addition to) the three-arg version only when a guard needs to differentiate by name.
+     */
+    default boolean canAccess(Action action, String customActionName, HttpServletRequest request, E entity) {
+        return canAccess(action, request, entity);
     }
 
     /**

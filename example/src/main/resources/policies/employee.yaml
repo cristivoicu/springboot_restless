@@ -81,3 +81,19 @@ resourcePolicy:
       output:
         when:
           ruleActivated: "['salary']"
+
+    # "contact" - the named-view demo (GET /employees/{id}/contact): a manager may view any
+    # employee's contact card, but only when the resource's own "initials" attribute matches an
+    # "expectedInitials" claim on their own JWT. "initials" is computed on EmployeeContactDto, not
+    # a column on the employee table at all (see EmployeeRestlessResource#getAuthorizationGuard,
+    # CerbosDtoResourceAttributesMapper) - this rule is the proof a DTO-only attribute genuinely
+    # reaches the PDP, not just entity columns. Same !has() guard as the manager row-scoping rule
+    # above, same reason: preCheck's synthetic resource carries no attributes yet.
+    - actions: ["contact"]
+      effect: EFFECT_ALLOW
+      roles: ["manager"]
+      condition:
+        match:
+          expr: >
+            !has(request.resource.attr.initials) ||
+            request.resource.attr.initials == request.principal.attr.expectedInitials
