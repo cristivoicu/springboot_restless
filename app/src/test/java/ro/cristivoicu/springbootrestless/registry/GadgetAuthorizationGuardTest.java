@@ -75,7 +75,7 @@ class GadgetAuthorizationGuardTest {
         GadgetDeleteModel deleteModel = new GadgetDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(ada), String.valueOf(grace)));
 
-        mockMvc.perform(delete("/gadgets-dynamic")
+        mockMvc.perform(post("/gadgets-dynamic/bulk-delete")
                         .header("X-Scope-LastName", "Lovelace")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
@@ -97,7 +97,7 @@ class GadgetAuthorizationGuardTest {
         String response = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
 
         return objectMapper.readTree(response).get("id").asLong();

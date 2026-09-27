@@ -15,7 +15,7 @@ import java.util.Set;
  * CREATE and READ_LIST only - see {@link Bolt}'s javadoc for why this fixture exists at all.
  */
 @Component
-@RestlessResource(basePath = "/bolts")
+@RestlessResource(basePath = "/bolts", allowAll = true)
 public class BoltRestlessResource extends RestlessResourceHandler<Bolt, Long> {
 
     private static final Set<AuthorizationGuard.Action> OPERATIONS = Set.of(

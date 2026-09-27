@@ -4,11 +4,8 @@ import dev.cerbos.sdk.CerbosBlockingClient;
 import dev.cerbos.sdk.CerbosException;
 import dev.cerbos.sdk.builders.Principal;
 import dev.cerbos.sdk.builders.Resource;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
-import org.springframework.stereotype.Component;
 
 /**
  * Reports whether the Cerbos PDP {@link CerbosBlockingClient} talks to is actually reachable -
@@ -24,13 +21,11 @@ import org.springframework.stereotype.Component;
  * readily as for a recognized one denying access, so this never reports {@code UP} based on a
  * false positive.
  * <p>
- * {@code @ConditionalOnClass}: only activates when the consumer's own app has actuator on its
- * classpath (this module's own dependency on it is {@code optional=true} - see its {@code
- * pom.xml}), so a consumer who never asked for actuator never gets a surprise health contributor.
+ * Registered via {@code CerbosAutoConfiguration}'s {@code @ConditionalOnClass(HealthIndicator.class)}
+ * bean method: only activates when the consumer's own app has actuator on its classpath (this
+ * module's own dependency on it is {@code optional=true} - see its {@code pom.xml}), so a
+ * consumer who never asked for actuator never gets a surprise health contributor.
  */
-@Component
-@ConditionalOnClass(HealthIndicator.class)
-@ConditionalOnBean(CerbosBlockingClient.class)
 public class CerbosHealthIndicator implements HealthIndicator {
 
     private static final String HEALTH_CHECK_RESOURCE_KIND = "spring_boot_restless_health_check";

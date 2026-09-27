@@ -3,7 +3,6 @@ package ro.cristivoicu.springbootrestless.example;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.ComponentScan;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.web.servlet.config.annotation.ApiVersionConfigurer;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -12,10 +11,18 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * A standalone consumer of the {@code spring-boot-restless} library, exactly as an external
  * project would use it: this application's own code lives under {@code
  * ro.cristivoicu.springbootrestless.example}, a sibling of the framework's packages (.registry,
- * .resource, .datasource.defaults, ...), not a subpackage of them - so the default
+ * .resource, .datasource.defaults, ...), not a subpackage of them. That used to mean the default
  * {@code @SpringBootApplication} component scan (which only covers this class's own package and
- * below) wouldn't find the framework's beans (RestlessRegistrar, etc.) on its own. The explicit
- * {@code @ComponentScan} below is exactly the wiring a real consumer needs to add.
+ * below) couldn't find the framework's beans ({@code RestlessRegistrar} etc.) without an explicit
+ * {@code @ComponentScan(basePackages = "ro.cristivoicu.springbootrestless")} - undocumented unless
+ * read straight out of this class's own javadoc, and it pulled in every {@code @Component} under
+ * that whole package tree, not just the ones actually wanted. {@code RestlessAutoConfiguration}
+ * (the {@code app} module) and {@code CerbosAutoConfiguration} (the {@code cerbos} module) fix
+ * this for real: every framework infrastructure bean is registered via {@code
+ * META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports} now, the same
+ * mechanism any Spring Boot starter uses, so {@code @SpringBootApplication}'s own {@code
+ * @EnableAutoConfiguration} picks them up with zero extra wiring here - no {@code @ComponentScan}
+ * needed at all any more.
  * <p>
  * JPA entity scanning needs no such extra config: the example's entities live under {@code
  * .example.entity.*}, already below this class's own package, so Spring Boot's default entity
@@ -27,7 +34,6 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * application-wide decision. Framework-agnostic; nothing here is Restless-specific.
  */
 @SpringBootApplication
-@ComponentScan(basePackages = "ro.cristivoicu.springbootrestless")
 @EnableJpaAuditing
 public class ExampleApplication {
 

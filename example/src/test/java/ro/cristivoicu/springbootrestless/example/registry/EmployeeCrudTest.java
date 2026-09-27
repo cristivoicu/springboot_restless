@@ -95,7 +95,7 @@ class EmployeeCrudTest extends CerbosBackedTest {
                         .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.firstName").value("Ada"))
                 .andReturn().getResponse().getContentAsString();
 
@@ -170,7 +170,7 @@ class EmployeeCrudTest extends CerbosBackedTest {
         EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
-        mockMvc.perform(delete("/employees")
+        mockMvc.perform(post("/employees/bulk-delete")
                         .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
@@ -185,7 +185,7 @@ class EmployeeCrudTest extends CerbosBackedTest {
         EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
         deleteModel.setIds(java.util.List.of("not-a-number"));
 
-        mockMvc.perform(delete("/employees")
+        mockMvc.perform(post("/employees/bulk-delete")
                         .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
@@ -202,7 +202,7 @@ class EmployeeCrudTest extends CerbosBackedTest {
                         .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
 
         return objectMapper.readTree(response).get("id").asLong();

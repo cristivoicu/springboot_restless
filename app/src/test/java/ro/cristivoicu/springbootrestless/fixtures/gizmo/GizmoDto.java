@@ -20,6 +20,7 @@ public class GizmoDto implements EntityDto {
     private Long id;
     private String name;
     private String code;
+    private Integer quantity;
 
     /**
      * Test-only proof that {@code @RestlessEmbed} needs no Cerbos at all: {@link

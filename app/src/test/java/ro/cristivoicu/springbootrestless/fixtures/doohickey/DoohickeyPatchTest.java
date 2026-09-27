@@ -72,7 +72,7 @@ class DoohickeyPatchTest {
         String response = mockMvc.perform(post("/doohickeys")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         long id = objectMapper.readTree(response).get("id").asLong();
         assertThat(id).isPositive();

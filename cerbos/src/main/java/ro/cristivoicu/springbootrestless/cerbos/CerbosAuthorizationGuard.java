@@ -70,7 +70,7 @@ import java.util.function.Function;
  * module for a worked example.
  * <p>
  * <b>Fails closed, not open.</b> A PDP that's slow past {@code cerbos.client.timeout} (see
- * {@link CerbosClientConfiguration}) or unreachable makes every one of these three methods throw
+ * {@code CerbosAutoConfiguration#cerbosBlockingClient}) or unreachable makes every one of these three methods throw
  * {@link CerbosException} deep inside the SDK - left uncaught, that would surface as an
  * undifferentiated 500 from whatever generic exception handling happens to be configured (or none
  * at all). Instead, every call here is wrapped: {@link #preCheck}/{@link #canAccess} return {@code

@@ -52,7 +52,7 @@ class ProjectAssignmentTest extends CerbosBackedTest {
         mockMvc.perform(post("/project-assignments").with(manager())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(assignment(project, dana))))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.projectId").value(project))
                 .andExpect(jsonPath("$.employeeId").value(dana))
                 .andExpect(jsonPath("$.departmentCode").value("ENG"));
@@ -197,7 +197,7 @@ class ProjectAssignmentTest extends CerbosBackedTest {
         String response = mockMvc.perform(post("/project-assignments").with(authentication)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(assignment(projectId, employeeId))))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return objectMapper.readTree(response).get("id").asLong();
     }
@@ -210,7 +210,7 @@ class ProjectAssignmentTest extends CerbosBackedTest {
         String response = mockMvc.perform(post("/projects").with(authentication)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return objectMapper.readTree(response).get("id").asLong();
     }
@@ -226,7 +226,7 @@ class ProjectAssignmentTest extends CerbosBackedTest {
         String response = mockMvc.perform(post("/employees").with(authentication)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return objectMapper.readTree(response).get("id").asLong();
     }

@@ -14,7 +14,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -50,7 +50,7 @@ class RestlessAuthorizationMetricsTest {
 
         double before = denialCount();
 
-        mockMvc.perform(delete("/doohickeys")
+        mockMvc.perform(post("/doohickeys/bulk-delete")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isForbidden());

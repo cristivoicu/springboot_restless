@@ -24,7 +24,7 @@ import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@RestlessEntity(basePath = "/sprockets", createDataSource = SprocketCreateDataSource.class)
+@RestlessEntity(basePath = "/sprockets", createDataSource = SprocketCreateDataSource.class, allowAll = true)
 public class Sprocket {
 
     @Id

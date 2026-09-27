@@ -65,6 +65,6 @@ class GadgetCustomReadActionTest {
         mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk());
+                .andExpect(status().isCreated());
     }
 }

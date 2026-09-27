@@ -56,10 +56,12 @@ actual business rules live:
   auth stack — see [`AuthorizationGuard`](#tutorial-authorization-with-authorizationguard). The
   `cerbos` module is one concrete backing for it (policy-as-code via a real PDP), not the only
   one it's designed for.
-- **Anything a plain equality filter, or a hand-written `Specification`, can't already express.**
-  Search filtering defaults to "equality-match on whichever `SearchDto` fields are populated,"
-  and steps out of the way (override, or add a named custom read action) the moment that's not
-  enough.
+- **Anything the filter DSL, or a hand-written `Specification`, can't already express.**
+  Search filtering defaults to equality on whichever `SearchDto` fields are populated, plus seven
+  operator suffixes (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In` — see [API completeness](#api-completeness))
+  for ranges/partial-match/membership with zero extra code, and steps out of the way (override,
+  or add a named custom read action) the moment even that's not enough — boolean OR/nesting,
+  joins, cross-field logic.
 
 Everything else — wiring an entity's CRUD verbs to Spring MVC routes, the repository, the
 create/update/delete plumbing — is boilerplate the library is happy to generate or default away.
@@ -320,9 +322,9 @@ don't follow the naming convention — the generated resource injects the hand-w
 constructor parameter, exactly like a hand-written resource bean would. `authorizationGuard` does
 too: point it at a hand-written `AuthorizationGuard<Entity>` `@Component` and the generated
 resource overrides `getAuthorizationGuard()` to return it, exactly like `Doohickey`'s
-`DoohickeyAuthorizationGuard` — leave it unset and `RestlessResourceHandler`'s own
-default-permissive `AuthorizationGuard.allowAll()` applies, same as always. One real limit worth
-knowing: `Class<?>` attributes name one concrete class, not a parameterized type, so a *generic*
+`DoohickeyAuthorizationGuard` — leave it unset and `RestlessRegistrar` refuses to start up at all
+(see the next tutorial's fail-fast note) unless `allowAll = true` says that's genuinely intended.
+One real limit worth knowing: `Class<?>` attributes name one concrete class, not a parameterized type, so a *generic*
 guard meant to back more than one entity (`CerbosAuthorizationGuard<E>` — see
 [Cerbos-backed authorization](#tutorial-cerbos-backed-authorization) — is exactly this case) needs
 a small named `@Component` per entity that implements `AuthorizationGuard<Entity>` and delegates
@@ -409,8 +411,13 @@ this framework exists to remove, business-specific CRUD logic included.
 Security dependency, since the base library has none: implementations are handed the raw
 `HttpServletRequest` and read whatever your own auth stack already populated (a
 `userPrincipal`, a header, a `SecurityContext`, ...). It's opt-in per resource
-(`RestlessResourceHandler.getAuthorizationGuard()`, default-permissive), with three hook points
-checked at different points in each action's control flow:
+(`RestlessResourceHandler.getAuthorizationGuard()`), with three hook points
+checked at different points in each action's control flow. **A resource that never overrides
+`getAuthorizationGuard()` at all won't start up** — `RestlessRegistrar` fails fast at startup with
+an `IllegalStateException` naming the resource, unless `@RestlessResource(allowAll = true)` (or
+`@RestlessEntity(allowAll = true)`) says the resource is genuinely meant to be unauthorized. This
+doesn't change what an actual guard does once configured — it only turns "nobody wired one up" from
+a silently wide-open route into a startup failure:
 
 ```java
 public interface AuthorizationGuard<E> {
@@ -750,13 +757,41 @@ principal, since this demo has no such role modeled.
   direction or a property that isn't an actual field on the entity both become a clean 400 (via
   `RestlessResourceHandler#pageableOf`) before any query runs, instead of Hibernate's own later
   and less clear failure.
-- **One error response contract** — `RestlessExceptionHandler` (`app` module, `@RestControllerAdvice`
+- **Filter DSL** — a `SearchDto` field whose name ends in a recognized operator suffix
+  (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In`) filters with that operator instead of plain equality —
+  `ageGte` filters `age >= value`, wire format camelCase (`?ageGte=30`), reflected over by the same
+  default `getSpecification()` an unsuffixed field already was, zero extra code. `Like` does a
+  contains-match; `In` binds a repeatable query param onto a `List`/`Collection`-typed field, the
+  same mechanism `sort` itself already uses. A suffixed field whose base property doesn't exist on
+  the entity is silently ignored (a `SearchDto`-author mistake, not client input); one whose base
+  property exists but doesn't support the operator's type throws `IllegalStateException` (wrong on
+  every request, so it's not a 400). `RestlessSpecifications` is a small fluent builder for the
+  hand-written-override escape hatch this steps out of the way to (see `GadgetRestlessResource`'s
+  own `getSpecification()`/custom read action for a builder-based rewrite, and
+  `EmployeeRestlessResource`'s for a builder combining equality with a range in one override) — see
+  `docs/design/filter-dsl.md` for the full design and `example`'s own
+  [Filter DSL section](example/README.md#filter-dsl--project-employee) for a worked, real-entity
+  example.
+- **Write commands** — `WriteAction<E, Req, Resp>` / `getCustomWriteActions()` (mirroring named
+  custom read actions): an intent-carrying mutation (`POST {basePath}/{id}/actions/{name}`) beyond
+  the fixed create/update/patch/delete verbs, for a transition a full-replace `PUT` has no
+  vocabulary to guard — the server, not the client, decides what's legal. Runs inside a real
+  transaction (load, guard-check, then `execute`); `execute` returns whatever shape its author
+  decides, bypassing `Mapper` entirely, the same "response shape is always hand-written" boundary
+  `Mapper` itself already states. See `docs/design/write-commands.md` for the design and
+  `example`'s own [Write commands section](example/README.md#write-commands--employee) — `promote`
+  (illegal-transition prevention via a fixed career ladder), `giveRaise` (a business-rule cap a
+  bean-validation annotation can't express), `addCertification`/`recordAchievement` (append-only
+  mutation of a collection the update model deliberately never exposes at all).
+- **One error response contract, RFC 9457** — `RestlessExceptionHandler` (`app` module, `@RestControllerAdvice`
   at `Ordered.LOWEST_PRECEDENCE` — a consumer's own handler for the same exception type still
-  wins) gives every route this framework registers, generated or hand-wired, the same JSON body:
-  `{timestamp, status, error, message, path, details}` (`details` is field-level validation
-  messages when relevant, empty otherwise). Before this existed, "the same error shape either way"
-  (`ErrorResponseParityTest`'s whole premise) meant "the same shape Spring Boot's own defaults
-  happened to produce" — undocumented and not this framework's to version.
+  wins) gives every route this framework registers, generated or hand-wired, the same
+  `application/problem+json` body (`org.springframework.http.ProblemDetail`): the standard
+  `type`/`title`/`status`/`detail`/`instance` members, plus two extensions every response carries
+  — `timestamp`, and `errors` (field-level validation messages, present only on a validation
+  failure). Before this existed, "the same error shape either way" (`ErrorResponseParityTest`'s
+  whole premise) meant "the same shape Spring Boot's own defaults happened to produce" —
+  undocumented and not this framework's to version.
 - **Default Swagger/OpenAPI documentation.** `OpenApiDiscoveryTest` (`example` module, formerly
   `OpenApiDiscoverySpikeTest`) confirmed springdoc-openapi's usual `@RestController` scanning sees
   hand-written routes (`/employees`) but *not* routes `RestlessRegistrar` registers dynamically —
@@ -820,7 +855,10 @@ the guard's three hook points (including fail-closed behavior against a killed P
 indicator, and `principalAttributesExtender`, all against a real PDP; `example`'s suite proves the
 same mechanism through realistic, business-named usage — full route coverage, cross-resource
 isolation, duplicate-`basePath` detection, error-response parity against a hand-written baseline,
-default-CUD end-to-end behavior, custom read actions, bulk create/update, multi-field sort, the
-many-to-many `ProjectAssignment` bridge resource (bulk-add at scale, transactional rollback on a
-bad row, pagination), default OpenAPI document generation, and every guard's row-scoping and (for
-Employee) field-masking scenarios. 130 tests across the reactor.
+default-CUD end-to-end behavior, custom read actions, write commands (`promote`/`giveRaise`/
+`addCertification`/`recordAchievement` on `Employee`), the filter DSL (both the fully-automatic
+path on `Project` and the `RestlessSpecifications`-in-a-hand-written-override path on `Employee`),
+bulk create/update, multi-field sort, the many-to-many `ProjectAssignment` bridge resource
+(bulk-add at scale, transactional rollback on a bad row, pagination), default OpenAPI document
+generation, and every guard's row-scoping and (for Employee) field-masking scenarios. 174 tests
+across the reactor.

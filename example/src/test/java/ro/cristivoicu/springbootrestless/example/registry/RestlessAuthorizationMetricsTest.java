@@ -72,7 +72,7 @@ class RestlessAuthorizationMetricsTest extends CerbosBackedTest {
                         .with(admin())
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
 
         return objectMapper.readTree(response).get("id").asLong();

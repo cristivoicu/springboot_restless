@@ -71,6 +71,6 @@ class EmployeeCustomReadActionTest extends CerbosBackedTest {
         mockMvc.perform(post("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk());
+                .andExpect(status().isCreated());
     }
 }

@@ -24,7 +24,7 @@ import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
  * ifMatch != null} condition) - proving that path works independently of authorization.
  */
 @Component
-@RestlessResource(basePath = "/widgets")
+@RestlessResource(basePath = "/widgets", allowAll = true)
 public class WidgetRestlessResource extends RestlessResourceHandler<Widget, Long> {
 
     private final CreateDataSource<Widget, Long, WidgetCreateModel> createDataSource;

@@ -1,9 +1,14 @@
 package ro.cristivoicu.springbootrestless.example.entity.employee;
 
+import jakarta.persistence.CollectionTable;
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Version;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -11,6 +16,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * This app's one demo of optimistic concurrency: {@link #version} is a plain {@code @Version}
@@ -65,4 +72,23 @@ public class Employee {
      * on this entity or an embed on {@code EmployeeDto}.
      */
     private String departmentCode;
+
+    /**
+     * Position on the fixed {@link JobTitle} career ladder - defaults to {@link
+     * JobTitle#ASSOCIATE} on create (see {@code EmployeeCreateDataSource}), moved only by the
+     * {@code promote} write action ({@link EmployeeRestlessResource#getCustomWriteActions()}),
+     * never by a full-replace {@code PUT} - see {@link JobTitle}'s own javadoc for why.
+     */
+    @Enumerated(EnumType.STRING)
+    private JobTitle jobTitle;
+
+    /** Appended only via the {@code addCertification} write action - see {@link Certification}'s own javadoc. */
+    @ElementCollection
+    @CollectionTable(name = "employee_certification", joinColumns = @JoinColumn(name = "employee_id"))
+    private List<Certification> certifications = new ArrayList<>();
+
+    /** Appended only via the {@code recordAchievement} write action - see {@link Achievement}'s own javadoc. */
+    @ElementCollection
+    @CollectionTable(name = "employee_achievement", joinColumns = @JoinColumn(name = "employee_id"))
+    private List<Achievement> achievements = new ArrayList<>();
 }

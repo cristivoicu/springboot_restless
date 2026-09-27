@@ -46,7 +46,7 @@ class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
         String createResponse = mockMvc.perform(post("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.firstName").value("Radia"))
                 .andReturn().getResponse().getContentAsString();
         long id = objectMapper.readTree(createResponse).get("id").asLong();
@@ -102,7 +102,7 @@ class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
         EmployeeDeleteModel deleteModel = new EmployeeDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
-        mockMvc.perform(delete("/employees")
+        mockMvc.perform(post("/employees/bulk-delete")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isNoContent());
@@ -120,7 +120,7 @@ class RestlessRegistrarFullRouteTest extends CerbosBackedTest {
         String response = mockMvc.perform(post("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
 
         return objectMapper.readTree(response).get("id").asLong();

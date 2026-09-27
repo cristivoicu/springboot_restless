@@ -25,7 +25,7 @@ import ro.cristivoicu.springbootrestless.annotation.RestlessOperation;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@RestlessEntity(basePath = "/cogs",
+@RestlessEntity(basePath = "/cogs", allowAll = true,
         operations = {RestlessOperation.READ_ONE, RestlessOperation.READ_LIST, RestlessOperation.READ_PAGE})
 public class Cog {
 

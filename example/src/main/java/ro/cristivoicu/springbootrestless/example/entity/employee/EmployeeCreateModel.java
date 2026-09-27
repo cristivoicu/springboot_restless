@@ -27,4 +27,7 @@ public class EmployeeCreateModel implements CreateModel {
 
     /** Optional - unset means this employee isn't attributed to a department yet. */
     private String departmentCode;
+
+    /** Optional - unset defaults to {@link JobTitle#ASSOCIATE} (see {@code EmployeeCreateDataSource}). */
+    private JobTitle jobTitle;
 }

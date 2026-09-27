@@ -37,9 +37,9 @@ section — the curl examples below assume you already have a token, exactly as 
 
 | Entity | Tier | Base path | What it demonstrates |
 |---|---|---|---|
-| `Project` | Compile-time generated | `/projects` | codegen, auditing, API versioning, delegating-bean guard |
+| `Project` | Compile-time generated | `/projects` | codegen, auditing, API versioning, delegating-bean guard, **filter DSL (automatic)** |
 | `Department` | Manual, defaults | `/departments` | reflective defaults, PATCH, soft delete |
-| `Employee` | Manual, hand-written | `/employees` | custom CUD logic, embed, custom read action, named view, field masking, DTO-aware Cerbos attributes, optimistic concurrency |
+| `Employee` | Manual, hand-written | `/employees` | custom CUD logic, embed, custom read action, **write commands**, **filter DSL (`RestlessSpecifications`)**, named view, field masking, DTO-aware Cerbos attributes, optimistic concurrency |
 | `ProjectAssignment` | Compile-time generated | `/project-assignments` | many-to-many bridge, bulk create at scale, restricted operation set |
 
 ## Feature walkthrough
@@ -57,6 +57,38 @@ a repeatable query param: `GET /employees?sort=lastName,asc&sort=firstName,asc`.
 curl -s -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8081/employees?sort=lastName,asc" | jq
 ```
+
+### Filter DSL — `Project`, `Employee`
+
+Beyond plain equality, a `SearchDto` field whose name ends in a recognized operator suffix
+(`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In`) filters with that operator instead — wire format is
+camelCase, matching the Java field name exactly (`?ageGte=30`, not `?age_gte=30`). Two ways to get
+there, both demonstrated here:
+
+- **Fully automatic** — `Project` (compile-time generated, no hand-written `getSpecification()`
+  at all): `createdDateGte`/`createdDateLte` on `ProjectSearchDto` are picked up by the
+  reflection-driven default filter with zero extra code, the same way `name`/`departmentCode`
+  already were for plain equality. `createdDate` is declared on the shared
+  `AbstractAuditableEntity` base class, not on `Project` itself — proof the suffix mechanism
+  reaches inherited fields too, not just an entity's own declared ones.
+- **Via `RestlessSpecifications`** — `Employee` already needs a hand-written
+  `getSpecification()` override (for reasons unrelated to filtering), so `salaryGte`/`salaryLte`
+  are wired in there explicitly using the same small fluent builder hand-written escape hatches
+  use, combined with the pre-existing `lastName` equality filter in one `.eq(...).gte(...).lte(...).build()`
+  call.
+
+```bash
+# Projects created since the start of this year.
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8081/projects?createdDateGte=2026-01-01T00:00:00Z" | jq
+
+# Employees earning at least 100,000, optionally narrowed further by lastName (still plain
+# equality, same query alongside the new range fields).
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:8081/employees?salaryGte=100000" | jq
+```
+
+See `docs/design/filter-dsl.md` (root of the reactor) for the full design.
 
 ### PATCH — `Department`
 
@@ -121,6 +153,52 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/projects | jq   
 curl -s -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8081/employees/actions/byEmailDomain?domain=restless-demo.example" | jq
 ```
+
+### Write commands — `Employee`
+
+Four named write actions (`POST /employees/{id}/actions/{name}`) - intent-carrying mutations a
+full-replace `PUT` has no vocabulary for, each enforcing exactly one invariant `EmployeeUpdateModel`
+can't:
+
+- **`promote`** - moves `jobTitle` up the fixed career ladder (`ASSOCIATE` → `ENGINEER` → ... →
+  `PRINCIPAL_ENGINEER`). Rejects (409) a same-rank or lower "promotion" - a `PUT` could set
+  `jobTitle` to anything at all; this action is the one place the *transition* itself is
+  validated, not just the destination value.
+- **`giveRaise`** - increases `salary` by a percentage, capped at 20% per single raise (409 above
+  the cap, 400 for a non-positive percentage - a well-formed-but-against-the-rules request vs. a
+  malformed one, kept deliberately distinct).
+- **`addCertification`** / **`recordAchievement`** - append-only mutation of a collection
+  (`certifications`/`achievements`) that `EmployeeUpdateModel` deliberately never exposes at all -
+  the only way to add one is the command that means exactly that, not a full-replace `PUT` that
+  could just as easily drop them by omission. `addCertification` also rejects (409) a
+  case-insensitive duplicate name.
+
+```bash
+# Promote - illegal transition rejected
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"newJobTitle":"ENGINEER"}' http://localhost:8081/employees/1/actions/promote | jq
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"newJobTitle":"ASSOCIATE"}' http://localhost:8081/employees/1/actions/promote \
+  -w "\nHTTP %{http_code}\n"   # 409 - not a promotion
+
+# Give a raise - above-cap rejected
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"percentage": 10}' http://localhost:8081/employees/1/actions/giveRaise | jq
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"percentage": 50}' http://localhost:8081/employees/1/actions/giveRaise \
+  -w "\nHTTP %{http_code}\n"   # 409 - exceeds the cap
+
+# Append a certification / an achievement
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"AWS Certified Solutions Architect","yearEarned":2024}' \
+  http://localhost:8081/employees/1/actions/addCertification | jq
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"title":"Employee of the year","year":2025}' \
+  http://localhost:8081/employees/1/actions/recordAchievement | jq
+```
+
+See `docs/design/write-commands.md` (root of the reactor) for the design behind the mechanism
+itself (`WriteAction`/`getCustomWriteActions()`, `app` module).
 
 ### Named view — `Employee` `contact`
 

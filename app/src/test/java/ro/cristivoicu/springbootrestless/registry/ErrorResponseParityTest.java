@@ -55,11 +55,11 @@ class ErrorResponseParityTest {
 
         assertThat(dynamic.getResponse().getStatus()).isEqualTo(handWritten.getResponse().getStatus());
         assertThat(dynamic.getResponse().getErrorMessage()).isEqualTo(handWritten.getResponse().getErrorMessage());
-        // Content, not raw bytes: RestlessExceptionHandler's ErrorResponse carries two fields
+        // Content, not raw bytes: RestlessExceptionHandler's ProblemDetail carries two fields
         // that are legitimately different between these two calls by design, not by accident -
-        // "timestamp" (two separate requests, fired moments apart) and "path" (this comparison
+        // "timestamp" (two separate requests, fired moments apart) and "instance" (this comparison
         // is deliberately hitting two different URLs - the whole point of "identical response" is
-        // "same status/error/validation content", never "literally the same path").
+        // "same status/title/validation content", never "literally the same path").
         assertThat(normalizedBody(dynamic)).isEqualTo(normalizedBody(handWritten));
         assertThat(dynamic.getResponse().getContentType()).isEqualTo(handWritten.getResponse().getContentType());
     }
@@ -69,7 +69,7 @@ class ErrorResponseParityTest {
         if (node.isObject()) {
             var object = (tools.jackson.databind.node.ObjectNode) node;
             object.remove("timestamp");
-            object.remove("path");
+            object.remove("instance");
         }
         return node.toString();
     }

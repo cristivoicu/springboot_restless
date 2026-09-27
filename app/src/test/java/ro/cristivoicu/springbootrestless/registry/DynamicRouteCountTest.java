@@ -23,7 +23,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * @RestlessEntity(operations = ...)} - see {@code CogGeneratedResourceTest}), plus Bolt's three
  * ({@code CREATE} - {@code create}/{@code createBulk} - plus {@code READ_LIST}; see {@code
  * BulkTransactionRollbackTest}), plus one extra route per named custom read action (Gadget's
- * {@code byEmailDomain}) and per opt-in {@code PATCH} route (Doohickey's), no more, no fewer.
+ * {@code byEmailDomain}), per named write action (Gadget's {@code rename}), per named view
+ * (Gadget's {@code summary}), and per opt-in {@code PATCH} route (Doohickey's), no more, no
+ * fewer.
  */
 @SpringBootTest
 class DynamicRouteCountTest {
@@ -33,6 +35,8 @@ class DynamicRouteCountTest {
     private static final int READ_ONLY_ROUTE_COUNT = 3; // Cog: READ_ONE, READ_LIST, READ_PAGE only
     private static final int CREATE_AND_LIST_ROUTE_COUNT = 3; // Bolt: create, createBulk, findList only
     private static final int CUSTOM_READ_ACTION_COUNT = 1; // Gadget's "byEmailDomain"
+    private static final int CUSTOM_WRITE_ACTION_COUNT = 1; // Gadget's "rename"
+    private static final int NAMED_VIEW_COUNT = 1; // Gadget's "summary"
     private static final int OPT_IN_PATCH_ROUTE_COUNT = 1; // Doohickey's
 
     @Autowired
@@ -49,6 +53,7 @@ class DynamicRouteCountTest {
 
         assertThat(dynamicRouteCount).isEqualTo(
                 (long) (FIXED_ROUTES_PER_RESOURCE * FULL_CRUD_RESOURCE_COUNT) + READ_ONLY_ROUTE_COUNT
-                        + CREATE_AND_LIST_ROUTE_COUNT + CUSTOM_READ_ACTION_COUNT + OPT_IN_PATCH_ROUTE_COUNT);
+                        + CREATE_AND_LIST_ROUTE_COUNT + CUSTOM_READ_ACTION_COUNT + CUSTOM_WRITE_ACTION_COUNT
+                        + NAMED_VIEW_COUNT + OPT_IN_PATCH_ROUTE_COUNT);
     }
 }

@@ -34,6 +34,7 @@ import ro.cristivoicu.springbootrestless.datasource.SoftDeletable;
 import ro.cristivoicu.springbootrestless.datasource.TypedDataSource;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbed;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
+import ro.cristivoicu.springbootrestless.filter.FilterOperator;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
 import ro.cristivoicu.springbootrestless.models.CreateModel;
@@ -42,6 +43,7 @@ import ro.cristivoicu.springbootrestless.models.PageableResponse;
 import ro.cristivoicu.springbootrestless.models.PatchModel;
 import ro.cristivoicu.springbootrestless.models.SearchDto;
 import ro.cristivoicu.springbootrestless.models.UpdateModel;
+import ro.cristivoicu.springbootrestless.models.WriteActionRequest;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JavaType;
 import tools.jackson.databind.ObjectMapper;
@@ -50,15 +52,15 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.stream.Collectors;
 
 /**
  * Runtime-registered replacement for the four hand-subclassed {@code *Controller} classes.
@@ -133,6 +135,20 @@ public abstract class RestlessResourceHandler<E, K> {
     private RestlessEmbedResolver embedResolver = RestlessEmbedResolver.NONE;
     private PlatformTransactionManager transactionManager;
     private RestlessAuthorizationMetrics metrics = RestlessAuthorizationMetrics.NONE;
+    private int maxListSize = DEFAULT_MAX_LIST_SIZE;
+
+    /**
+     * {@link #findList}'s default hard cap on how many rows a single unpaginated {@code
+     * GET .../list} request can return - unlike {@code findPage}/{@code findPageOverview}/
+     * {@code findPageSelect}, {@code /list} has no client-supplied page size to bound it at all,
+     * so with no cap a large table's entire contents (times however many concurrent requests hit
+     * it) is exactly one route away from an {@code OutOfMemoryError}. Overridable per app via
+     * {@code restless.list.max-size} (see {@code RestlessProperties}); 10,000 is generous enough
+     * that no existing fixture/example dataset in this reactor ever comes close to it. A response
+     * that hit the cap carries {@code X-Restless-List-Truncated: true} so a caller can tell
+     * "that's genuinely everything" apart from "there's more - use {@code /page} instead".
+     */
+    public static final int DEFAULT_MAX_LIST_SIZE = 10_000;
 
     /**
      * Wires this resource's infra collaborators. Called once by whichever registrar discovered
@@ -191,6 +207,19 @@ public abstract class RestlessResourceHandler<E, K> {
                             ConversionService conversionService, Validator validator,
                             RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager,
                             RestlessAuthorizationMetrics metrics) {
+        init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics, DEFAULT_MAX_LIST_SIZE);
+    }
+
+    /**
+     * Same as the seven-arg {@link #init}, plus {@link #maxListSize} - a separate overload for
+     * the same reason the others are: only {@code RestlessRegistrar} calls this one, with the
+     * real value bound from {@code restless.list.max-size} (see {@code RestlessProperties}),
+     * every pre-existing caller keeps getting {@link #DEFAULT_MAX_LIST_SIZE} unchanged.
+     */
+    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
+                            ConversionService conversionService, Validator validator,
+                            RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager,
+                            RestlessAuthorizationMetrics metrics, int maxListSize) {
         this.metadata = metadata;
         this.objectMapper = objectMapper;
         this.conversionService = conversionService;
@@ -198,6 +227,7 @@ public abstract class RestlessResourceHandler<E, K> {
         this.embedResolver = embedResolver;
         this.transactionManager = transactionManager;
         this.metrics = metrics == null ? RestlessAuthorizationMetrics.NONE : metrics;
+        this.maxListSize = maxListSize > 0 ? maxListSize : DEFAULT_MAX_LIST_SIZE;
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
 
         this.customActionSearchDtoConstructors = new HashMap<>();
@@ -381,6 +411,20 @@ public abstract class RestlessResourceHandler<E, K> {
     }
 
     /**
+     * Named custom write actions beyond the default create/update/patch/delete — an
+     * intent-carrying mutation ({@code POST {basePath}/{id}/actions/{name}}) rather than a
+     * full-replace PUT, for anything an illegal-transition check or multi-step domain rule needs
+     * a vocabulary for. Empty by default. <b>Public, not protected</b> — same reasoning as {@link
+     * #getCustomReadActions}/{@link #getNamedViews}. Checked against {@link
+     * AuthorizationGuard.Action#WRITE_ACTION}, not inherited from {@code UPDATE}/{@code PATCH} —
+     * same "no silent inheritance between actions" reasoning as those two already document
+     * relative to each other.
+     */
+    public Map<String, WriteAction<E, ?, ?>> getCustomWriteActions() {
+        return Map.of();
+    }
+
+    /**
      * Partial-update ({@code PATCH}) support — entirely opt-in, unlike Create/Read/Update/Delete:
      * empty by default, meaning no {@code PATCH} route gets registered for this resource at all
      * (see {@code RestlessRegistrar}). Override (also {@code public}, same reasoning as {@link
@@ -434,17 +478,35 @@ public abstract class RestlessResourceHandler<E, K> {
      * Default filter: an equality predicate for every non-null, non-blank field declared
      * directly on the {@code SearchDto} subclass (its {@code getDeclaredFields()} already
      * excludes {@link ro.cristivoicu.springbootrestless.models.AbstractSearchDto}'s inherited
-     * paging fields), ANDed together. Covers the common "filter by whichever fields were
-     * populated" case; override for anything a plain equality match can't express (ranges,
-     * joins, {@code LIKE}, ...).
+     * paging fields), ANDed together - unless the field's name ends with a recognized {@link
+     * FilterOperator} suffix ({@code ageGte}, {@code nameLike}, {@code statusIn}, ...), in which
+     * case that operator applies instead of equality. See {@code docs/design/filter-dsl.md} for
+     * the full design (why a suffix convention rather than a query-language string, and why the
+     * wire format is camelCase - {@code ?ageGte=30} - not snake_case). Override for anything
+     * beyond these seven operators (joins, cross-field logic, boolean OR, ...) - or use {@link
+     * ro.cristivoicu.springbootrestless.filter.RestlessSpecifications} to write that override
+     * more tersely.
      * <p>
      * Primitive fields (e.g. {@code boolean}) are skipped entirely, not just when zero-valued:
      * a primitive can never represent "the client didn't send this filter" (Java always defaults
      * it, e.g. {@code false}), so treating an unset primitive field as an explicit filter would
      * silently exclude every non-default row from unfiltered searches. Use a boxed type
-     * ({@code Boolean}) for an optional equality filter instead.
+     * ({@code Boolean}) for an optional equality filter instead. An empty {@code Collection} (an
+     * {@code In}-suffixed field nothing was bound to) gets the same "absent" treatment as a blank
+     * string, for the same reason.
+     * <p>
+     * Two different failure modes for a misdeclared suffixed field, deliberately: a base property
+     * that doesn't exist on {@code E} at all is silently ignored (a compile-time-fixed mistake in
+     * the {@code SearchDto} author's own code, not client-controlled input - the same "absent
+     * means unset" idiom the null/blank checks above already use); a base property that exists
+     * but doesn't support the operator's type (e.g. {@code nameGte} where {@code name} is a
+     * {@code String}) throws {@link IllegalStateException} - also the DTO author's own mistake,
+     * wrong on every request rather than triggered by any particular one, so it doesn't belong in
+     * the {@link ResponseStatusException}/400 vocabulary {@link #pageableOf}/{@link #convertId}/
+     * {@link #readBody} use for genuinely client-triggered translation failures.
      */
     protected Specification<E> getSpecification(SearchDto searchDto) {
+        Set<String> entityProperties = entityPropertyNames();
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             for (Field field : searchDto.getClass().getDeclaredFields()) {
@@ -464,10 +526,54 @@ public abstract class RestlessResourceHandler<E, K> {
                 if (value instanceof CharSequence text && !StringUtils.hasText(text.toString())) {
                     continue;
                 }
-                predicates.add(cb.equal(root.get(field.getName()), value));
+                if (value instanceof Collection<?> collection && collection.isEmpty()) {
+                    continue;
+                }
+
+                FilterOperator operator = FilterOperator.forFieldName(field.getName());
+                if (operator == null) {
+                    predicates.add(cb.equal(root.get(field.getName()), value));
+                    continue;
+                }
+                String baseProperty = operator.basePropertyOf(field.getName());
+                if (!entityProperties.contains(baseProperty)) {
+                    continue;
+                }
+                if (operator == FilterOperator.IN) {
+                    if (!(value instanceof Collection)) {
+                        throw new IllegalStateException(field + " uses the 'In' suffix but isn't a Collection");
+                    }
+                    predicates.add(root.<Object>get(baseProperty).in((Collection<?>) value));
+                    continue;
+                }
+                Class<?> entityFieldType = entityFieldType(baseProperty);
+                if (!operator.supports(entityFieldType)) {
+                    throw new IllegalStateException(field + " uses '" + operator + "' but "
+                            + metadata.entityType().getSimpleName() + "." + baseProperty
+                            + " (" + entityFieldType + ") doesn't support it");
+                }
+                predicates.add(operator.predicate(cb, root.get(baseProperty), value));
             }
             return predicates.isEmpty() ? cb.conjunction() : cb.and(predicates.toArray(new Predicate[0]));
         };
+    }
+
+    /**
+     * {@code baseProperty} is already confirmed present somewhere in {@code
+     * metadata.entityType()}'s own class hierarchy by the caller (via {@link
+     * #entityPropertyNames}) - walks the same hierarchy here to actually find and read its type,
+     * since a plain {@code getDeclaredField} on the concrete class alone would miss one declared
+     * on a shared {@code @MappedSuperclass}. The final {@code throw} is unreachable in practice.
+     */
+    private Class<?> entityFieldType(String baseProperty) {
+        for (Class<?> type = metadata.entityType(); type != null && type != Object.class; type = type.getSuperclass()) {
+            try {
+                return type.getDeclaredField(baseProperty).getType();
+            } catch (NoSuchFieldException ignored) {
+                // keep walking up
+            }
+        }
+        throw new IllegalStateException("No field '" + baseProperty + "' found on " + metadata.entityType());
     }
 
     // ---- shared handler methods: one Method object per route, inherited by every subclass ----
@@ -483,7 +589,46 @@ public abstract class RestlessResourceHandler<E, K> {
         CreateDataSource rawDataSource = getCreateDataSource();
         @SuppressWarnings("unchecked")
         E created = (E) rawDataSource.create((CreateModel) body);
+        // 201 + Location, not 200: RFC 9110 §15.3.2 - a successful POST that creates a resource
+        // should report 201 and point at where the new resource can be fetched. idOf(created)
+        // can come back null for an entity with no @Id field reachable via reflection walk-up
+        // (shouldn't happen for a real JPA entity, but a hand-rolled test double might skip it) -
+        // falls back to plain 200 with no Location rather than building a broken URI in that case.
+        Object id = idOf(created);
+        if (id != null) {
+            java.net.URI location = org.springframework.web.servlet.support.ServletUriComponentsBuilder
+                    .fromRequest(request).path("/{id}").buildAndExpand(id).toUri();
+            return ResponseEntity.created(location).body(getEntityMapper().map(created));
+        }
         return ResponseEntity.ok(getEntityMapper().map(created));
+    }
+
+    /**
+     * Reflection-based {@code @Id} field read, shared by {@link #create}'s {@code Location}
+     * header - walks the class hierarchy (not just {@code getDeclaredFields()} on the runtime
+     * class alone), since {@code @Id} commonly lives on a shared {@code @MappedSuperclass} rather
+     * than on the concrete entity itself. Same idiom {@code DefaultReadDataSource#idOf} already
+     * uses for its own cross-check against a {@code Specification}-scoped fetch; duplicated
+     * (not shared) rather than introducing a coupling between this class and one specific
+     * default data source implementation for a two-line reflection walk.
+     */
+    private static Object idOf(Object entity) {
+        if (entity == null) {
+            return null;
+        }
+        for (Class<?> type = entity.getClass(); type != null && type != Object.class; type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                if (field.isAnnotationPresent(jakarta.persistence.Id.class)) {
+                    field.setAccessible(true);
+                    try {
+                        return field.get(entity);
+                    } catch (IllegalAccessException e) {
+                        throw new IllegalStateException("Could not read @Id field of " + entity.getClass(), e);
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -518,27 +663,45 @@ public abstract class RestlessResourceHandler<E, K> {
         return ResponseEntity.ok(getEntityMapper().map(created));
     }
 
-    public final ResponseEntity<?> findOne(HttpServletRequest request) {
+    public final ResponseEntity<?> findOne(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.READ_ONE, null, request);
         K id = extractId(request);
-        E found = getReadDataSource().findOne(id);
-        if (found == null) {
-            return ResponseEntity.notFound().build();
-        }
-        checkCanAccess(AuthorizationGuard.Action.READ_ONE, request, found);
-        Object dto = getEntityMapper().map(found);
-        // Opt-in (?expand=name,...), see RestlessEmbed - a no-op for a request that doesn't ask
-        // for anything, and for a resource whose DTO declares no @RestlessEmbed field at all.
-        embedResolver.resolve(dto, found, request);
-        return ResponseEntity.ok(dto);
+        // inReadOnlyTransaction: getEntityMapper().map(...) and embedResolver.resolve(...) both
+        // run inside it - see that method's own javadoc for why a lazy association needs this.
+        return inReadOnlyTransaction(() -> {
+            E found = getReadDataSource().findOne(id);
+            if (found == null) {
+                return ResponseEntity.notFound().build();
+            }
+            checkCanAccess(AuthorizationGuard.Action.READ_ONE, request, found);
+            Object dto = getEntityMapper().map(found);
+            // Opt-in (?expand=name,...), see RestlessEmbed - a no-op for a request that doesn't
+            // ask for anything, and for a resource whose DTO declares no @RestlessEmbed field.
+            embedResolver.resolve(dto, found, request);
+            return ResponseEntity.ok(dto);
+        });
     }
 
     public final ResponseEntity<List<?>> findList(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.READ_LIST, null, request);
         SearchDto searchDto = bindSearchDto(searchDtoConstructor, request);
         Specification<E> spec = withScope(excludeSoftDeleted(getSpecification(searchDto)), AuthorizationGuard.Action.READ_LIST, null, request);
-        List<E> data = getReadDataSource().findAll(spec);
-        return ResponseEntity.ok(getOverviewMapper().map(data));
+        // Capped, not a plain findAll(spec): see maxListSize's own javadoc for why an unpaginated
+        // route needs a hard limit at all. One extra row requested (maxListSize + 1) so "hit the
+        // cap" can be told apart from "exactly maxListSize rows existed" without a second COUNT
+        // query - the (maxListSize + 1)-th row itself is trimmed back off before mapping.
+        Sort sort = pageableOf(searchDto).getSort();
+        // inReadOnlyTransaction: getOverviewMapper().map(...) runs inside it too - see that
+        // method's own javadoc for why a lazy association needs this.
+        return inReadOnlyTransaction(() -> {
+            List<E> data = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, maxListSize + 1, sort)).getContent();
+            boolean truncated = data.size() > maxListSize;
+            List<E> page = truncated ? data.subList(0, maxListSize) : data;
+            ResponseEntity.BodyBuilder response = truncated
+                    ? ResponseEntity.ok().header("X-Restless-List-Truncated", "true")
+                    : ResponseEntity.ok();
+            return response.body(getOverviewMapper().map(page));
+        });
     }
 
     public final ResponseEntity<PageableResponse<List<?>>> findPage(HttpServletRequest request) throws Exception {
@@ -592,22 +755,91 @@ public abstract class RestlessResourceHandler<E, K> {
      * same way {@link #findOne} does for a missing row, and supports {@code ?expand=} the same way
      * too.
      */
-    public final ResponseEntity<?> namedView(HttpServletRequest request) {
+    public final ResponseEntity<?> namedView(HttpServletRequest request) throws Exception {
         String viewName = resolveActionName(request);
         checkPreCheck(AuthorizationGuard.Action.NAMED_VIEW, viewName, request);
         K id = extractId(request);
-        E found = getReadDataSource().findOne(id);
-        if (found == null) {
+        // inReadOnlyTransaction: mapper.map(...)/embedResolver.resolve(...) run inside it too -
+        // see that method's own javadoc for why a lazy association needs this.
+        return inReadOnlyTransaction(() -> {
+            E found = getReadDataSource().findOne(id);
+            if (found == null) {
+                return ResponseEntity.notFound().build();
+            }
+            checkCanAccess(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found);
+            Mapper<E, ?> mapper = getNamedViews().get(viewName);
+            if (mapper == null) {
+                return ResponseEntity.notFound().build();
+            }
+            Object dto = mapper.map(found);
+            embedResolver.resolve(dto, found, request);
+            return ResponseEntity.ok(dto);
+        });
+    }
+
+    /**
+     * Shared entry point for every named {@link WriteAction} — same one-{@link Method}-per-name
+     * dispatch idiom as {@link #customRead}/{@link #namedView}. Unlike {@link #customRead} (a
+     * filtered collection, no id) and like {@link #namedView} (loads by id first), this loads the
+     * target entity, guard-checks it, then hands it to the action — but unlike {@link #namedView}
+     * (read-only, {@link #inReadOnlyTransaction}), the load + guard-check + {@link
+     * WriteAction#execute} call all run inside one real {@link #inTransaction} boundary, the same
+     * atomicity guarantee {@link #createBulk}/{@link #updateBulk}/{@link #deleteAll} get and
+     * single {@link #update}/{@link #patch} don't need (a single {@code *DataSource} save is
+     * already atomic on its own) — a write action's own {@link WriteAction#execute} is explicitly
+     * allowed to be multi-step domain logic, so it gets the same explicit boundary a bulk write
+     * does.
+     * <p>
+     * The unknown-action-name check runs before the request body is even read (not just before
+     * the entity is loaded) — deliberately: {@code action.getRequestType()} is what tells {@link
+     * #readBody} what to deserialize into, so there is no type to parse against until the action
+     * itself is known. Body reading/validation then happens before the transaction opens (same
+     * order {@link #deleteAll} already uses: validate everything first, only the actual DB work
+     * runs inside the transaction) — not after the load+guard, unlike {@link #update}/{@link
+     * #patch}, since those two have no transaction boundary to be forced to open before or after
+     * that check at all.
+     * <p>
+     * 200, not 201, on success: a write action mutates an existing resource in place (closer to
+     * {@link #update} semantically), even though the HTTP verb is POST — {@link #create}'s own
+     * 201/{@code Location} reasoning is specifically about a <em>new</em> resource, which doesn't
+     * apply here. Illegal-transition prevention (this mechanism's actual reason to exist) needs no
+     * new framework machinery at all: an implementation of {@link WriteAction#execute} throws a
+     * {@link ResponseStatusException} directly (any status), which propagates out through {@link
+     * #inTransaction} to {@code RestlessExceptionHandler}'s existing generic handling, rolling
+     * back cleanly — the same path a guard denial inside {@link #deleteAll}/{@link #updateBulk}
+     * already takes today.
+     */
+    public final ResponseEntity<?> writeAction(HttpServletRequest request) throws Exception {
+        String actionName = resolveActionName(request);
+        checkPreCheck(AuthorizationGuard.Action.WRITE_ACTION, actionName, request);
+        WriteAction<E, ?, ?> action = getCustomWriteActions().get(actionName);
+        if (action == null) {
             return ResponseEntity.notFound().build();
         }
-        checkCanAccess(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found);
-        Mapper<E, ?> mapper = getNamedViews().get(viewName);
-        if (mapper == null) {
-            return ResponseEntity.notFound().build();
-        }
-        Object dto = mapper.map(found);
-        embedResolver.resolve(dto, found, request);
-        return ResponseEntity.ok(dto);
+
+        K id = extractId(request);
+        // Typed as WriteActionRequest, not Object: rawAction.execute(...) below is a raw-type
+        // call, and raw-type erasure keeps a bounded type parameter's own upper bound in the
+        // erased signature (Req extends WriteActionRequest erases to WriteActionRequest, not
+        // Object) - same reason customRead()'s own searchDto local is typed SearchDto, not Object.
+        WriteActionRequest body = (WriteActionRequest) readBody(request, action.getRequestType());
+        validate(body);
+
+        // Raw-type escape hatch, same reasoning as customRead()/create()/update(): Req/Resp can't
+        // be named here since they're only known at runtime via the action's own getRequestType().
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        WriteAction rawAction = action;
+
+        return inTransaction(() -> {
+            E found = getReadDataSource().findOne(id);
+            if (found == null) {
+                return ResponseEntity.notFound().build();
+            }
+            checkCanAccess(AuthorizationGuard.Action.WRITE_ACTION, actionName, request, found);
+            @SuppressWarnings("unchecked")
+            Object response = rawAction.execute(found, body);
+            return ResponseEntity.ok(response);
+        });
     }
 
     public final ResponseEntity<?> update(HttpServletRequest request) throws Exception {
@@ -769,15 +1001,20 @@ public abstract class RestlessResourceHandler<E, K> {
      * (using a {@link ReadAction}'s own specification) — pagination/response-shaping logic is
      * identical either way, only the filter source and mapper differ.
      */
-    private PageableResponse<List<?>> paginate(Mapper<E, ?> mapper, Specification<E> spec, Pageable pageable) {
-        Page<E> page = getReadDataSource().findAll(spec, pageable);
+    private PageableResponse<List<?>> paginate(Mapper<E, ?> mapper, Specification<E> spec, Pageable pageable) throws Exception {
+        // inReadOnlyTransaction: mapper.map(...) runs inside it too - see that method's own
+        // javadoc for why a lazy association needs this. Shared by findPage/findPageOverview/
+        // findPageSelect/customRead (via the two callers below), so this one wrap covers all four.
+        return inReadOnlyTransaction(() -> {
+            Page<E> page = getReadDataSource().findAll(spec, pageable);
 
-        PageableResponse<List<?>> response = new PageableResponse<>();
-        response.setPageSize(page.getSize());
-        response.setTotalPages(page.getTotalPages());
-        response.setTotalElements(page.getTotalElements());
-        response.setBody(mapper.map(page.getContent()));
-        return response;
+            PageableResponse<List<?>> response = new PageableResponse<>();
+            response.setPageSize(page.getSize());
+            response.setTotalPages(page.getTotalPages());
+            response.setTotalElements(page.getTotalElements());
+            response.setBody(mapper.map(page.getContent()));
+            return response;
+        });
     }
 
     /**
@@ -798,9 +1035,7 @@ public abstract class RestlessResourceHandler<E, K> {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid sort: " + e.getMessage(), e);
         }
 
-        Set<String> entityProperties = Arrays.stream(metadata.entityType().getDeclaredFields())
-                .map(Field::getName)
-                .collect(Collectors.toSet());
+        Set<String> entityProperties = entityPropertyNames();
         for (Sort.Order order : pageable.getSort()) {
             if (!entityProperties.contains(order.getProperty())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -808,6 +1043,29 @@ public abstract class RestlessResourceHandler<E, K> {
             }
         }
         return pageable;
+    }
+
+    /**
+     * Every field name declared anywhere in {@code metadata.entityType()}'s own class hierarchy
+     * (up to, not including, {@code Object}) - not just {@code getDeclaredFields()} on the
+     * concrete class alone, which would miss anything declared on a shared {@code
+     * @MappedSuperclass} like {@link ro.cristivoicu.springbootrestless.models.AbstractAuditableEntity}
+     * ({@code createdDate}/{@code lastModifiedDate} - see {@code Project}, this reactor's one
+     * demo of it). Same class-hierarchy walk {@code DefaultReadDataSource#idOf}/{@code
+     * RestlessResourceHandler#idOf} already use for locating an inherited {@code @Id} field.
+     * Shared by {@link #pageableOf} (sort-property validation) and {@link #getSpecification}
+     * (filter-DSL base-property validation) - one source of truth for "is this a real property on
+     * this entity," recomputed per call rather than cached, since it's cheap reflection over a
+     * handful of fields, not a hot path.
+     */
+    private Set<String> entityPropertyNames() {
+        Set<String> names = new HashSet<>();
+        for (Class<?> type = metadata.entityType(); type != null && type != Object.class; type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                names.add(field.getName());
+            }
+        }
+        return names;
     }
 
     private Object readBody(HttpServletRequest request, Class<?> type) throws java.io.IOException {
@@ -909,6 +1167,19 @@ public abstract class RestlessResourceHandler<E, K> {
      */
     private boolean hasGuard() {
         return getAuthorizationGuard() != AuthorizationGuard.allowAll();
+    }
+
+    /**
+     * Public mirror of {@link #hasGuard()} - {@code RestlessRegistrar} (a different package,
+     * {@code protected}/private members here aren't reachable from it) calls this at startup to
+     * enforce {@code @RestlessResource#allowAll}'s fail-fast check: a resource with no real guard
+     * configured and no explicit {@code allowAll = true} never gets its routes registered at all,
+     * an {@link IllegalStateException} instead. Same reference-equality reasoning as {@link
+     * #hasGuard()} — cheap, and correct precisely because {@link AuthorizationGuard#allowAll()}
+     * always returns the same singleton.
+     */
+    public final boolean hasExplicitAuthorizationGuard() {
+        return hasGuard();
     }
 
     /**
@@ -1035,6 +1306,40 @@ public abstract class RestlessResourceHandler<E, K> {
         }
         try {
             return new TransactionTemplate(transactionManager).execute(status -> {
+                try {
+                    return work.call();
+                } catch (Exception e) {
+                    throw new TransactionRollbackWrapper(e);
+                }
+            });
+        } catch (TransactionRollbackWrapper wrapper) {
+            throw wrapper.cause;
+        }
+    }
+
+    /**
+     * Read counterpart to {@link #inTransaction} - wraps a single-entity/page fetch plus its
+     * {@code Mapper}/{@code RestlessEmbedResolver} call in one {@code readOnly} transaction, so a
+     * lazy JPA association a hand-written {@code Mapper} or {@code @RestlessEmbed} field touches
+     * is still initializable when the consumer runs with {@code spring.jpa.open-in-view=false}
+     * (Spring Boot's own OSIV default is {@code true}, which papers over exactly this - a
+     * consumer who turns it off, the generally-recommended production setting, would otherwise
+     * hit a {@link org.hibernate.LazyInitializationException} the moment mapping touched an
+     * uninitialized proxy outside any session at all). {@code readOnly = true}: this path never
+     * writes, so Hibernate can skip dirty-checking - a real (if modest) win, not just a label.
+     * Same "no {@link PlatformTransactionManager} configured means no transaction boundary at
+     * all" fallback as {@link #inTransaction} - unchanged behavior for every caller that
+     * constructs a {@code RestlessResourceHandler} by hand (tests, mainly) rather than through
+     * {@code RestlessRegistrar}.
+     */
+    private <T> T inReadOnlyTransaction(Callable<T> work) throws Exception {
+        if (transactionManager == null) {
+            return work.call();
+        }
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setReadOnly(true);
+        try {
+            return template.execute(status -> {
                 try {
                     return work.call();
                 } catch (Exception e) {

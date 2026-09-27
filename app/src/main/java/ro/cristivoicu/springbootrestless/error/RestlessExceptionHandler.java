@@ -4,10 +4,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.core.annotation.Order;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -16,20 +18,27 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 
 /**
- * One consistent {@link ErrorResponse} body for every route this framework registers - generated,
- * hand-wired, or the original hand-written {@code @RestController}s in the same app, since {@code
- * @RestControllerAdvice}'s exception resolution is global to {@code DispatcherServlet}, not tied
- * to which {@code HandlerMapping} matched the request (the same fact {@code
- * ErrorResponseParityTest} already relies on to prove generated and hand-written routes fail
- * identically). Before this class existed, that "identically" meant "identically whatever Spring
- * Boot's own default error handling happened to produce" - undocumented, unversioned, and
- * different in shape depending on which exception type happened to fire underneath. This is that
- * shape, made explicit.
+ * One consistent {@link ProblemDetail} body (RFC 9457, {@code application/problem+json}) for
+ * every route this framework registers - generated, hand-wired, or the original hand-written
+ * {@code @RestController}s in the same app, since {@code @RestControllerAdvice}'s exception
+ * resolution is global to {@code DispatcherServlet}, not tied to which {@code HandlerMapping}
+ * matched the request (the same fact {@code ErrorResponseParityTest} already relies on to prove
+ * generated and hand-written routes fail identically).
+ * <p>
+ * RFC 9457's standard members ({@code type}/{@code title}/{@code status}/{@code detail}/
+ * {@code instance}) plus two extension members every body always carries: {@code timestamp}
+ * ({@link Instant#now()}) and {@code errors} (field-level bean-validation messages -
+ * {@code "firstName: must not be blank"} - present only for a validation failure; every other
+ * response omits the key entirely rather than sending an empty array, since {@code
+ * ProblemDetail#setProperty} has no "always include, even when null" mode the way the old
+ * hand-rolled {@code ErrorResponse} record did). {@code instance} is set to the request path -
+ * what the old body called {@code path}.
  * <p>
  * Covers every exception type this framework's own request handling can actually throw:
  * {@link ResponseStatusException} ({@code RestlessResourceHandler}'s manual translations - a
@@ -45,6 +54,9 @@ import java.util.List;
  * {@code @Order(LOWEST_PRECEDENCE)}: a consumer's own {@code @ControllerAdvice} (or a
  * controller-local {@code @ExceptionHandler}) for the same exception type wins over this one -
  * this is a default, not a mandate, same spirit as every other default in this framework.
+ * <p>
+ * Registered via {@code RestlessAutoConfiguration} (an {@code @Bean}, not component-scanned) -
+ * see its javadoc.
  */
 @RestControllerAdvice
 @Order(Ordered.LOWEST_PRECEDENCE)
@@ -53,13 +65,13 @@ public class RestlessExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(RestlessExceptionHandler.class);
 
     @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException ex, HttpServletRequest request) {
+    public ResponseEntity<ProblemDetail> handleResponseStatus(ResponseStatusException ex, HttpServletRequest request) {
         String message = ex.getReason() != null ? ex.getReason() : reasonPhraseOf(ex.getStatusCode());
         return respond(ex.getStatusCode(), message, request, List.of());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex, HttpServletRequest request) {
+    public ResponseEntity<ProblemDetail> handleValidation(MethodArgumentNotValidException ex, HttpServletRequest request) {
         // Sorted: Jakarta Bean Validation makes no ordering guarantee for which constraint
         // violation surfaces first, and RestlessResourceHandler's manual Validator.validate()
         // call (dynamic routes) doesn't necessarily walk fields in the same order a real
@@ -75,12 +87,12 @@ public class RestlessExceptionHandler {
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex, HttpServletRequest request) {
+    public ResponseEntity<ProblemDetail> handleUnreadableBody(HttpMessageNotReadableException ex, HttpServletRequest request) {
         return respond(HttpStatus.BAD_REQUEST, "Malformed request body", request, List.of());
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex, HttpServletRequest request) {
+    public ResponseEntity<ProblemDetail> handleTypeMismatch(MethodArgumentTypeMismatchException ex, HttpServletRequest request) {
         String message = "Failed to convert '" + ex.getName() + "' to the expected type";
         return respond(HttpStatus.BAD_REQUEST, message, request, List.of());
     }
@@ -96,7 +108,7 @@ public class RestlessExceptionHandler {
      * attempted), this reports a write that was actually attempted and rejected by the database.
      */
     @ExceptionHandler(OptimisticLockingFailureException.class)
-    public ResponseEntity<ErrorResponse> handleOptimisticLock(OptimisticLockingFailureException ex, HttpServletRequest request) {
+    public ResponseEntity<ProblemDetail> handleOptimisticLock(OptimisticLockingFailureException ex, HttpServletRequest request) {
         return respond(HttpStatus.CONFLICT, "The resource was modified concurrently - reload and try again", request, List.of());
     }
 
@@ -116,7 +128,7 @@ public class RestlessExceptionHandler {
      * expected, routine outcomes that don't warrant one.
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex, HttpServletRequest request) {
+    public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex, HttpServletRequest request) {
         if (ex instanceof org.springframework.web.ErrorResponse selfDescribing) {
             String message = selfDescribing.getBody().getDetail();
             return respond(selfDescribing.getStatusCode(),
@@ -126,11 +138,18 @@ public class RestlessExceptionHandler {
         return respond(HttpStatus.INTERNAL_SERVER_ERROR, "Internal server error", request, List.of());
     }
 
-    private ResponseEntity<ErrorResponse> respond(HttpStatusCode status, String message, HttpServletRequest request,
-                                                    List<String> details) {
-        ErrorResponse body = new ErrorResponse(Instant.now(), status.value(), reasonPhraseOf(status), message,
-                request.getRequestURI(), details);
-        return ResponseEntity.status(status).body(body);
+    private ResponseEntity<ProblemDetail> respond(HttpStatusCode status, String message, HttpServletRequest request,
+                                                   List<String> details) {
+        ProblemDetail body = ProblemDetail.forStatusAndDetail(status, message);
+        body.setTitle(reasonPhraseOf(status));
+        body.setInstance(URI.create(request.getRequestURI()));
+        body.setProperty("timestamp", Instant.now());
+        if (!details.isEmpty()) {
+            body.setProperty("errors", details);
+        }
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(body);
     }
 
     private static String reasonPhraseOf(HttpStatusCode status) {

@@ -39,11 +39,14 @@ import static org.mockito.Mockito.when;
  */
 class RestlessRegistrarDuplicateBasePathTest {
 
-    @RestlessResource(basePath = "/collide")
+    // allowAll = true on both: this test proves duplicate-basePath detection, not authorization -
+    // without it, ResourceA (processed first) would fail on the unrelated missing-guard check
+    // before registration ever reaches the duplicate check this test actually exercises.
+    @RestlessResource(basePath = "/collide", allowAll = true)
     static class ResourceA extends GizmoLikeResource {
     }
 
-    @RestlessResource(basePath = "/collide")
+    @RestlessResource(basePath = "/collide", allowAll = true)
     static class ResourceB extends GizmoLikeResource {
     }
 
@@ -137,7 +140,8 @@ class RestlessRegistrarDuplicateBasePathTest {
                 },
                 ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver.NONE,
                 null,
-                metricsProvider);
+                metricsProvider,
+                new ro.cristivoicu.springbootrestless.autoconfigure.RestlessProperties());
 
         assertThatThrownBy(registrar::afterSingletonsInstantiated)
                 .isInstanceOf(IllegalStateException.class)

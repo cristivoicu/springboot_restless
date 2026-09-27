@@ -13,6 +13,7 @@ import ro.cristivoicu.springbootrestless.example.entity.department.DepartmentRes
 import ro.cristivoicu.springbootrestless.models.EntityDto;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * No {@code projects} field here (there was one, briefly) - which projects this employee is
@@ -61,6 +62,15 @@ public class EmployeeDto implements EntityDto {
 
     @Schema(description = "Code of the department this employee belongs to. See department.code.", example = "ENG")
     private String departmentCode;
+
+    @Schema(description = "Position on the career ladder. Moved only by the \"promote\" write action, never by PUT.", example = "ENGINEER")
+    private JobTitle jobTitle;
+
+    @Schema(description = "Earned certifications, oldest first. Appended only by the \"addCertification\" write action, never by PUT.")
+    private List<Certification> certifications;
+
+    @Schema(description = "Recorded achievements, oldest first. Appended only by the \"recordAchievement\" write action, never by PUT.")
+    private List<Achievement> achievements;
 
     /**
      * {@code GET /employees/{id}?expand=department} - joined on {@link

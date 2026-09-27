@@ -14,4 +14,7 @@ public class GizmoCreateModel implements CreateModel {
 
     @NotBlank
     private String code;
+
+    /** Optional - unset means "no quantity recorded yet". */
+    private Integer quantity;
 }

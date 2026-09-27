@@ -53,7 +53,7 @@ class DynamicRouteSortTest {
     void unknownSortPropertyIsRejectedWithBadRequestNotAServerError() throws Exception {
         mockMvc.perform(get("/gadgets-dynamic").param("sort", "notAnActualField,asc"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Unknown sort property 'notAnActualField' for Gadget"));
+                .andExpect(jsonPath("$.detail").value("Unknown sort property 'notAnActualField' for Gadget"));
     }
 
     @Test
@@ -71,6 +71,6 @@ class DynamicRouteSortTest {
         mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk());
+                .andExpect(status().isCreated());
     }
 }

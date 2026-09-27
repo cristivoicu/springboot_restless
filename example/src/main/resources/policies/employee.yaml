@@ -34,6 +34,10 @@ resourcePolicy:
         - delete_one
         - delete_all
         - byEmailDomain
+        - promote
+        - giveRaise
+        - addCertification
+        - recordAchievement
       effect: EFFECT_ALLOW
       roles: ["manager"]
       condition:

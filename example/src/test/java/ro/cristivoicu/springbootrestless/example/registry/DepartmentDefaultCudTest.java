@@ -59,7 +59,7 @@ class DepartmentDefaultCudTest extends CerbosBackedTest {
         String createResponse = mockMvc.perform(post("/departments")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.name").value("Research"))
                 .andReturn().getResponse().getContentAsString();
         long id = objectMapper.readTree(createResponse).get("id").asLong();
@@ -82,7 +82,7 @@ class DepartmentDefaultCudTest extends CerbosBackedTest {
         DefaultDeleteModel deleteModel = new DefaultDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(id)));
 
-        mockMvc.perform(delete("/departments")
+        mockMvc.perform(post("/departments/bulk-delete")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isNoContent());
@@ -105,7 +105,7 @@ class DepartmentDefaultCudTest extends CerbosBackedTest {
         String createResponse = mockMvc.perform(post("/departments")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         long id = objectMapper.readTree(createResponse).get("id").asLong();
 

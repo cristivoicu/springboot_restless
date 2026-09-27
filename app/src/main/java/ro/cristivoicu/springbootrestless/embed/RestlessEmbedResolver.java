@@ -5,7 +5,6 @@ import jakarta.persistence.criteria.Root;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
 
@@ -28,9 +27,9 @@ import java.util.stream.Collectors;
  * <p>
  * {@link #NONE} is the default every {@code RestlessResourceHandler} is wired with until {@code
  * RestlessRegistrar} supplies the real, {@link ApplicationContext}-backed instance via {@code
- * init(...)} - a no-op, not a null, so {@code findOne()} never has to null-check it.
+ * init(...)} - a no-op, not a null, so {@code findOne()} never has to null-check it. Registered
+ * via {@code RestlessAutoConfiguration} (an {@code @Bean}, not component-scanned).
  */
-@Component
 public class RestlessEmbedResolver {
 
     public static final RestlessEmbedResolver NONE = new RestlessEmbedResolver(null);

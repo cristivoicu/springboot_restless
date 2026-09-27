@@ -29,4 +29,7 @@ public class Gizmo {
     private String name;
 
     private String code;
+
+    /** Boxed, nullable - the one comparable/numeric field this fixture needed to exercise the filter DSL's range operators (see {@code GizmoSearchDto}/{@code GizmoFilterTest}). */
+    private Integer quantity;
 }

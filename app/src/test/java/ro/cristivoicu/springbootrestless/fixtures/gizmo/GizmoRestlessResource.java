@@ -19,7 +19,7 @@ import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
  * independent of any specific example entity.
  */
 @Component
-@RestlessResource(basePath = "/gizmos")
+@RestlessResource(basePath = "/gizmos", allowAll = true)
 public class GizmoRestlessResource extends RestlessResourceHandler<Gizmo, Long> {
 
     private final CreateDataSource<Gizmo, Long, GizmoCreateModel> createDataSource;

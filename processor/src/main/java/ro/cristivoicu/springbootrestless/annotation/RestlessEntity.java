@@ -108,6 +108,14 @@ public @interface RestlessEntity {
 
     String version() default "";
 
+    /**
+     * Forwarded verbatim onto the generated {@code @RestlessResource(allowAll = ...)} - see its
+     * own javadoc. Defaults to {@code false}: an entity with no {@code authorizationGuard} set
+     * either fails fast at startup (the safe default) rather than silently registering wide-open
+     * routes. Set {@code true} only when that's genuinely the intent.
+     */
+    boolean allowAll() default false;
+
     RestlessOperation[] operations() default {
             RestlessOperation.CREATE, RestlessOperation.READ_ONE, RestlessOperation.READ_LIST,
             RestlessOperation.READ_PAGE, RestlessOperation.READ_PAGE_OVERVIEW, RestlessOperation.READ_PAGE_SELECT,

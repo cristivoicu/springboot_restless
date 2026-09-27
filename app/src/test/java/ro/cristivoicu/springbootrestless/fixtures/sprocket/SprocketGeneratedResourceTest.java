@@ -38,7 +38,7 @@ class SprocketGeneratedResourceTest {
         String createResponse = mockMvc.perform(post("/sprockets")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.name").value("Restless"))
                 .andReturn().getResponse().getContentAsString();
         long id = objectMapper.readTree(createResponse).get("id").asLong();
@@ -91,7 +91,7 @@ class SprocketGeneratedResourceTest {
         mockMvc.perform(post("/sprockets")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.description").value("No description provided"));
     }
 }

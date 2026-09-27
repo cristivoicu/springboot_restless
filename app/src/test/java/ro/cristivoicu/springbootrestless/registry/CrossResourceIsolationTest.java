@@ -41,7 +41,7 @@ class CrossResourceIsolationTest {
         String gadgetResponse = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(gadget)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         long gadgetId = objectMapper.readTree(gadgetResponse).get("id").asLong();
 
@@ -52,7 +52,7 @@ class CrossResourceIsolationTest {
         String gizmoResponse = mockMvc.perform(post("/gizmos")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(gizmo)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         long gizmoId = objectMapper.readTree(gizmoResponse).get("id").asLong();
 

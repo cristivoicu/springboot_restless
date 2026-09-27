@@ -38,7 +38,7 @@ class GizmoDefaultCudTest {
         String createResponse = mockMvc.perform(post("/gizmos")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.name").value("Research"))
                 .andReturn().getResponse().getContentAsString();
         long id = objectMapper.readTree(createResponse).get("id").asLong();
@@ -61,7 +61,7 @@ class GizmoDefaultCudTest {
         DefaultDeleteModel deleteModel = new DefaultDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(id)));
 
-        mockMvc.perform(delete("/gizmos")
+        mockMvc.perform(post("/gizmos/bulk-delete")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isNoContent());

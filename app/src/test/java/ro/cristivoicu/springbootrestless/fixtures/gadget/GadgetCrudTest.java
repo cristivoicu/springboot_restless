@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -34,14 +35,20 @@ class GadgetCrudTest {
         create.setLastName("Lovelace");
         create.setEmail("ada@example.com");
 
-        String createResponse = mockMvc.perform(post("/gadgets")
+        MvcResult createResult = mockMvc.perform(post("/gadgets")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.firstName").value("Ada"))
-                .andReturn().getResponse().getContentAsString();
+                .andReturn();
+        String createResponse = createResult.getResponse().getContentAsString();
 
         long id = objectMapper.readTree(createResponse).get("id").asLong();
+
+        // 201's Location header points at exactly where the new resource can be re-fetched -
+        // not just the right status code, the actual RFC 9110 §15.3.2 contract.
+        org.assertj.core.api.Assertions.assertThat(createResult.getResponse().getHeader("Location"))
+                .endsWith("/gadgets/" + id);
 
         mockMvc.perform(get("/gadgets/{id}", id))
                 .andExpect(status().isOk())
@@ -110,7 +117,7 @@ class GadgetCrudTest {
         GadgetDeleteModel deleteModel = new GadgetDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
-        mockMvc.perform(delete("/gadgets")
+        mockMvc.perform(post("/gadgets/bulk-delete")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isNoContent());
@@ -124,7 +131,7 @@ class GadgetCrudTest {
         GadgetDeleteModel deleteModel = new GadgetDeleteModel();
         deleteModel.setIds(java.util.List.of("not-a-number"));
 
-        mockMvc.perform(delete("/gadgets")
+        mockMvc.perform(post("/gadgets/bulk-delete")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isBadRequest());
@@ -139,7 +146,7 @@ class GadgetCrudTest {
         String response = mockMvc.perform(post("/gadgets")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
 
         return objectMapper.readTree(response).get("id").asLong();

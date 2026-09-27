@@ -37,13 +37,18 @@ class RestlessRegistrarFullRouteTest {
         create.setLastName("Perlman");
         create.setEmail("radia@example.com");
 
-        String createResponse = mockMvc.perform(post("/gadgets-dynamic")
+        org.springframework.test.web.servlet.MvcResult createResult = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.firstName").value("Radia"))
-                .andReturn().getResponse().getContentAsString();
+                .andReturn();
+        String createResponse = createResult.getResponse().getContentAsString();
         long id = objectMapper.readTree(createResponse).get("id").asLong();
+
+        // Same Location-header parity as GadgetCrudTest's hand-written baseline.
+        org.assertj.core.api.Assertions.assertThat(createResult.getResponse().getHeader("Location"))
+                .endsWith("/gadgets-dynamic/" + id);
 
         mockMvc.perform(get("/gadgets-dynamic/{id}", id))
                 .andExpect(status().isOk())
@@ -96,7 +101,7 @@ class RestlessRegistrarFullRouteTest {
         GadgetDeleteModel deleteModel = new GadgetDeleteModel();
         deleteModel.setIds(java.util.List.of(String.valueOf(first), String.valueOf(second)));
 
-        mockMvc.perform(delete("/gadgets-dynamic")
+        mockMvc.perform(post("/gadgets-dynamic/bulk-delete")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isNoContent());
@@ -114,7 +119,7 @@ class RestlessRegistrarFullRouteTest {
         String response = mockMvc.perform(post("/gadgets-dynamic")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
 
         return objectMapper.readTree(response).get("id").asLong();

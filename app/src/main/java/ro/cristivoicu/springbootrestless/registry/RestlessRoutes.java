@@ -41,7 +41,12 @@ public final class RestlessRoutes {
             new RouteDefinition("update", "/{id}", RequestMethod.PUT, AuthorizationGuard.Action.UPDATE),
             new RouteDefinition("updateBulk", "/bulk", RequestMethod.PUT, AuthorizationGuard.Action.UPDATE),
             new RouteDefinition("deleteById", "/{id}", RequestMethod.DELETE, AuthorizationGuard.Action.DELETE_ONE),
-            new RouteDefinition("deleteAll", "", RequestMethod.DELETE, AuthorizationGuard.Action.DELETE_ALL)
+            // POST, not DELETE-with-a-body: RFC 9110 gives a DELETE request body no defined
+            // semantics, and in practice proxies/CDNs/browser fetch() are known to drop it - a
+            // bulk operation that depends on its body arriving is exactly the wrong place for
+            // that. "/bulk-delete" (not just basePath, unlike deleteById's DELETE {id}) so it
+            // doesn't collide with POST {basePath} (create) / POST {basePath}/bulk (createBulk).
+            new RouteDefinition("deleteAll", "/bulk-delete", RequestMethod.POST, AuthorizationGuard.Action.DELETE_ALL)
     );
 
     private RestlessRoutes() {

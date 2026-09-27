@@ -12,19 +12,26 @@
     <artifactId>spring-boot-restless</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>spring-boot-restless</name>
-    <description>spring-boot-restless</description>
-    <url/>
+    <description>Annotation-driven REST CRUD for Spring Boot, built around DDD and volatility-based design.</description>
+    <url>https://github.com/cristivoicu/spring-boot-restless</url>
     <licenses>
-        <license/>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
     </licenses>
     <developers>
-        <developer/>
+        <developer>
+            <name>Cristian Voicu</name>
+            <email>mariancristianvoicu@gmail.com</email>
+        </developer>
     </developers>
     <scm>
-        <connection/>
-        <developerConnection/>
-        <tag/>
-        <url/>
+        <connection>scm:git:https://github.com/cristivoicu/spring-boot-restless.git</connection>
+        <developerConnection>scm:git:https://github.com/cristivoicu/spring-boot-restless.git</developerConnection>
+        <tag>HEAD</tag>
+        <url>https://github.com/cristivoicu/spring-boot-restless</url>
     </scm>
     <properties>
         <java.version>25</java.version>

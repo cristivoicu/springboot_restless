@@ -13,6 +13,7 @@ public class GizmoMapper implements Mapper<Gizmo, GizmoDto> {
         dto.setId(source.getId());
         dto.setName(source.getName());
         dto.setCode(source.getCode());
+        dto.setQuantity(source.getQuantity());
         return dto;
     }
 }

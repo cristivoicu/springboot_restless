@@ -19,9 +19,7 @@ import io.swagger.v3.oas.models.parameters.Parameter;
 import io.swagger.v3.oas.models.parameters.RequestBody;
 import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.responses.ApiResponses;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.ApplicationContext;
-import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springdoc.core.customizers.GlobalOpenApiCustomizer;
@@ -31,6 +29,7 @@ import ro.cristivoicu.springbootrestless.registry.RestlessRoutes;
 import ro.cristivoicu.springbootrestless.resource.ReadAction;
 import ro.cristivoicu.springbootrestless.resource.ResourceMetadata;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
+import ro.cristivoicu.springbootrestless.resource.WriteAction;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -55,10 +54,11 @@ import java.util.Set;
  * paths/schemas the base scan didn't already find - see {@link #putOperation} for the
  * don't-clobber-an-existing-entry guard.
  * <p>
- * {@code @ConditionalOnClass}, not a hard dependency: {@code app} compiles against springdoc as
- * an {@code optional} Maven dependency (see its {@code pom.xml}) specifically so this class can
- * exist, but a consumer with no springdoc on their own classpath gets no bean here at all, not a
- * {@code ClassNotFoundException} - see {@code app}'s {@code pom.xml} for the full reasoning.
+ * Registered via {@code RestlessAutoConfiguration}'s {@code @ConditionalOnClass(GlobalOpenApiCustomizer.class)}
+ * bean method, not a hard dependency: {@code app} compiles against springdoc as an {@code
+ * optional} Maven dependency (see its {@code pom.xml}) specifically so this class can exist, but
+ * a consumer with no springdoc on their own classpath gets no bean here at all, not a {@code
+ * ClassNotFoundException} - see {@code app}'s {@code pom.xml} for the full reasoning.
  * <p>
  * <b>Two formerly-known simplifications, now addressed:</b> {@code findPage}/{@code
  * findPageOverview}/{@code findPageSelect} each document their own projection's actual response
@@ -72,8 +72,6 @@ import java.util.Set;
  * can't tell OpenAPI itself "this operation only exists for version X" the way a path- or
  * query-parameter-based versioning scheme could.
  */
-@Component
-@ConditionalOnClass(GlobalOpenApiCustomizer.class)
 public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
 
     private final ApplicationContext applicationContext;
@@ -117,6 +115,9 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
 
         resource.getNamedViews().forEach((viewName, mapper) ->
                 addNamedViewRoute(openApi, metadata, tag, viewName, mapper));
+
+        resource.getCustomWriteActions().forEach((actionName, action) ->
+                addWriteActionRoute(openApi, metadata, tag, actionName, action));
 
         resource.getPatchDataSource().ifPresent(ignored -> addPatchRoute(openApi, metadata, tag, resource));
     }
@@ -236,6 +237,27 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
     private Class<?> viewResponseType(Mapper<?, ?> mapper) {
         Class<?>[] mapperArgs = org.springframework.core.GenericTypeResolver.resolveTypeArguments(mapper.getClass(), Mapper.class);
         return mapperArgs == null ? null : mapperArgs[1];
+    }
+
+    /**
+     * {@code "writeAction_" + actionName}, not {@code "action_" + actionName} ({@link
+     * #addCustomReadRoute}'s own prefix) - avoids an {@code operationId} collision in the
+     * generated document if a resource ever declares a read action and a write action sharing the
+     * same literal name (the two live in independent maps with no cross-check between them).
+     */
+    private void addWriteActionRoute(OpenAPI openApi, ResourceMetadata metadata, String tag, String actionName, WriteAction<?, ?, ?> action) {
+        String path = metadata.basePath() + "/{id}/actions/" + actionName;
+        Operation operation = new Operation()
+                .addTagsItem(tag)
+                .operationId(operationId("writeAction_" + actionName, metadata))
+                .summary("Write action \"" + actionName + "\" on " + tag + " by id");
+        operation.addParametersItem(idParameter(openApi, metadata.idType()));
+        operation.requestBody(jsonBody(refSchema(openApi, action.getRequestType()), true));
+        operation.responses(new ApiResponses()
+                .addApiResponse("200", jsonResponse(refSchema(openApi, action.getResponseType())))
+                .addApiResponse("404", new ApiResponse().description("Not found")));
+        applyVersion(operation, metadata.version());
+        putOperation(openApi, path, RequestMethod.POST, operation);
     }
 
     private void addPatchRoute(OpenAPI openApi, ResourceMetadata metadata, String tag, RestlessResourceHandler<?, ?> resource) {

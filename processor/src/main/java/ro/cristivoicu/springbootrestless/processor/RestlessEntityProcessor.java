@@ -132,8 +132,8 @@ public class RestlessEntityProcessor extends AbstractProcessor {
 
         writeResourceClass(packageName, entityName, idType, createModel, updateModel, searchDto, mapper,
                 repository, restlessEntity.basePath(), restlessEntity.version(), restlessEntity.operations(),
-                createEnabled, updateEnabled, createDataSource, readDataSource, updateDataSource,
-                deleteDataSource, authorizationGuard, patchDataSource, entityType);
+                restlessEntity.allowAll(), createEnabled, updateEnabled, createDataSource, readDataSource,
+                updateDataSource, deleteDataSource, authorizationGuard, patchDataSource, entityType);
     }
 
     /**
@@ -326,7 +326,8 @@ public class RestlessEntityProcessor extends AbstractProcessor {
     private void writeResourceClass(String packageName, String entityName, String idType,
                                      String createModel, String updateModel, String searchDto, String mapper,
                                      String repository, String basePath, String version,
-                                     RestlessOperation[] operations, boolean createEnabled, boolean updateEnabled,
+                                     RestlessOperation[] operations, boolean allowAll,
+                                     boolean createEnabled, boolean updateEnabled,
                                      VerbOverride createDataSource, VerbOverride readDataSource,
                                      VerbOverride updateDataSource, VerbOverride deleteDataSource,
                                      VerbOverride authorizationGuard, VerbOverride patchDataSource,
@@ -338,8 +339,8 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         // String.isBlank() (JDK, not a hand-rolled check) rather than a Spring/Apache utility -
         // this module deliberately carries no dependencies at all (see its pom.xml).
         String restlessResourceAttrs = !version.isBlank()
-                ? "basePath = \"%s\", version = \"%s\"".formatted(basePath, version)
-                : "basePath = \"%s\"".formatted(basePath);
+                ? "basePath = \"%s\", version = \"%s\", allowAll = %s".formatted(basePath, version, allowAll)
+                : "basePath = \"%s\", allowAll = %s".formatted(basePath, allowAll);
 
         StringBuilder extraParams = new StringBuilder();
         // create/update only get a field/constructor-param/init at all when their verb is

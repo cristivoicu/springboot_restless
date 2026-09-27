@@ -6,7 +6,6 @@ import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.convert.ConversionService;
-import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.Validator;
@@ -15,6 +14,7 @@ import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import ro.cristivoicu.springbootrestless.annotation.RestlessResource;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
+import ro.cristivoicu.springbootrestless.autoconfigure.RestlessProperties;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
 import ro.cristivoicu.springbootrestless.resource.ResourceMetadata;
@@ -31,9 +31,11 @@ import java.util.Set;
  * route on one resource. {@link SmartInitializingSingleton} (not a
  * {@code BeanDefinitionRegistryPostProcessor}, which runs before singletons exist and so can't
  * hold live bean instances; not {@code ApplicationListener<ContextRefreshedEvent>}, which can
- * fire more than once with parent/child contexts).
+ * fire more than once with parent/child contexts). Registered via {@code
+ * RestlessAutoConfiguration} (an {@code @Bean}, not component-scanned) - see its javadoc for why:
+ * a consumer no longer has to {@code @ComponentScan} this framework's own package to get this
+ * bean (or any other infrastructure bean this framework ships) into their context at all.
  */
-@Component
 public class RestlessRegistrar implements SmartInitializingSingleton {
 
     private final ApplicationContext applicationContext;
@@ -44,6 +46,7 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
     private final RestlessEmbedResolver embedResolver;
     private final PlatformTransactionManager transactionManager;
     private final RestlessAuthorizationMetrics metrics;
+    private final RestlessProperties properties;
 
     public RestlessRegistrar(ApplicationContext applicationContext,
                               RequestMappingHandlerMapping requestMappingHandlerMapping,
@@ -52,7 +55,8 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
                               Validator validator,
                               RestlessEmbedResolver embedResolver,
                               PlatformTransactionManager transactionManager,
-                              ObjectProvider<RestlessAuthorizationMetrics> metricsProvider) {
+                              ObjectProvider<RestlessAuthorizationMetrics> metricsProvider,
+                              RestlessProperties properties) {
         this.applicationContext = applicationContext;
         this.requestMappingHandlerMapping = requestMappingHandlerMapping;
         this.objectMapper = objectMapper;
@@ -65,6 +69,7 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         // Actuator/Micrometer on the consumer's classpath), getIfAvailable() returns null and
         // every resource gets the shared no-op NONE instance instead.
         this.metrics = metricsProvider.getIfAvailable(() -> RestlessAuthorizationMetrics.NONE);
+        this.properties = properties == null ? new RestlessProperties() : properties;
     }
 
     @Override
@@ -90,7 +95,23 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         String version = annotation.version();
 
         ResourceMetadata metadata = resource.resolveMetadata(basePath, version);
-        resource.init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics);
+        resource.init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics,
+                properties.getList().getMaxSize());
+
+        // Fail-fast, not fail-open: a resource with no real AuthorizationGuard (still the
+        // default-permissive AuthorizationGuard.allowAll()) never gets registered at all unless
+        // @RestlessResource(allowAll = true) says that's genuinely intended - see both javadocs.
+        // Deliberately after init() (metadata/basePath already resolved, so the message below can
+        // name the resource precisely) but before any route is registered - a startup failure,
+        // never a route that silently answered every request wide open.
+        if (!resource.hasExplicitAuthorizationGuard() && !annotation.allowAll()) {
+            throw new IllegalStateException(
+                    "@RestlessResource on " + bean.getClass().getName() + " (basePath '" + basePath
+                            + "') has no AuthorizationGuard override and allowAll() is false - "
+                            + "override getAuthorizationGuard() (or set authorizationGuard on "
+                            + "@RestlessEntity), or set allowAll = true if this resource is "
+                            + "genuinely meant to be unauthorized.");
+        }
 
         // getEnabledOperations() defaults to ALL_OPERATIONS (today's behavior, unchanged) -
         // overriding it to a subset is how a resource opts out of the routes it doesn't want.
@@ -109,6 +130,12 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         // of a filtered collection.
         resource.getNamedViews().keySet().forEach(viewName ->
                 registerRoute(resource, basePath + "/{id}/" + viewName, RequestMethod.GET, "namedView", version));
+
+        // One extra route per named WriteAction, all sharing the single writeAction Method - same
+        // no-op-by-default shape as custom read actions/named views above, POST + id-scoped like
+        // an update rather than a filtered collection like customRead.
+        resource.getCustomWriteActions().keySet().forEach(actionName ->
+                registerRoute(resource, basePath + "/{id}/actions/" + actionName, RequestMethod.POST, "writeAction", version));
 
         // PATCH: entirely opt-in (see getPatchDataSource()'s own javadoc) - empty by default, so
         // this is a no-op for most resources, same spirit as custom read actions above.

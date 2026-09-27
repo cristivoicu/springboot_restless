@@ -49,7 +49,7 @@ class CrossResourceIsolationTest extends CerbosBackedTest {
         String employeeResponse = mockMvc.perform(post("/employees")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(employee)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         long employeeId = objectMapper.readTree(employeeResponse).get("id").asLong();
 
@@ -60,7 +60,7 @@ class CrossResourceIsolationTest extends CerbosBackedTest {
         String departmentResponse = mockMvc.perform(post("/departments")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(department)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         long departmentId = objectMapper.readTree(departmentResponse).get("id").asLong();
 

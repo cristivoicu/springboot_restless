@@ -45,4 +45,20 @@ public @interface RestlessResource {
      * real route.
      */
     String version() default "";
+
+    /**
+     * Explicit, auditable opt-out of authorization entirely. {@code RestlessRegistrar} refuses to
+     * register a resource that has no {@link ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard}
+     * override (i.e. still {@code AuthorizationGuard.allowAll()}) unless this is {@code true} —
+     * a fail-fast startup check, not a runtime behavior change: a resource that already overrides
+     * {@code getAuthorizationGuard()} is completely unaffected by this attribute either way.
+     * <p>
+     * Defaults to {@code false} specifically so forgetting to wire a guard on a resource that was
+     * meant to have one is a startup-time {@code IllegalStateException} naming the resource, not
+     * a silently wide-open route discovered later. Set {@code true} only for a resource that is
+     * genuinely meant to be unauthenticated/unauthorized on purpose (a public read-only lookup
+     * table, a demo fixture) — the annotation then documents that decision at the call site
+     * instead of leaving it indistinguishable from "nobody got around to it yet".
+     */
+    boolean allowAll() default false;
 }

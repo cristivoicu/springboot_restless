@@ -42,7 +42,7 @@ class DoohickeyGeneratedDefaultsTest {
         String createResponse = mockMvc.perform(post("/doohickeys")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.name").value("Sonic screwdriver"))
                 .andReturn().getResponse().getContentAsString();
 
@@ -69,7 +69,7 @@ class DoohickeyGeneratedDefaultsTest {
         // (not RestlessResourceHandler's default-permissive AuthorizationGuard.allowAll()) proves
         // authorizationGuard = DoohickeyAuthorizationGuard.class on @RestlessEntity actually
         // wired this specific bean into the generated resource.
-        mockMvc.perform(delete("/doohickeys")
+        mockMvc.perform(post("/doohickeys/bulk-delete")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(deleteModel)))
                 .andExpect(status().isForbidden());
@@ -83,7 +83,7 @@ class DoohickeyGeneratedDefaultsTest {
         mockMvc.perform(post("/doohickeys")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(create)))
-                .andExpect(status().isOk());
+                .andExpect(status().isCreated());
 
         mockMvc.perform(get("/doohickeys"))
                 .andExpect(status().isOk())

@@ -75,6 +75,9 @@ public class EmployeeMapper implements Mapper<Employee, EmployeeDto> {
         dto.setInitials(initialsOf(source));
         dto.setSalary(source.getSalary());
         dto.setDepartmentCode(source.getDepartmentCode());
+        dto.setJobTitle(source.getJobTitle());
+        dto.setCertifications(source.getCertifications());
+        dto.setAchievements(source.getAchievements());
         return dto;
     }
 

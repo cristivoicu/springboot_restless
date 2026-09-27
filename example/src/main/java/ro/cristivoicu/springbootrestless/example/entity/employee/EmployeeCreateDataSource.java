@@ -18,6 +18,7 @@ public class EmployeeCreateDataSource extends CreateDataSource<Employee, Long, E
         employee.setEmail(createDto.getEmail());
         employee.setSalary(createDto.getSalary());
         employee.setDepartmentCode(createDto.getDepartmentCode());
+        employee.setJobTitle(createDto.getJobTitle() != null ? createDto.getJobTitle() : JobTitle.ASSOCIATE);
         return specificationRepository.save(employee);
     }
 }
