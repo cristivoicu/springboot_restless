@@ -2,10 +2,7 @@
 
 **Annotation-driven, DDD-friendly REST CRUD for Spring Boot — generate the boilerplate, hand-write the authorization.**
 
-<!-- Build badge is intentionally non-claiming (no real CI run to point at yet from this checkout).
-     Once pushed to GitHub, replace it with the real Actions status badge:
-     [![CI](https://github.com/<org>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/<repo>/actions/workflows/ci.yml) -->
-[![Build](https://img.shields.io/badge/build-Maven%20multi--module-blue?logo=apachemaven&logoColor=white)](.github/workflows/ci.yml)
+[![CI](https://github.com/cristivoicu/springboot_restless/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cristivoicu/springboot_restless/actions/workflows/ci.yml)
 [![Maven Central](https://img.shields.io/badge/Maven%20Central-0.0.1--SNAPSHOT-orange?logo=apachemaven&logoColor=white)](https://central.sonatype.com/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk&logoColor=white)](https://openjdk.org/)
@@ -102,8 +99,8 @@ The project isn't published to Maven Central yet (still `0.0.1-SNAPSHOT` — see
 above). Build and install it into your local repository first:
 
 ```bash
-git clone <repository-url>
-cd spring-boot-restless
+git clone https://github.com/cristivoicu/springboot_restless.git
+cd springboot_restless
 ./mvnw install
 ```
 
