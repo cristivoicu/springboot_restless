@@ -170,3 +170,7 @@ buildNumber.properties
 .classpath
 
 # End of https://www.toptal.com/developers/gitignore/api/java,maven,intellij+all
+
+### Local tool config (machine/user-specific, not meant to be shared) ###
+.mcp.json
+.claude/settings.local.json

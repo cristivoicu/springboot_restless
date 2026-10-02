@@ -12,8 +12,7 @@ means for API stability.
 Please **do not** open a public GitHub issue for a security vulnerability.
 
 Instead, report it privately via [GitHub's private vulnerability reporting]
-(Security tab -> "Report a vulnerability" on this repository), or email the
-address listed in the root `pom.xml`'s `<developers>` section. Include:
+(Security tab -> "Report a vulnerability" on this repository). Include:
 
 - A description of the vulnerability and its impact.
 - Steps to reproduce (a minimal `@RestlessResource`/`@RestlessEntity` repro is

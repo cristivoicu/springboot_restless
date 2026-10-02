@@ -3,6 +3,7 @@ package ro.cristivoicu.springbootrestless.embed;
 import jakarta.persistence.criteria.Path;
 import jakarta.persistence.criteria.Root;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.util.StringUtils;
@@ -30,15 +31,12 @@ import java.util.stream.Collectors;
  * init(...)} - a no-op, not a null, so {@code findOne()} never has to null-check it. Registered
  * via {@code RestlessAutoConfiguration} (an {@code @Bean}, not component-scanned).
  */
+@RequiredArgsConstructor
 public class RestlessEmbedResolver {
 
     public static final RestlessEmbedResolver NONE = new RestlessEmbedResolver(null);
 
     private final ApplicationContext applicationContext;
-
-    public RestlessEmbedResolver(ApplicationContext applicationContext) {
-        this.applicationContext = applicationContext;
-    }
 
     /**
      * {@code dto}: the already-mapped response object to populate in place. {@code sourceEntity}:

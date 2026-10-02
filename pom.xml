@@ -13,6 +13,14 @@
         builds first and "app" depends on it. "example" is a standalone consumer of "app" (the
         library) and "processor", demonstrating real usage under its own package.</description>
 
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
     <modules>
         <module>processor</module>
         <module>app</module>

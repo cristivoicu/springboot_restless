@@ -10,6 +10,12 @@ before 1.0.
 
 ### Added
 
+- **Repo made publish-ready.** `README.md` restructured into a concise, template-shaped reference
+  (badges, requirements, installation, configuration, quick start, feature guide); the previous
+  full tutorial-depth content (every mechanism, sequence diagrams, the three-tier decision
+  framework, worked examples) moved to `docs/DEEP_DIVE.md` instead of competing with it.
+  GitHub issue templates (`bug_report.md`/`feature_request.md`) and a `PULL_REQUEST_TEMPLATE.md`
+  added under `.github/`. Root `pom.xml` now declares a `<licenses>` block (Apache-2.0).
 - **Filter DSL.** `FilterOperator` + an extended `RestlessResourceHandler#getSpecification`
   reflection loop (`app`): a `SearchDto` field named `ageGte` now filters
   `age >= value` (and `Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In` suffixes similarly),
@@ -91,7 +97,13 @@ before 1.0.
 
 ### Fixed
 
-- Nothing yet tracked separately from the above.
+- `SECURITY.md` pointed at a `<developers>` section in the root `pom.xml` that never existed -
+  dead end for anyone trying to report a vulnerability privately. Now relies solely on GitHub's
+  private vulnerability reporting (Security tab).
+- An in-flight `@RequiredArgsConstructor` change to `RestlessRegistrar` would have dropped its
+  `ObjectProvider<RestlessAuthorizationMetrics>` fallback (breaking resources with no
+  Actuator/Micrometer on the classpath) and its null-default for `RestlessProperties` - caught
+  before it was ever committed; `RestlessRegistrar` keeps its explicit constructor.
 
 ## Before this changelog existed
 
