@@ -8,7 +8,7 @@
 [![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-brightgreen?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 
-> **Status:** pre-1.0 (`0.0.1-SNAPSHOT`). Not yet published to Maven Central — build and install locally (see [Installation](#installation)). See [VERSIONING.md](VERSIONING.md) for what stability guarantees apply before `1.0`.
+> **Status:** pre-1.0 (`0.0.1-SNAPSHOT`). Not yet published to Maven Central — build and install locally (see [Installation](#installation)). See [Versioning and API Stability](#versioning-and-api-stability) for what stability guarantees apply before `1.0`.
 >
 > **Looking for more depth?** This README is a concise reference. For a full tutorial-depth
 > walkthrough of every mechanism — with sequence diagrams, the three-tier decision framework, and
@@ -32,7 +32,13 @@
 - [Quick Start](#quick-start)
 - [Feature Guide](#feature-guide)
 - [Advanced Usage](#advanced-usage)
+- [Design Rationale](#design-rationale)
+- [Roadmap](#roadmap)
+- [Versioning and API Stability](#versioning-and-api-stability)
 - [Contributing](#contributing)
+- [Code of Conduct](#code-of-conduct)
+- [Security Policy](#security-policy)
+- [Changelog](#changelog)
 - [License](#license)
 
 ## Overview
@@ -595,19 +601,407 @@ For the full, worked, runnable version of every capability above — including a
 Keycloak authorization demo — see the [`example`](example/README.md) module and
 [`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md).
 
+## Design Rationale
+
+Why three specific mechanisms above are shaped the way they are — the alternatives considered and
+rejected, not just the shape that shipped.
+
+### Filter DSL: operator suffixes, not a query language
+
+The gap: `getSpecification()` only ever ANDed together `cb.equal(...)` for non-null `SearchDto`
+fields — no ranges, no `LIKE`, no `IN`. Three designs were considered:
+
+- **A. An RSQL/FIQL query string** (`?filter=age=ge=30;name==Jo*`, GitHub/Atlassian-style). One
+  query param, arbitrarily nested boolean logic — but a real grammar to parse *and secure*: every
+  operator/property combination needs validating against the entity's actual fields and types
+  before it reaches a `CriteriaBuilder` call, or a client can probe for fields the `SearchDto`
+  never declared. Heavier to implement and document than the common case justifies.
+- **B. Structured operator-suffix query params** (`ageGte`/`nameLike`/`statusIn`, what shipped).
+  Extends the existing "reflect over `SearchDto`'s declared fields" mechanism instead of replacing
+  it — the existing whitelist-by-declaration security property is preserved for free, every query
+  param is self-documenting in the generated OpenAPI schema, and it's the same reflection loop
+  `getSpecification` already had, with a switch on suffix instead of always `equal`. No boolean
+  `OR`/arbitrary nesting, but that covers the large majority of real filter needs (ranges +
+  partial match + membership) — the same 80/20 argument the framework already makes for
+  equality-match defaults.
+- **C. `RestlessSpecifications`, a fluent builder for the hand-written escape hatch itself.** Not a
+  query-string DSL at all — shipped alongside B, since it's nearly free and makes every
+  hand-written `getSpecification()` override or custom read action shorter to write.
+
+**Shipped: B and C together; A only if a real consumer asks for boolean OR/nesting** — a strictly
+bigger, riskier surface for a need B doesn't cover. See `GizmoFilterTest`/`GizmoSearchDto` for the
+proof, and `GadgetRestlessResource`'s `getSpecification()`/`byEmailDomain` action for `C` used as a
+drop-in replacement for a hand-written lambda.
+
+### Write commands: mirror `ReadAction`, don't reinvent
+
+The gap this closed: a named-action escape hatch already existed for **reads**
+(`ReadAction`/`getCustomReadActions()`), but none for **writes** — every mutation was CRUD-shaped.
+There was no way to express `POST /employees/{id}/promote` without a hand-written
+`@RestController` outside the framework entirely, forfeiting routing/error-contract/OpenAPI parity
+with everything else. The DDD argument: an anemic model + CRUD is fine for a genuinely simple
+service, and becomes an anti-pattern the moment a bounded context has real, ever-changing business
+rules — a client sending `{"status": "PROMOTED"}` via `update()` can express any transition,
+including illegal ones, because full-replace `PUT` has no vocabulary for "this is only valid from
+these prior states."
+
+`WriteAction<E, Req, Resp>` deliberately mirrors `ReadAction`'s shape (same "one named extra route,
+one shared dispatch method" idiom) so an entity author who's already used
+`getCustomReadActions()` needs to learn nothing new — see
+[Tutorial: write commands](#feature-guide) above for the shipped shape.
+
+**Bulk vs. single-item**, decided but not yet built: a bulk command (`POST
+/employees/actions/give-raise` with a list of ids + a percentage) is a legitimate second shape,
+structurally closer to `deleteAll`'s fail-fast-before-mutating pattern than to the single-entity
+`WriteAction`. Recommended sequencing was single-entity first (covers the large majority of real
+"commands"), with `BulkWriteAction<E, Req, Resp>` as a follow-up reusing `inTransaction`'s
+all-or-nothing wrapping — see [Roadmap](#roadmap).
+
+**What this doesn't try to solve**: domain events (a command's natural companion is "and then
+publish `EmployeePromoted`" — the dispatch point right after `WriteAction#execute` returns
+successfully, still inside the transaction, is exactly where an `ApplicationEventPublisher`/
+transactional-outbox write would go, worth designing for even before it's built) and compile-time
+(`@RestlessEntity`) support (prove the shape hand-wired first, same path custom read actions
+themselves took).
+
+### Keyset (cursor) pagination — proposed, not implemented
+
+`findPage`/`findPageOverview`/`findPageSelect` all use offset pagination today (`LIMIT size OFFSET
+page*size`), which has two well-known problems at this framework's own target scale (a table past
+a few hundred thousand rows): deep pages get slow (`OFFSET 100000` still walks and discards 100,000
+rows — `O(offset)` per request, not `O(size)`), and pages shift under concurrent writes (a row
+deleted between two page fetches can make the client skip or double-see a row).
+
+Keyset pagination fixes both: the client sends "give me the next page *after* this specific row,"
+encoded as that row's own sort-key values, and the database does an indexed range scan (`WHERE
+(sortkey) > (lastSeenValue)`) — `O(size)` regardless of depth, stable under concurrent
+inserts/deletes before the cursor position. This framework is unusually well positioned for it:
+`AbstractSearchDto#getPageable()` already defaults to `Sort.by(ASC, "id")` when no `sort` param is
+sent, so **every existing route already sorts by a unique column by default** — keyset pagination
+*requires* a unique tie-breaker (otherwise "the row after this one" is ambiguous when several rows
+share sort-key values), which most frameworks retrofitting this have to bolt on and this one
+already has, just needs to become *required* rather than *incidental* in cursor mode.
+
+Recommended shape, if/when built: a new `CursorPageableResponse<B>` envelope (`body` +
+`nextCursor` + `hasMore` — deliberately **no** `totalElements`/`totalPages`, since computing those
+needs the same expensive `COUNT(*)`/full scan cursor pagination exists to avoid), opted into via a
+`cursor=` query param on the *existing* `/page` routes rather than a new route (no cursor param ->
+today's offset behavior, unchanged; a `cursor` param present -> keyset mode — same
+`AuthorizationGuard.Action.READ_PAGE`, same filter/scope composition, cursor mode only changes how
+the `Pageable`-equivalent is built and how the result is packaged). The actual seek predicate for a
+multi-column sort is a lexicographic "greater than" over a tuple (`lastName > :lastName OR
+(lastName = :lastName AND id > :id)`), a genuinely reusable, entity-agnostic ~40-line utility. The
+real trade-off worth knowing up front: no "jump to page 47" UX — keyset pagination is inherently
+sequential (next/previous only), the right fit for infinite-scroll/API-to-API consumption, not a
+UI with numbered page links, which is exactly why it's designed as additive (`cursor=`) rather than
+a replacement for offset paging.
+
+## Roadmap
+
+Tier 0 (adoptability) and Tier 1 (standards correctness) are done — see [Changelog](#changelog).
+This tracks what's next, roughly in recommended build order. Nothing here is scheduled; it's a
+priority-ordered backlog with design notes, not a commitment.
+
+**Next up:**
+
+1. **[Write commands](#write-commands)** — ✅ done (hand-wired tier).
+   `@RestlessEntity`/annotation-processor support remains open — see
+   [Design Rationale](#design-rationale)'s "what this doesn't try to solve" note.
+2. **[Filter DSL](#filter-dsl)** — ✅ done. Operator-suffix convention over the existing
+   `SearchDto` reflection loop, plus `RestlessSpecifications` — see
+   [Design Rationale](#design-rationale) for why this shape won over an RSQL query string.
+3. **[Keyset pagination](#design-rationale)** — offset pagination degrades at depth and shifts
+   under concurrent writes; adds an opt-in `cursor=` mode alongside (not replacing) today's
+   `page=`/`size=`. Independent of the above two; safe to build in parallel.
+
+**Also worth doing, smaller:**
+
+- **Idempotency keys** on `POST` (`Idempotency-Key` header, request-fingerprint-keyed dedupe
+  table) — pairs naturally with write commands, since a non-idempotent command is exactly where a
+  client most wants a safe-retry story.
+- **Domain events / transactional outbox** — the natural companion to write commands (see
+  [Design Rationale](#design-rationale)'s "what this doesn't try to solve"). Design the publish
+  hook when write commands ship even if the actual publisher wiring comes later.
+- **GraalVM native-image support** — `RestlessRegistrar`'s runtime `registerMapping` and every
+  reflection-based default (`Default*DataSource`, the generated `Mapper`, `getSpecification`) are
+  invisible to native-image's static analysis without hand-written `RuntimeHints`. Real but
+  bounded work; low priority unless a consumer actually asks for it.
+
+**Deliberately not scheduled** (would need a decision only the maintainer can make):
+
+- **Maven Central publishing** — needs Sonatype/GPG credentials.
+- **Kotlin support, GraphQL adapter, WebFlux port, OPA/Cedar guard backends, a conformance TCK** —
+  each is a multi-week effort that would roughly double the surface area this project has to
+  maintain. Worth reconsidering if and when a concrete consumer asks for one specifically, not
+  speculatively.
+
+## Versioning and API Stability
+
+`spring-boot-restless` is pre-1.0 (every module currently ships as `0.0.1-SNAPSHOT`). This section
+says, honestly, what that means for anyone depending on it today: what's stable enough to build
+on, what's still free to change shape, and what to expect once 1.0 actually ships.
+
+**Before 1.0:** no compatibility guarantee exists yet across any release. A `0.0.1-SNAPSHOT` build
+today may not be source- or binary-compatible with the next one. That said, churn is concentrated
+in specific places (below) — most of the framework's public surface has been stable for a while in
+practice, just not yet under a stated promise.
+
+**What's intended to be the stable surface once 1.0 ships** — the extension points an entity
+author or a consuming application actually writes code against, where compatibility will be
+prioritized first:
+
+- `RestlessResourceHandler<E, K>` and its `get*DataSource()`/`getAuthorizationGuard()`/
+  `getSpecification()`/`getCustomReadActions()`/`getEnabledOperations()` extension points.
+- `AuthorizationGuard<E>` and its three hook points (`preCheck`/`scope`/`canAccess`).
+- The `@Restless*` annotation set: `@RestlessEntity`, `@RestlessResource`, `@RestlessEmbed`,
+  `@RestlessMapperExclude`, `@CerbosHiddenField`.
+- The `*DataSource` base classes (`CreateDataSource`, `ReadDataSource`, `UpdateDataSource`,
+  `DeleteDataSource`, `PatchDataSource`) and their `Default*DataSource` implementations.
+- `Mapper<E, D>`, `SearchDto`/`AbstractSearchDto`, `SoftDeletable`, `AbstractAuditableEntity`.
+- `CerbosAuthorizationGuard<E>`, `CerbosResourceAttributesMapper<E>`, `CerbosFieldMasker`.
+
+**What's internal, and still expected to change shape:**
+
+- `RestlessRegistrar`'s internals (route-registration mechanics, constructor parameter order).
+- `ResourceMetadata`'s exact field list and constructor arity — already grown twice (per-projection
+  response types, API version) and may again.
+- `RestlessOpenApiCustomizer`'s internals (a best-effort documentation generator, not a contract
+  any code should depend on beyond "produces a valid OpenAPI document").
+- Anything under a `fixtures`/test-only package in any module.
+
+**After 1.0:** standard semver. A breaking change to anything in the stable-surface list above
+ships only in a new major version, with a changelog entry naming exactly what broke and why. A
+minor version may add new optional attributes/methods (with defaults, so existing implementations
+keep compiling) but never removes or repurposes an existing one. A patch version is bug fixes only.
+
 ## Contributing
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull
-request, and note that this project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). In
-short:
+Thanks for considering a contribution. This is a small, opinionated framework with a lot of design
+reasoning baked into its javadoc — reading a class's javadoc before changing it will usually save
+you a round-trip.
 
-1. Fork the repository and create a feature branch off `main`.
-2. Run `./mvnw install` and `./mvnw test` locally before submitting (Docker must be running — a
-   few test classes start a real Cerbos PDP via Testcontainers).
-3. Keep changes scoped and covered by tests; update `CHANGELOG.md` for any user-facing change.
-4. Open a pull request describing the change and its motivation.
+**Before you start:** for anything beyond a small fix (a typo, an obvious bug), please open an
+issue first describing what you want to change and why. This project has explicit, documented
+design boundaries (see [Overview](#overview) above, [`docs/DEEP_DIVE.md`'s Scope section](docs/DEEP_DIVE.md#scope),
+and [Versioning and API Stability](#versioning-and-api-stability)) — a PR that crosses one of them
+without prior discussion is likely to be declined even if the code itself is good.
 
-See [SECURITY.md](SECURITY.md) to report a vulnerability privately rather than via a public issue.
+**Development setup:**
+
+- **Java 25** and **Maven 3.9+** (`./mvnw` is included, no local Maven install required).
+- **Docker** and **Docker Compose**, only for the `cerbos` module's Testcontainers-backed tests and
+  `example`'s Cerbos-backed test suite (every `EmployeeAuthorizationGuardTest`-style test starts a
+  real Cerbos PDP container). Everything else runs against plain H2, no Docker needed.
+
+```bash
+./mvnw test              # whole reactor
+./mvnw -pl app test       # one module
+```
+
+**Using Claude Code on this repo:** [`.claude/skills/spring-boot-restless/`](.claude/skills/spring-boot-restless/)
+is an Agent Skill that teaches Claude Code this framework's conventions — the three-tier decision
+framework for adding an entity, authorization guard/Cerbos wiring, write commands, bulk operations,
+and the filter DSL. It loads automatically when relevant while working in this repo. Copy the whole
+directory into a consumer project's own `.claude/skills/` to get the same assistance there.
+
+**Module map:** see [`docs/DEEP_DIVE.md`'s Modules section](docs/DEEP_DIVE.md#modules) for the
+full picture — in short, `processor` (compile-time codegen), `app` (the framework), `cerbos`
+(optional Cerbos-backed auth), `example` (a realistic consumer app, also this project's end-to-end
+test bed).
+
+**Code style:**
+
+- Match the surrounding code's comment density and idiom — this codebase explains *why*, not just
+  *what*, in javadoc; a new class with none at all reads as unfinished here.
+- No new hand-written boilerplate where a `Default*` class or the annotation processor could
+  generate it — if you're writing something every entity would need, it probably belongs in
+  `app`, not in `example`.
+- Every behavior change needs a test. `app`'s own fixtures (`Gadget`/`Gizmo`/`Sprocket`/
+  `Doohickey`/...) exist so the framework can be tested in isolation, without `example` — prefer
+  adding to those unless the change is specifically about realistic, business-named usage.
+
+**Commit messages / PRs:**
+
+- Keep commits focused; explain *why* in the body when the change isn't self-evident from the
+  diff.
+- Run `./mvnw test` for the whole reactor before opening a PR (or note which modules you couldn't
+  run, e.g. "no Docker available locally").
+- Update the relevant module's tests and, if user-facing, this README/`example/README.md` in the
+  same PR — a behavior change without a doc update is treated as incomplete.
+
+**Reporting bugs vs. security issues:** security vulnerabilities go through
+[Security Policy](#security-policy) below, not a public issue.
+
+## Code of Conduct
+
+Adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
+
+**Our Pledge:** we as members, contributors, and leaders pledge to make participation in our
+community a harassment-free experience for everyone, regardless of age, body size, visible or
+invisible disability, ethnicity, sex characteristics, gender identity and expression, level of
+experience, education, socio-economic status, nationality, personal appearance, race, religion, or
+sexual identity and orientation.
+
+**Our Standards** — examples of behavior that contributes to a positive environment: demonstrating
+empathy and kindness toward other people; being respectful of differing opinions, viewpoints, and
+experiences; giving and gracefully accepting constructive feedback; accepting responsibility and
+apologizing for mistakes, and learning from them.
+
+Examples of unacceptable behavior: the use of sexualized language or imagery, and sexual attention
+of any kind; trolling, insulting or derogatory comments, and personal or political attacks; public
+or private harassment; publishing others' private information without explicit permission.
+
+**Enforcement Responsibilities:** project maintainers are responsible for clarifying and enforcing
+standards of acceptable behavior and will take appropriate and fair corrective action in response
+to any behavior deemed inappropriate, threatening, offensive, or harmful.
+
+**Scope:** this Code of Conduct applies within all community spaces (issues, pull requests,
+discussions) and when an individual is officially representing the project in public spaces.
+
+**Enforcement:** instances of abusive, harassing, or otherwise unacceptable behavior may be
+reported to the project maintainer via a GitHub issue marked confidential. All complaints will be
+reviewed and investigated promptly and fairly.
+
+## Security Policy
+
+**Supported Versions:** `spring-boot-restless` is pre-1.0 (`0.0.1-SNAPSHOT`) and under active
+development — only the latest commit on `main` is supported. There is no backport policy yet; see
+[Versioning and API Stability](#versioning-and-api-stability) above for what "pre-1.0" means for
+API stability.
+
+**Reporting a Vulnerability:** please **do not** open a public GitHub issue for a security
+vulnerability. Instead, report it privately via GitHub's private vulnerability reporting (Security
+tab -> "Report a vulnerability" on this repository). Include:
+
+- A description of the vulnerability and its impact.
+- Steps to reproduce (a minimal `@RestlessResource`/`@RestlessEntity` repro is ideal, given how
+  much of this framework's surface is annotation-driven).
+- Which module (`app`, `cerbos`, `processor`, ...) and version/commit are affected.
+
+You should receive an acknowledgement within a few days. This is a single-maintainer project run
+outside of paid time, so response time may vary — please be patient, and thank you for reporting
+responsibly.
+
+**Scope** — things that count as a security issue here:
+
+- Authorization bypass in `AuthorizationGuard`'s three hook points (`preCheck`/`scope`/
+  `canAccess`), `RestlessRegistrar`'s startup fail-fast-on-no-guard check, or the Cerbos-backed
+  guard/field-masker in the `cerbos` module.
+- Mass-assignment / unintended field exposure through the reflective `Default*DataSource` classes
+  or the reflective default `Mapper` the annotation processor can generate.
+- Anything that lets one `@RestlessResource` read/write another's data (cross-resource isolation).
+- Injection via the reflection-driven default search filter (`getSpecification`) or
+  `@RestlessEmbed` resolution.
+
+Things that are **out of scope** (report as an ordinary bug/issue instead): denial-of-service via
+an intentionally pathological request shape against a demo/example app (`example` module) not
+meant for production use as-is; findings that require modifying policy YAML, application
+properties, or Java code you control to reach.
+
+## Changelog
+
+All notable changes to this project are documented here. The format is loosely based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project doesn't follow SemVer yet
+(still `0.0.1-SNAPSHOT`, pre-1.0) — see [Versioning and API Stability](#versioning-and-api-stability)
+above for what stability guarantees actually apply before 1.0.
+
+### [Unreleased]
+
+**Added**
+
+- **Repo documentation consolidated.** Every standalone governance/meta doc (`ROADMAP.md`,
+  `VERSIONING.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, this changelog) and the
+  three `docs/design/*.md` design-rationale docs are now sections of this README instead of
+  separate files — fewer files/folders to navigate for a first-time visitor. `docs/DEEP_DIVE.md`
+  (the full tutorial-depth walkthrough) is unaffected.
+- **Claude Code Agent Skill.** `.claude/skills/spring-boot-restless/` teaches Claude Code this
+  framework's conventions - the three-tier entity decision framework, authorization/Cerbos wiring,
+  write commands, bulk operations, and the filter DSL - split into a concise `SKILL.md` plus
+  on-demand `reference/*.md` files. Loads automatically while working in this repo; copy the
+  directory into a consumer project's own `.claude/skills/` for the same assistance there.
+- **Repo made publish-ready.** `README.md` restructured into a concise, template-shaped reference
+  (badges, requirements, installation, configuration, quick start, feature guide); the previous
+  full tutorial-depth content (every mechanism, sequence diagrams, the three-tier decision
+  framework, worked examples) moved to `docs/DEEP_DIVE.md` instead of competing with it.
+  GitHub issue templates (`bug_report.md`/`feature_request.md`) and a `PULL_REQUEST_TEMPLATE.md`
+  added under `.github/`. Root `pom.xml` now declares a `<licenses>` block (Apache-2.0).
+- **Filter DSL.** `FilterOperator` + an extended `RestlessResourceHandler#getSpecification`
+  reflection loop (`app`): a `SearchDto` field named `ageGte` now filters `age >= value` (and
+  `Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In` suffixes similarly), reflected over the same way a plain field
+  already was — equality-only filtering was the gap, this is additive, not a rewrite. Wire format
+  is camelCase (`?ageGte=30`), matching the Java field name exactly. Also new:
+  `RestlessSpecifications`, a small fluent builder for hand-written `Specification` escape
+  hatches, proven as a genuine drop-in by refactoring `GadgetRestlessResource`'s own hand-written
+  filter and `byEmailDomain` custom read action onto it (all pre-existing Gadget tests pass
+  unchanged). See [Design Rationale](#design-rationale).
+- **Write commands.** `WriteAction<E, Req, Resp>` / `getCustomWriteActions()` (`app`), mirroring
+  the existing `ReadAction`/`getCustomReadActions()` mechanism: a named, intent-carrying mutation
+  (`POST {basePath}/{id}/actions/{name}`) beyond the fixed create/update/patch/delete verbs, for a
+  transition a full-replace `PUT` has no vocabulary to guard (illegal-state prevention,
+  multi-step domain logic). Runs inside a real transaction (load + guard-check + `execute`),
+  documented automatically by `RestlessOpenApiCustomizer`. New
+  `AuthorizationGuard.Action.WRITE_ACTION` enum value (additive), and `CerbosActionNaming` now
+  forwards a write action's own name to the policy (`cerbos` module) the same way it already did
+  for named read actions/views. Hand-wired tier only for now — see [Design Rationale](#design-rationale)
+  for the deferred `@RestlessEntity`/annotation-processor phase. Demonstrated end-to-end on
+  `example`'s `Employee`: `promote` (illegal-transition prevention via a fixed `JobTitle` career
+  ladder), `giveRaise` (a business-rule cap a bean-validation annotation can't express),
+  `addCertification`/`recordAchievement` (append-only mutation of a collection
+  `EmployeeUpdateModel` deliberately never exposes) — see `example/README.md`'s "Write commands"
+  section.
+- **Auto-configuration.** `RestlessAutoConfiguration` (`app`) and `CerbosAutoConfiguration`
+  (`cerbos`), discovered via
+  `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`. A consumer
+  no longer needs `@ComponentScan(basePackages = "ro.cristivoicu.springbootrestless")` - every
+  framework infrastructure bean (`RestlessRegistrar`, `RestlessEmbedResolver`,
+  `RestlessAuthorizationMetrics`, `RestlessExceptionHandler`, `RestlessOpenApiCustomizer`, the
+  Cerbos client and health indicator) is a plain `@Bean` behind
+  `@ConditionalOnMissingBean`/`@ConditionalOnClass` now, registered automatically the moment the
+  jar is on the classpath.
+- **`@RestlessResource(allowAll = ...)` / `@RestlessEntity(allowAll = ...)`.** `RestlessRegistrar`
+  now refuses to register a resource that has no real `AuthorizationGuard` (still
+  `AuthorizationGuard.allowAll()`) unless this is explicitly set to `true` - a startup-time
+  `IllegalStateException` naming the resource, not a silently wide-open route. Fail-fast, not a
+  runtime behavior change for any resource that already has a guard.
+- **`restless.list.max-size`** (`RestlessProperties`, default 10,000) - a hard cap on
+  `GET .../list`, previously unbounded. A response that hit the cap carries
+  `X-Restless-List-Truncated: true`.
+- **`Location` header + `201 Created`** on every single-item create (both the dynamic mechanism
+  and the hand-subclassed `CreateController` tier), per RFC 9110 §15.3.2 - previously `200 OK`
+  with no `Location`.
+- **`RestlessResourceHandler#inReadOnlyTransaction`** wraps every read path (`findOne`,
+  `findList`, `findPage*`, `customRead`, `namedView`) in a `readOnly` transaction when a
+  `PlatformTransactionManager` is configured - fixes a `LazyInitializationException` risk for
+  consumers running with `spring.jpa.open-in-view=false` (the generally-recommended production
+  setting) whose hand-written `Mapper`/`@RestlessEmbed` touches a lazy association. `example` now
+  runs with OSIV off to prove this.
+- `LICENSE` (Apache-2.0), this changelog, and a CI workflow (`.github/workflows/ci.yml`).
+
+**Changed**
+
+- **Error responses are now RFC 9457 `application/problem+json`**
+  (`org.springframework.http.ProblemDetail`), not a bespoke
+  `{timestamp, status, error, message, path, details}` JSON shape. The old `ErrorResponse` record
+  is removed; field-level validation messages now live under the `errors` extension member
+  (present only on a validation failure), and `path` is now the standard `instance` member.
+- **Bulk delete moved off `DELETE` with a request body.** `DELETE {basePath}` is now
+  `POST {basePath}/bulk-delete` (same body shape, same `AuthorizationGuard.Action.DELETE_ALL`) -
+  RFC 9110 gives a `DELETE` request body no defined semantics, and in practice proxies/CDNs/
+  `fetch()` are known to drop it. Applies to both the dynamic mechanism and the hand-subclassed
+  `DeleteController` tier.
+
+**Fixed**
+
+- `SECURITY.md`/[Security Policy](#security-policy) pointed at a `<developers>` section in the
+  root `pom.xml` that never existed - dead end for anyone trying to report a vulnerability
+  privately. Now relies solely on GitHub's private vulnerability reporting (Security tab).
+- An in-flight `@RequiredArgsConstructor` change to `RestlessRegistrar` would have dropped its
+  `ObjectProvider<RestlessAuthorizationMetrics>` fallback (breaking resources with no
+  Actuator/Micrometer on the classpath) and its null-default for `RestlessProperties` - caught
+  before it was ever committed; `RestlessRegistrar` keeps its explicit constructor.
+
+**Before this changelog existed:** see the git history (`cf0b117` onward) for the Cerbos
+integration, exception handling, OpenAPI generation, and versioning work that predates this file.
 
 ## License
 

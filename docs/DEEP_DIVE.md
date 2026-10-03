@@ -52,7 +52,7 @@ action: fine-grained authorization.
 - [API completeness](#api-completeness)
 - [Customization cheat sheet](#customization-cheat-sheet)
 - [Project status](#project-status)
-- [Versioning and API stability](../VERSIONING.md)
+- [Versioning and API stability](../README.md#versioning-and-api-stability)
 
 ## Scope
 
@@ -121,8 +121,9 @@ hand-wired.
 - **A write path that's fundamentally event-sourced or CQRS with a separate write model.** Write
   commands (`WriteAction`, see the [tutorial](#tutorial-write-commands-writeaction) below) close
   part of this gap — a named mutation instead of a field-level `PUT` — but there's no event bus,
-  outbox, or projection machinery here; see `docs/design/write-commands.md`'s own "what this
-  doesn't solve yet" section for the closest thing to a roadmap on this front.
+  outbox, or projection machinery here; see the root [README.md's Design Rationale
+  section](../README.md#design-rationale)'s "what this doesn't try to solve" note for the closest
+  thing to a roadmap on this front.
 
 ## Prerequisites
 
@@ -815,7 +816,8 @@ can't be independently gated).
 
 (Bulk delete is `POST .../bulk-delete`, not `DELETE {basePath}` with a body — RFC 9110 gives a
 `DELETE` request body no defined semantics, and proxies/CDNs/`fetch()` are known to drop it; see
-the [changelog](../CHANGELOG.md)'s "Changed" section for when this moved.)
+the root [README.md's Changelog section](../README.md#changelog)'s "Changed" entries for when
+this moved.)
 
 ### All-or-nothing, not best-effort
 
@@ -881,7 +883,8 @@ Override `createAll`/`updateAll` directly for a genuinely different bulk strateg
 - **A transition that isn't "replace these fields" at all.** Bulk update is still a full-replace
   `PUT` semantically, so the same illegal-transition risk plain `update()` has applies per row; a
   bulk business-rule mutation belongs on a write command instead (no `BulkWriteAction` exists yet
-  — see `docs/design/write-commands.md`'s own "what this doesn't solve yet").
+  — see the root [README.md's Design Rationale section](../README.md#design-rationale)'s "what
+  this doesn't try to solve" note).
 - **Streaming/very-high-volume ingestion.** Every id in a bulk update is individually loaded and
   checked before the write — fine for hundreds to a few thousand rows per request, not designed as
   a bulk-ETL pipeline.
@@ -1025,8 +1028,8 @@ interface prescribes.
   are; a write action wrapping a bare setter call is needless ceremony.
 - **Bulk.** There's no `BulkWriteAction` yet — one write action call is one entity, one command
   (see [Tutorial: bulk operations](#tutorial-bulk-operations) above for the closest existing
-  bulk-write mechanism, and `docs/design/write-commands.md`'s own "Bulk vs. single-item" section
-  for the deferred design).
+  bulk-write mechanism, and the root [README.md's Design Rationale section](../README.md#design-rationale)'s
+  "Bulk vs. single-item" note for the deferred design).
 - **On the compile-time-generated tier.** `@RestlessEntity` has no attribute for write actions
   today (only the hand-wired tier can declare `getCustomWriteActions()`) — an entity that needs one
   belongs on the "generated resource + hand-written override" or fully manual tier for at least
@@ -1036,7 +1039,8 @@ interface prescribes.
 (`promote`/`giveRaise`/`addCertification`/`recordAchievement`), each enforcing exactly one
 invariant the others don't — see
 [its Write commands section](../example/README.md#write-commands--employee) for the curl walkthrough
-and `docs/design/write-commands.md` for the full design rationale.
+and the root [README.md's Design Rationale section](../README.md#design-rationale) for the full
+design rationale.
 
 ## Running the full demo: Docker Compose + Keycloak
 
@@ -1169,7 +1173,8 @@ principal, since this demo has no such role modeled.
   hand-written-override escape hatch this steps out of the way to (see `GadgetRestlessResource`'s
   own `getSpecification()`/custom read action for a builder-based rewrite, and
   `EmployeeRestlessResource`'s for a builder combining equality with a range in one override) — see
-  `docs/design/filter-dsl.md` for the full design and `example`'s own
+  the root [README.md's Design Rationale section](../README.md#design-rationale) for the full
+  design and `example`'s own
   [Filter DSL section](../example/README.md#filter-dsl--project-employee) for a worked, real-entity
   example.
 - **Write commands** — `WriteAction<E, Req, Resp>` / `getCustomWriteActions()` (mirroring named
@@ -1179,7 +1184,8 @@ principal, since this demo has no such role modeled.
   transaction (load, guard-check, then `execute`); `execute` returns whatever shape its author
   decides, bypassing `Mapper` entirely, the same "response shape is always hand-written" boundary
   `Mapper` itself already states. See [Tutorial: write commands](#tutorial-write-commands-writeaction)
-  above for the full walkthrough, `docs/design/write-commands.md` for the design, and `example`'s
+  above for the full walkthrough, the root [README.md's Design Rationale section](../README.md#design-rationale)
+  for the design, and `example`'s
   own [Write commands section](../example/README.md#write-commands--employee) — `promote`
   (illegal-transition prevention via a fixed career ladder), `giveRaise` (a business-rule cap a
   bean-validation annotation can't express), `addCertification`/`recordAchievement` (append-only
@@ -1249,7 +1255,7 @@ otherwise:
 | Hide individual fields per caller | `@CerbosHiddenField` + `CerbosFieldMasker`, called from your `Mapper` | [Tutorial: hiding fields](#tutorial-hiding-fields-with-cerboshiddenfield) |
 | Restrict which routes exist at all | `operations = {...}` / override `getEnabledOperations()` | [Tutorial: adding a new entity](#tutorial-adding-a-new-entity) |
 | Add partial update | `patchDataSource = ...` / override `getPatchDataSource()` | [API completeness](#api-completeness) |
-| Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In`), or `RestlessSpecifications` in a hand-written `getSpecification()` override | [API completeness](#api-completeness), `docs/design/filter-dsl.md` |
+| Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In`), or `RestlessSpecifications` in a hand-written `getSpecification()` override | [API completeness](#api-completeness), [README.md's Design Rationale](../README.md#design-rationale) |
 | Add a filtered read beyond what `SearchDto` can express | `getCustomReadActions()` *(hand-wired tier only)* | [How it works](#how-it-works) |
 | Add a domain-meaningful mutation ("promote", "cancel") | `getCustomWriteActions()` *(hand-wired tier only)* | [Tutorial: write commands](#tutorial-write-commands-writeaction) |
 | Expose a different response shape of the same entity | `getNamedViews()` *(hand-wired tier only)* | `EmployeeRestlessResource`'s `contact` view |

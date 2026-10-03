@@ -88,7 +88,8 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
   "http://localhost:8081/employees?salaryGte=100000" | jq
 ```
 
-See `docs/design/filter-dsl.md` (root of the reactor) for the full design.
+See the root [README.md's Design Rationale section](../README.md#design-rationale) for the full
+design.
 
 ### PATCH — `Department`
 
@@ -197,8 +198,8 @@ curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: applic
   http://localhost:8081/employees/1/actions/recordAchievement | jq
 ```
 
-See `docs/design/write-commands.md` (root of the reactor) for the design behind the mechanism
-itself (`WriteAction`/`getCustomWriteActions()`, `app` module).
+See the root [README.md's Design Rationale section](../README.md#design-rationale) for the design
+behind the mechanism itself (`WriteAction`/`getCustomWriteActions()`, `app` module).
 
 ### Named view — `Employee` `contact`
 
