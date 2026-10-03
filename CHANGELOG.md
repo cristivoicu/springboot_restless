@@ -10,6 +10,12 @@ before 1.0.
 
 ### Added
 
+- **Claude Code Agent Skill.** `.claude/skills/spring-boot-restless/` teaches Claude Code this
+  framework's conventions - the three-tier entity decision framework, authorization/Cerbos
+  wiring, write commands, bulk operations, and the filter DSL - split into a concise `SKILL.md`
+  plus on-demand `reference/*.md` files. Loads automatically while working in this repo;
+  copy the directory into a consumer project's own `.claude/skills/` for the same assistance
+  there.
 - **Repo made publish-ready.** `README.md` restructured into a concise, template-shaped reference
   (badges, requirements, installation, configuration, quick start, feature guide); the previous
   full tutorial-depth content (every mechanism, sequence diagrams, the three-tier decision

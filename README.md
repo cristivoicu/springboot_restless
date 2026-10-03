@@ -13,6 +13,12 @@
 > **Looking for more depth?** This README is a concise reference. For a full tutorial-depth
 > walkthrough of every mechanism — with sequence diagrams, the three-tier decision framework, and
 > worked examples for each feature below — see [`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md).
+>
+> **Using [Claude Code](https://claude.com/claude-code)?** This repo ships a
+> [`spring-boot-restless` Agent Skill](.claude/skills/spring-boot-restless/) that teaches it this
+> framework's conventions (entity tiers, authorization/Cerbos wiring, write commands, bulk
+> operations, the filter DSL). Copy `.claude/skills/spring-boot-restless/` into a consumer
+> project's own `.claude/skills/` to get the same scaffolding help there.
 
 ---
 

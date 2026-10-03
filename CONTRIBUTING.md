@@ -26,6 +26,14 @@ discussion is likely to be declined even if the code itself is good.
 ./mvnw -pl app test       # one module
 ```
 
+## Using Claude Code on this repo
+
+`.claude/skills/spring-boot-restless/` is an Agent Skill that teaches Claude Code this
+framework's conventions - the three-tier decision framework for adding an entity, authorization
+guard/Cerbos wiring, write commands, bulk operations, and the filter DSL. It loads automatically
+when relevant while working in this repo (e.g. in `example`). Copy the whole directory into a
+consumer project's own `.claude/skills/` to get the same assistance there.
+
 ## Module map
 
 See the root `README.md`'s "Modules" section - in short: `processor` (compile-time
