@@ -87,6 +87,47 @@ class GizmoFilterTest {
     }
 
     @Test
+    void iLikeSuffixDoesACaseInsensitiveContainsMatch() throws Exception {
+        createGizmo("Research", "RND", 5);
+        createGizmo("Development", "DEV", 10);
+
+        mockMvc.perform(get("/gizmos/list").param("nameILike", "RESEARCH"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].code").value("RND"));
+    }
+
+    @Test
+    void startsWithSuffixDoesAPrefixMatchOnly() throws Exception {
+        createGizmo("Research", "RND", 5);
+        createGizmo("Search Engine", "SEARCH", 15);
+
+        // "earch" is a substring of both names but a prefix of neither - StartsWith must not
+        // behave like Like here.
+        mockMvc.perform(get("/gizmos/list").param("nameStartsWith", "Rese"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].code").value("RND"));
+
+        mockMvc.perform(get("/gizmos/list").param("nameStartsWith", "earch"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void likeSuffixEscapesLiteralWildcardCharactersInTheSearchTerm() throws Exception {
+        createGizmo("50%off", "PROMO", 5);
+        createGizmo("50xoff", "OTHER", 10);
+
+        // A literal "%" in the search term must match literally, not as a SQL wildcard - without
+        // escaping, "%" alone would match both rows (and everything else).
+        mockMvc.perform(get("/gizmos/list").param("nameLike", "50%off"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].code").value("PROMO"));
+    }
+
+    @Test
     void inSuffixMatchesAnyOfTheRepeatedValues() throws Exception {
         createGizmo("A", "A", 5);
         createGizmo("B", "B", 10);

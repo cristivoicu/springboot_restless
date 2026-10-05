@@ -37,4 +37,10 @@ public class GizmoSearchDto extends AbstractSearchDto {
     private String codeNe;
 
     private List<String> codeIn;
+
+    /** Ground rules item 5: case-insensitive contains-match - see {@code GizmoFilterTest}. */
+    private String nameILike;
+
+    /** Ground rules item 5: index-friendly prefix match, no leading wildcard - see {@code GizmoFilterTest}. */
+    private String nameStartsWith;
 }

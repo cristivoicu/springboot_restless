@@ -413,12 +413,23 @@ plain equality — zero extra code, reflected over automatically:
 | Suffix | Operator | Example |
 |---|---|---|
 | `Gte` / `Lte` / `Gt` / `Lt` | `>=` / `<=` / `>` / `<` | `?salaryGte=100000` |
-| `Like` | contains-match | `?titleLike=urgent` |
+| `Like` | contains-match (escaped - see below) | `?titleLike=urgent` |
+| `ILike` | case-insensitive contains-match | `?titleILike=urgent` |
+| `StartsWith` | prefix match, no leading wildcard (index-friendly) | `?titleStartsWith=URG` |
 | `Ne` | not-equal | `?statusNe=CLOSED` |
 | `In` | membership (repeatable param) | `?statusIn=OPEN&statusIn=PENDING` |
 
+`Like`/`ILike`/`StartsWith` escape a literal `%`/`_`/`\` in the search term before building the
+pattern, so a value containing one of those three characters is matched literally, not as a SQL
+wildcard. Every field/operator combination is validated once at startup (not per request) - an
+equality field naming no real entity property, an operator the resolved property's type doesn't
+support, `In` on a non-`Collection` field, and a primitive filter field (it can never represent
+"the client didn't send this") all fail fast there. A suffixed field whose *full* name is itself a
+real entity property (e.g. `checkIn`) is treated as plain equality on that property, not the
+suffix - only once neither the full name nor the base resolves does startup fail.
+
 Combine with multi-field sort, Spring Data's own convention: `?sort=lastName,asc&sort=firstName,asc`.
-For anything beyond these seven operators (joins, boolean OR, cross-field logic), override
+For anything beyond these operators (joins, boolean OR, cross-field logic), override
 `getSpecification()` — `RestlessSpecifications` is a small fluent builder for that escape hatch.
 
 ### Partial updates (`PATCH`)
@@ -587,7 +598,7 @@ protected AuthorizationGuard<Task> getAuthorizationGuard() {
 | Hide individual fields per caller | `@CerbosHiddenField` + `CerbosFieldMasker`, called from your `Mapper` | Any (needs `cerbos`) |
 | Restrict which routes exist | `operations = {...}` / override `getEnabledOperations()` | Any |
 | Add partial update (`PATCH`) | `patchDataSource = ...` / override `getPatchDataSource()` | Any |
-| Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In`) | Any |
+| Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`ILike`/`StartsWith`/`Ne`/`In`) | Any |
 | Add a filtered read beyond `SearchDto` | `getCustomReadActions()` | Hand-wired only |
 | Add a domain-meaningful mutation ("promote", "cancel") | `getCustomWriteActions()` — see [Write commands](#feature-guide) | Hand-wired only |
 | Expose a different response shape of the same entity | `getNamedViews()` | Hand-wired only |
@@ -912,6 +923,18 @@ above for what stability guarantees actually apply before 1.0.
 ### [Unreleased]
 
 **Added**
+
+- **Filter DSL hardening.** Every `SearchDto` field/operator binding is now precomputed and
+  validated once at startup (not per request, and not via per-request `getDeclaredFields`/
+  `setAccessible`) - an equality field naming no real entity property, an operator the resolved
+  property's type doesn't support, `In` on a non-`Collection` field, and a primitive filter field
+  now all fail fast at startup instead of being silently ignored or thrown from inside a running
+  query. A suffixed field whose *full* name is itself a real entity property (e.g. `checkIn`) is
+  now treated as plain equality on that property rather than silently dropped as an unresolvable
+  `In` operator on a nonexistent `check` base property. `Like` now escapes a literal `%`/`_`/`\`
+  in the search term (previously a literal `%` in a search term was interpreted as a SQL
+  wildcard). New `ILike` (case-insensitive contains) and `StartsWith` (index-friendly prefix
+  match, no leading wildcard) operators.
 
 - **`@RestlessEmbed` now respects the target's `getEnabledOperations()`, excludes soft-deleted
   rows, and applies `scope()` on a `many = false` embed too.** Previously `?expand=name` could

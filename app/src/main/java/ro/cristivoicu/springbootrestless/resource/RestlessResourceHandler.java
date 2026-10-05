@@ -271,6 +271,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         this.maxBulkSize = maxBulkSize > 0 ? maxBulkSize : DEFAULT_MAX_BULK_SIZE;
         this.idPropertyName = resolveIdPropertyName(metadata.entityType());
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
+        resolveFilterBindings();
 
         this.customActionSearchDtoConstructors = new HashMap<>();
         for (Map.Entry<String, ReadAction<E, ?>> entry : getCustomReadActions().entrySet()) {
@@ -517,50 +518,51 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     }
 
     /**
-     * Default filter: an equality predicate for every non-null, non-blank field declared
-     * directly on the {@code SearchDto} subclass (its {@code getDeclaredFields()} already
-     * excludes {@link ro.cristivoicu.springbootrestless.models.AbstractSearchDto}'s inherited
-     * paging fields), ANDed together - unless the field's name ends with a recognized {@link
-     * FilterOperator} suffix ({@code ageGte}, {@code nameLike}, {@code statusIn}, ...), in which
-     * case that operator applies instead of equality. See {@code docs/design/filter-dsl.md} for
-     * the full design (why a suffix convention rather than a query-language string, and why the
-     * wire format is camelCase - {@code ?ageGte=30} - not snake_case). Override for anything
-     * beyond these seven operators (joins, cross-field logic, boolean OR, ...) - or use {@link
-     * ro.cristivoicu.springbootrestless.filter.RestlessSpecifications} to write that override
-     * more tersely.
+     * One precomputed, startup-validated field-to-predicate binding for the default {@link
+     * #getSpecification} - see {@link #resolveFilterBindings} for how these are built and {@link
+     * #getSpecification}'s own javadoc for how they're used. {@code operator == null} means
+     * plain equality on {@code entityProperty}; {@code field} has already had {@link
+     * Field#setAccessible} called on it once, here, at startup - never per-request.
+     */
+    private record FilterBinding(Field field, String entityProperty, FilterOperator operator) {
+    }
+
+    private List<FilterBinding> filterBindings = List.of();
+
+    /**
+     * Default filter: an equality predicate for every non-null, non-blank field declared on the
+     * {@code SearchDto} class hierarchy (stopping at, not including, {@link
+     * ro.cristivoicu.springbootrestless.models.AbstractSearchDto} - its own paging/sort fields
+     * are never filter candidates), ANDed together - unless the field's name ends with a
+     * recognized {@link FilterOperator} suffix ({@code ageGte}, {@code nameLike}, {@code
+     * statusIn}, ...), in which case that operator applies instead of equality. See {@code
+     * docs/design/filter-dsl.md} for the full design (why a suffix convention rather than a
+     * query-language string, and why the wire format is camelCase - {@code ?ageGte=30} - not
+     * snake_case). Override for anything beyond these operators (joins, cross-field logic,
+     * boolean OR, ...) - or use {@link ro.cristivoicu.springbootrestless.filter.RestlessSpecifications}
+     * to write that override more tersely.
      * <p>
-     * Primitive fields (e.g. {@code boolean}) are skipped entirely, not just when zero-valued:
-     * a primitive can never represent "the client didn't send this filter" (Java always defaults
-     * it, e.g. {@code false}), so treating an unset primitive field as an explicit filter would
-     * silently exclude every non-default row from unfiltered searches. Use a boxed type
-     * ({@code Boolean}) for an optional equality filter instead. An empty {@code Collection} (an
-     * {@code In}-suffixed field nothing was bound to) gets the same "absent" treatment as a blank
-     * string, for the same reason.
-     * <p>
-     * Two different failure modes for a misdeclared suffixed field, deliberately: a base property
-     * that doesn't exist on {@code E} at all is silently ignored (a compile-time-fixed mistake in
-     * the {@code SearchDto} author's own code, not client-controlled input - the same "absent
-     * means unset" idiom the null/blank checks above already use); a base property that exists
-     * but doesn't support the operator's type (e.g. {@code nameGte} where {@code name} is a
-     * {@code String}) throws {@link IllegalStateException} - also the DTO author's own mistake,
-     * wrong on every request rather than triggered by any particular one, so it doesn't belong in
-     * the {@link ResponseStatusException}/400 vocabulary {@link #pageableOf}/{@link #convertId}/
-     * {@link #readBody} use for genuinely client-triggered translation failures.
+     * Every field/operator/entity-property combination is validated once, at startup, by {@link
+     * #resolveFilterBindings} (called from {@link #init}) - not per request, and not silently
+     * ignored on a mismatch (Ground rules item 5): a primitive filter field, an equality field
+     * naming no real entity property, an operator whose base property doesn't resolve either
+     * (directly or via the suffix-ambiguity fallback - see that method), an operator the
+     * resolved property's type doesn't support, and {@code In} on a non-{@code Collection} field
+     * all now fail fast there instead of being skipped or thrown from inside a running query.
+     * This method itself only runs the precomputed bindings against one actual request's bound
+     * {@code searchDto} values - unset (null/blank/empty-collection) fields are still skipped
+     * per-request, same "absent means no filter" reasoning as before.
      */
     protected Specification<E> getSpecification(SearchDto searchDto) {
-        Set<String> entityProperties = entityPropertyNames();
+        List<FilterBinding> bindings = filterBindings;
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
-            for (Field field : searchDto.getClass().getDeclaredFields()) {
-                if (field.getType().isPrimitive()) {
-                    continue;
-                }
-                field.setAccessible(true);
+            for (FilterBinding binding : bindings) {
                 Object value;
                 try {
-                    value = field.get(searchDto);
+                    value = binding.field().get(searchDto);
                 } catch (IllegalAccessException e) {
-                    throw new IllegalStateException("Could not read " + field + " for default filtering", e);
+                    throw new IllegalStateException("Could not read " + binding.field() + " for default filtering", e);
                 }
                 if (value == null) {
                     continue;
@@ -572,32 +574,126 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                     continue;
                 }
 
-                FilterOperator operator = FilterOperator.forFieldName(field.getName());
-                if (operator == null) {
-                    predicates.add(cb.equal(root.get(field.getName()), value));
-                    continue;
+                if (binding.operator() == null) {
+                    predicates.add(cb.equal(root.get(binding.entityProperty()), value));
+                } else if (binding.operator() == FilterOperator.IN) {
+                    predicates.add(root.<Object>get(binding.entityProperty()).in((Collection<?>) value));
+                } else {
+                    predicates.add(binding.operator().predicate(cb, root.get(binding.entityProperty()), value));
                 }
-                String baseProperty = operator.basePropertyOf(field.getName());
-                if (!entityProperties.contains(baseProperty)) {
-                    continue;
-                }
-                if (operator == FilterOperator.IN) {
-                    if (!(value instanceof Collection)) {
-                        throw new IllegalStateException(field + " uses the 'In' suffix but isn't a Collection");
-                    }
-                    predicates.add(root.<Object>get(baseProperty).in((Collection<?>) value));
-                    continue;
-                }
-                Class<?> entityFieldType = entityFieldType(baseProperty);
-                if (!operator.supports(entityFieldType)) {
-                    throw new IllegalStateException(field + " uses '" + operator + "' but "
-                            + metadata.entityType().getSimpleName() + "." + baseProperty
-                            + " (" + entityFieldType + ") doesn't support it");
-                }
-                predicates.add(operator.predicate(cb, root.get(baseProperty), value));
             }
             return predicates.isEmpty() ? cb.conjunction() : cb.and(predicates.toArray(new Predicate[0]));
         };
+    }
+
+    /**
+     * Builds and validates {@link #filterBindings} once, at startup - see {@link
+     * #getSpecification}'s own javadoc for what's being validated and why. Skipped entirely
+     * (bindings left empty, never read) when this resource overrides {@link #getSpecification}
+     * itself: validating a {@code SearchDto} shape against rules the actual, overridden filter
+     * logic may not even follow would turn a legitimate hand-written override into a startup
+     * failure it never asked for.
+     */
+    private void resolveFilterBindings() {
+        if (!usesDefaultGetSpecification()) {
+            return;
+        }
+        Set<String> entityProperties = entityPropertyNames();
+        List<FilterBinding> bindings = new ArrayList<>();
+        for (Field field : searchDtoFilterFields(metadata.searchDtoType())) {
+            if (field.getType().isPrimitive()) {
+                throw new IllegalStateException(metadata.searchDtoType().getSimpleName() + "." + field.getName()
+                        + " is primitive - it can never represent \"the client didn't send this filter\" "
+                        + "(Java always defaults it), so it would silently exclude every non-default row "
+                        + "from an unfiltered search; use the boxed type instead");
+            }
+            field.setAccessible(true);
+
+            FilterOperator operator = FilterOperator.forFieldName(field.getName());
+            if (operator == null) {
+                requireEntityProperty(field, field.getName(), entityProperties);
+                bindings.add(new FilterBinding(field, field.getName(), null));
+                continue;
+            }
+
+            // Suffix ambiguity (Ground rules item 5): "checkIn"/"loggedIn" parse as base "check"/
+            // "logged" + the In suffix, which these entities may well not have a property named -
+            // if the FULL field name is itself a real entity property, that takes priority and
+            // this is plain equality, not an operator at all.
+            if (entityProperties.contains(field.getName())) {
+                bindings.add(new FilterBinding(field, field.getName(), null));
+                continue;
+            }
+
+            String baseProperty = operator.basePropertyOf(field.getName());
+            if (!entityProperties.contains(baseProperty)) {
+                throw new IllegalStateException(metadata.searchDtoType().getSimpleName() + "." + field.getName()
+                        + " resolves to neither entity property '" + field.getName() + "' nor '" + baseProperty
+                        + "' on " + metadata.entityType().getSimpleName());
+            }
+            if (operator == FilterOperator.IN) {
+                if (!Collection.class.isAssignableFrom(field.getType())) {
+                    throw new IllegalStateException(field + " uses the 'In' suffix but isn't a Collection");
+                }
+                bindings.add(new FilterBinding(field, baseProperty, operator));
+                continue;
+            }
+            Class<?> entityFieldType = entityFieldType(baseProperty);
+            if (!operator.supports(entityFieldType)) {
+                throw new IllegalStateException(field + " uses '" + operator + "' but "
+                        + metadata.entityType().getSimpleName() + "." + baseProperty
+                        + " (" + entityFieldType + ") doesn't support it");
+            }
+            bindings.add(new FilterBinding(field, baseProperty, operator));
+        }
+        this.filterBindings = bindings;
+    }
+
+    private void requireEntityProperty(Field field, String propertyName, Set<String> entityProperties) {
+        if (!entityProperties.contains(propertyName)) {
+            throw new IllegalStateException(metadata.searchDtoType().getSimpleName() + "." + field.getName()
+                    + " (equality filter) names no property on " + metadata.entityType().getSimpleName());
+        }
+    }
+
+    /**
+     * Whether {@link #getSpecification} still runs this class's own default body - see {@link
+     * #resolveFilterBindings}'s own javadoc for why this gates validation at all. {@code
+     * getDeclaredMethod} (not {@code getMethod}, which only ever finds <em>public</em> methods -
+     * {@link #getSpecification} is {@code protected}), walking up from the concrete runtime
+     * class to find whichever one actually declares it.
+     */
+    private boolean usesDefaultGetSpecification() {
+        for (Class<?> type = getClass(); type != null; type = type.getSuperclass()) {
+            try {
+                type.getDeclaredMethod("getSpecification", SearchDto.class);
+                return type == RestlessResourceHandler.class;
+            } catch (NoSuchMethodException ignored) {
+                // keep walking up
+            }
+        }
+        throw new IllegalStateException("getSpecification(SearchDto) not found on " + getClass()); // unreachable
+    }
+
+    /**
+     * Every non-static field declared on {@code searchDtoType}'s own class hierarchy, stopping
+     * at (not including) {@link ro.cristivoicu.springbootrestless.models.AbstractSearchDto} -
+     * unlike {@link #entityPropertyNames}'s walk-to-{@code Object}, a {@code SearchDto} hierarchy
+     * has a real, known stopping point: {@code AbstractSearchDto}'s own {@code page}/{@code
+     * size}/{@code sort} fields are never filter candidates, suffix-named or not.
+     */
+    private static List<Field> searchDtoFilterFields(Class<?> searchDtoType) {
+        List<Field> fields = new ArrayList<>();
+        for (Class<?> type = searchDtoType;
+             type != null && type != Object.class && type != ro.cristivoicu.springbootrestless.models.AbstractSearchDto.class;
+             type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                if (!java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                    fields.add(field);
+                }
+            }
+        }
+        return fields;
     }
 
     /**
