@@ -215,6 +215,8 @@ cerbos:
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `restless.list.max-size` | `int` | `10000` | Maximum rows returned by the unpaginated `GET {basePath}/list` route. |
+| `restless.page.max-size` | `int` | `2000` | Maximum client-supplied `size` on `GET {basePath}`/`.../overview`/`.../select/async`/a named read action - a request over this is rejected `400`, not silently clamped. |
+| `restless.bulk.max-size` | `int` | `1000` | Maximum items in a single `createBulk`/`updateBulk`/`deleteAll` request - over this is rejected `400` before any item is processed. |
 | `cerbos.client.target` | `String` | `localhost:3593` | Cerbos PDP address (`host:port`), gRPC. |
 | `cerbos.client.plaintext` | `boolean` | `true` | Whether the gRPC channel to the PDP is unencrypted. |
 | `cerbos.client.timeout` | `Duration` | `3s` | Deadline for a single `check`/`plan` RPC before the guard fails closed. |
@@ -596,6 +598,8 @@ protected AuthorizationGuard<Task> getAuthorizationGuard() {
 | Version an API | `version = "..."` on `@RestlessEntity`/`@RestlessResource` | Any |
 | Expand a related resource inline | `@RestlessEmbed` on a DTO field, `?expand=name` | Any |
 | Cap an unbounded `GET .../list` | `restless.list.max-size` (default `10000`) | Global |
+| Cap a client-supplied page `size` | `restless.page.max-size` (default `2000`) - rejects `400` over the cap | Global |
+| Cap a bulk create/update/delete request | `restless.bulk.max-size` (default `1000`) - rejects `400` over the cap | Global |
 
 For the full, worked, runnable version of every capability above — including a real Cerbos +
 Keycloak authorization demo — see the [`example`](example/README.md) module and
@@ -909,6 +913,25 @@ above for what stability guarantees actually apply before 1.0.
 
 **Added**
 
+- **Mass-assignment protection.** `Default{Create,Update,Patch}DataSource`'s `BeanUtils.copyProperties`
+  now ignores whichever of the entity's `@Id`/`@Version`/`SoftDeletable`-`deleted`/audit-timestamp
+  property names it finds (`ProtectedEntityFields`) - previously a `CreateModel` carrying a
+  populated `id` could make `save()` merge onto an existing row instead of inserting a new one,
+  bypassing that row's `UPDATE` guard entirely. `RestlessEntityProcessor` now also raises a compile
+  error when a Create/Update/PatchModel declares one of those protected field names, or when a
+  PatchModel field is primitive (it can never be `null`, so `PATCH` would always overwrite it).
+- **`restless.page.max-size`** (default `2000`, matching Spring Data's own
+  `spring.data.web.pageable.max-page-size` default) - a client-supplied `size` over this on
+  `GET {basePath}`/`.../overview`/`.../select/async`/a named read action is now rejected `400`,
+  previously unbounded.
+- **`restless.bulk.max-size`** (default `1000`) - `createBulk`/`updateBulk`/`deleteAll` now reject
+  `400` for a request carrying more items than this, checked before any item is processed.
+- **Bound `SearchDto`s are now validated.** `bindSearchDto` runs the bound instance through the
+  same `Validator` request bodies already go through - a `@Max`/`@Min`/... on a `SearchDto` field
+  was silently never enforced before this.
+- **`findEmbeddedList` is now capped** by `restless.list.max-size`, the same cap every other
+  unbounded read already had - an `@RestlessEmbed(many = true)` field was the one unbounded read
+  that cap didn't reach yet.
 - **Repo documentation consolidated.** Every standalone governance/meta doc (`ROADMAP.md`,
   `VERSIONING.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, this changelog) and the
   three `docs/design/*.md` design-rationale docs are now sections of this README instead of

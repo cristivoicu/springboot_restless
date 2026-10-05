@@ -136,6 +136,8 @@ public abstract class RestlessResourceHandler<E, K> {
     private PlatformTransactionManager transactionManager;
     private RestlessAuthorizationMetrics metrics = RestlessAuthorizationMetrics.NONE;
     private int maxListSize = DEFAULT_MAX_LIST_SIZE;
+    private int maxPageSize = DEFAULT_MAX_PAGE_SIZE;
+    private int maxBulkSize = DEFAULT_MAX_BULK_SIZE;
 
     /**
      * {@link #findList}'s default hard cap on how many rows a single unpaginated {@code
@@ -149,6 +151,26 @@ public abstract class RestlessResourceHandler<E, K> {
      * "that's genuinely everything" apart from "there's more - use {@code /page} instead".
      */
     public static final int DEFAULT_MAX_LIST_SIZE = 10_000;
+
+    /**
+     * {@link #pageableOf}'s default hard cap on the client-supplied {@code size} query parameter
+     * for every paginated route ({@code findPage}/{@code findPageOverview}/{@code
+     * findPageSelect}/{@code customRead}) - unlike {@link #DEFAULT_MAX_LIST_SIZE}, a request over
+     * this cap is rejected with {@code 400}, not silently truncated, since there's an explicit
+     * client-supplied value to validate against here (see {@code RestlessProperties.Page}'s own
+     * javadoc for why that's the right tradeoff for a paginated route specifically). Matches
+     * Spring Data's own {@code spring.data.web.pageable.max-page-size} default. Overridable via
+     * {@code restless.page.max-size}.
+     */
+    public static final int DEFAULT_MAX_PAGE_SIZE = 2_000;
+
+    /**
+     * {@link #createBulk}/{@link #updateBulk}/{@link #deleteAll}'s default hard cap on how many
+     * items a single bulk request may carry - checked, and rejected with {@code 400}, before any
+     * of them are processed (same fail-fast-not-partial spirit {@link #inTransaction} already
+     * applies to the write itself). Overridable via {@code restless.bulk.max-size}.
+     */
+    public static final int DEFAULT_MAX_BULK_SIZE = 1_000;
 
     /**
      * Wires this resource's infra collaborators. Called once by whichever registrar discovered
@@ -220,6 +242,22 @@ public abstract class RestlessResourceHandler<E, K> {
                             ConversionService conversionService, Validator validator,
                             RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager,
                             RestlessAuthorizationMetrics metrics, int maxListSize) {
+        init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics,
+                maxListSize, DEFAULT_MAX_PAGE_SIZE, DEFAULT_MAX_BULK_SIZE);
+    }
+
+    /**
+     * Same as the eight-arg {@link #init}, plus {@link #maxPageSize}/{@link #maxBulkSize} - a
+     * separate overload for the same reason the others are: only {@code RestlessRegistrar} calls
+     * this one, with the real values bound from {@code restless.page.max-size}/{@code
+     * restless.bulk.max-size} (see {@code RestlessProperties}), every pre-existing caller keeps
+     * getting {@link #DEFAULT_MAX_PAGE_SIZE}/{@link #DEFAULT_MAX_BULK_SIZE} unchanged. (Replacing
+     * this telescoping chain with a single context record is tracked separately - Phase 2.)
+     */
+    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
+                            ConversionService conversionService, Validator validator,
+                            RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager,
+                            RestlessAuthorizationMetrics metrics, int maxListSize, int maxPageSize, int maxBulkSize) {
         this.metadata = metadata;
         this.objectMapper = objectMapper;
         this.conversionService = conversionService;
@@ -228,6 +266,8 @@ public abstract class RestlessResourceHandler<E, K> {
         this.transactionManager = transactionManager;
         this.metrics = metrics == null ? RestlessAuthorizationMetrics.NONE : metrics;
         this.maxListSize = maxListSize > 0 ? maxListSize : DEFAULT_MAX_LIST_SIZE;
+        this.maxPageSize = maxPageSize > 0 ? maxPageSize : DEFAULT_MAX_PAGE_SIZE;
+        this.maxBulkSize = maxBulkSize > 0 ? maxBulkSize : DEFAULT_MAX_BULK_SIZE;
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
 
         this.customActionSearchDtoConstructors = new HashMap<>();
@@ -650,6 +690,7 @@ public abstract class RestlessResourceHandler<E, K> {
     public final ResponseEntity<?> createBulk(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
         List<Object> bodies = readBodyList(request, metadata.createModelType());
+        checkBulkSize(bodies.size());
         for (Object body : bodies) {
             validate(body);
         }
@@ -917,6 +958,7 @@ public abstract class RestlessResourceHandler<E, K> {
     public final ResponseEntity<?> updateBulk(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
         Map<String, Object> rawBodies = readBodyMap(request, metadata.updateModelType());
+        checkBulkSize(rawBodies.size());
 
         Map<K, Object> byId = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : rawBodies.entrySet()) {
@@ -965,6 +1007,7 @@ public abstract class RestlessResourceHandler<E, K> {
         checkPreCheck(AuthorizationGuard.Action.DELETE_ALL, null, request);
         Object body = readBody(request, metadata.deleteModelType());
         DeleteModel deleteModel = (DeleteModel) body;
+        checkBulkSize(deleteModel.getIds().size());
         @SuppressWarnings({"unchecked", "rawtypes"})
         DeleteDataSource rawDataSource = getDeleteDataSource();
         // Fail-fast, before deleting anything: check every targeted entity up front so a bulk
@@ -1033,6 +1076,11 @@ public abstract class RestlessResourceHandler<E, K> {
             pageable = searchDto.getPageable();
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid sort: " + e.getMessage(), e);
+        }
+
+        if (pageable.getPageSize() > maxPageSize) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Requested page size " + pageable.getPageSize() + " exceeds the maximum of " + maxPageSize);
         }
 
         Set<String> entityProperties = entityPropertyNames();
@@ -1107,11 +1155,18 @@ public abstract class RestlessResourceHandler<E, K> {
         }
     }
 
+    /**
+     * Binds, then validates ({@link #validate}) - unlike every other DTO this class reads off a
+     * request (create/update/patch bodies), a bound {@code SearchDto} never went through the
+     * {@link Validator} at all before this: a {@code @Max}/{@code @Min} the DTO author declared
+     * on a filter or paging field was silently never enforced (Ground rules item 3).
+     */
     private SearchDto bindSearchDto(Constructor<?> constructor, HttpServletRequest request) throws Exception {
         SearchDto searchDto = (SearchDto) constructor.newInstance();
         ServletRequestDataBinder binder = new ServletRequestDataBinder(searchDto);
         binder.setConversionService(conversionService);
         binder.bind(request);
+        validate(searchDto);
         return searchDto;
     }
 
@@ -1145,6 +1200,14 @@ public abstract class RestlessResourceHandler<E, K> {
         } catch (ConversionException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Failed to convert id '" + rawId + "' to " + metadata.idType().getSimpleName(), e);
+        }
+    }
+
+    /** {@link #DEFAULT_MAX_BULK_SIZE}/{@code restless.bulk.max-size}'s enforcement point - shared by {@link #createBulk}/{@link #updateBulk}/{@link #deleteAll}, called before any item is processed. */
+    private void checkBulkSize(int size) {
+        if (size > maxBulkSize) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Bulk request carries " + size + " items, exceeding the maximum of " + maxBulkSize);
         }
     }
 
@@ -1376,7 +1439,12 @@ public abstract class RestlessResourceHandler<E, K> {
             return List.of();
         }
         Specification<E> spec = withScope(joinFilter, AuthorizationGuard.Action.READ_LIST, null, request);
-        return getEntityMapper().map(getReadDataSource().findAll(spec));
+        // Capped by maxListSize, same reasoning as findList's own cap: an embedded relation is
+        // otherwise exactly as unbounded as GET .../list was before that cap existed, just with
+        // no X-Restless-List-Truncated header to signal it (there's nowhere to put one on a field
+        // nested inside another resource's response).
+        List<E> capped = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, maxListSize)).getContent();
+        return getEntityMapper().map(capped);
     }
 
     /**

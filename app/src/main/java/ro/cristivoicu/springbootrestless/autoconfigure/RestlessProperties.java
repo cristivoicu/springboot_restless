@@ -21,14 +21,72 @@ public class RestlessProperties {
     @NestedConfigurationProperty
     private final List list = new List();
 
+    @NestedConfigurationProperty
+    private final Page page = new Page();
+
+    @NestedConfigurationProperty
+    private final Bulk bulk = new Bulk();
+
     public List getList() {
         return list;
+    }
+
+    public Page getPage() {
+        return page;
+    }
+
+    public Bulk getBulk() {
+        return bulk;
     }
 
     /** {@code restless.list.*} - see {@link RestlessResourceHandler#DEFAULT_MAX_LIST_SIZE}'s own javadoc for why this cap exists at all. */
     public static class List {
 
         private int maxSize = RestlessResourceHandler.DEFAULT_MAX_LIST_SIZE;
+
+        public int getMaxSize() {
+            return maxSize;
+        }
+
+        public void setMaxSize(int maxSize) {
+            this.maxSize = maxSize;
+        }
+    }
+
+    /**
+     * {@code restless.page.*} - caps the client-supplied {@code size} query parameter on {@code
+     * GET .../page}/{@code .../page/overview}/{@code .../page/select}/any named {@code
+     * getCustomReadActions()} route, every one of which otherwise lets a client ask for an
+     * arbitrarily large page in one request. Rejected with {@code 400}, not silently clamped - a
+     * client asking for 50,000 rows and quietly getting 2,000 back with no indication looks
+     * exactly like "that's all there is", which is worse than an explicit error (see
+     * {@link RestlessResourceHandler#DEFAULT_MAX_LIST_SIZE}'s own {@code X-Restless-List-Truncated}
+     * for the different tradeoff an *unpaginated* route makes, where there's no page size request
+     * to even validate against). Default matches Spring Data's own
+     * {@code spring.data.web.pageable.max-page-size} default.
+     */
+    public static class Page {
+
+        private int maxSize = RestlessResourceHandler.DEFAULT_MAX_PAGE_SIZE;
+
+        public int getMaxSize() {
+            return maxSize;
+        }
+
+        public void setMaxSize(int maxSize) {
+            this.maxSize = maxSize;
+        }
+    }
+
+    /**
+     * {@code restless.bulk.*} - caps how many items a single {@code createBulk}/{@code
+     * updateBulk}/{@code deleteAll} request may carry. Rejected with {@code 400} before any of
+     * them are processed, same "fail fast, not partial" reasoning {@code
+     * RestlessResourceHandler#inTransaction} already applies to the write itself.
+     */
+    public static class Bulk {
+
+        private int maxSize = RestlessResourceHandler.DEFAULT_MAX_BULK_SIZE;
 
         public int getMaxSize() {
             return maxSize;

@@ -1,5 +1,6 @@
 package ro.cristivoicu.springbootrestless.fixtures.gizmo;
 
+import jakarta.validation.constraints.Max;
 import lombok.Getter;
 import lombok.Setter;
 import ro.cristivoicu.springbootrestless.models.AbstractSearchDto;
@@ -21,6 +22,14 @@ public class GizmoSearchDto extends AbstractSearchDto {
 
     private String nameLike;
 
+    /**
+     * {@code @Max(100)} exists purely so {@code SearchDtoValidationTest} can prove {@code
+     * bindSearchDto} actually runs the bound {@code SearchDto} through the {@code Validator}, not
+     * just binds it (Ground rules item 3 - this was silently ignored before). 100 is well above
+     * every value {@code GizmoFilterTest} already exercises (<=10), so this is additive, not a
+     * behavior change for any existing test.
+     */
+    @Max(100)
     private Integer quantityGte;
 
     private Integer quantityLte;
