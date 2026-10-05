@@ -26,6 +26,35 @@
              qualified name; entities in "app" already depend on the real jakarta.persistence
              artifact via spring-boot-starter-data-jpa, this module never needs it as a real
              dependency since it only ever compares annotation-mirror strings. -->
+
+        <!-- Test-only: RestlessEntityProcessorMassAssignmentTest drives the real javax.tools
+             JavaCompiler API in-memory (no extra compile-testing library needed) to assert this
+             processor actually raises the compile errors Ground rules item 6 requires - the only
+             way to test a Diagnostic.Kind.ERROR without breaking the reactor's own build. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>6.0.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>6.0.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <version>6.0.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.27.7</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -39,6 +68,14 @@
                          also sidesteps any accidental self-processing edge cases. -->
                     <proc>none</proc>
                 </configuration>
+            </plugin>
+            <!-- Pinned (this module has no spring-boot-starter-parent to inherit a matching
+                 version from, unlike every other module in the reactor) to a version already
+                 resolvable offline in this environment, JUnit Platform provider included. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.6</version>
             </plugin>
         </plugins>
     </build>

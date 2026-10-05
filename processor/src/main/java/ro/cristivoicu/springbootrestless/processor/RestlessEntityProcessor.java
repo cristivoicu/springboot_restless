@@ -16,6 +16,7 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.tools.Diagnostic;
@@ -23,6 +24,7 @@ import javax.tools.JavaFileObject;
 import java.io.IOException;
 import java.io.Writer;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -40,6 +42,10 @@ import java.util.stream.Collectors;
 public class RestlessEntityProcessor extends AbstractProcessor {
 
     private static final String ID_ANNOTATION = "jakarta.persistence.Id";
+    private static final String VERSION_ANNOTATION = "jakarta.persistence.Version";
+    private static final String CREATED_DATE_ANNOTATION = "org.springframework.data.annotation.CreatedDate";
+    private static final String LAST_MODIFIED_DATE_ANNOTATION = "org.springframework.data.annotation.LastModifiedDate";
+    private static final String SOFT_DELETABLE_INTERFACE = "ro.cristivoicu.springbootrestless.datasource.SoftDeletable";
     private static final String VOID_SENTINEL = "java.lang.Void"; // "not overridden" - see RestlessEntity's javadoc
     private static final String MAPPER_EXCLUDE_ANNOTATION = "ro.cristivoicu.springbootrestless.annotation.RestlessMapperExclude";
 
@@ -116,6 +122,19 @@ public class RestlessEntityProcessor extends AbstractProcessor {
             return; // errors already reported via the messager
         }
 
+        // Mass-assignment hardening (Ground rules item 6): Default{Create,Update}DataSource's
+        // BeanUtils.copyProperties would otherwise happily copy a client-controlled id/version/
+        // deleted/audit-timestamp value straight onto the entity (see ProtectedEntityFields in
+        // "app") - catching it here, at compile time, means the hole never exists in the first
+        // place for anything going through the naming-convention/generated tier.
+        Set<String> reservedFieldNames = reservedEntityFieldNames(entityType);
+        if (createEnabled) {
+            checkNoProtectedFields(createModel, reservedFieldNames, "CreateModel", entityType);
+        }
+        if (updateEnabled) {
+            checkNoProtectedFields(updateModel, reservedFieldNames, "UpdateModel", entityType);
+        }
+
         String mapper = resolveMapperType(entityType, packageName, entityName);
         if (mapper == null) {
             return; // errors already reported via the messager
@@ -129,6 +148,16 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         VerbOverride deleteDataSource = resolveVerbOverride(entityType, "deleteDataSource");
         VerbOverride authorizationGuard = resolveVerbOverride(entityType, "authorizationGuard");
         VerbOverride patchDataSource = resolveVerbOverride(entityType, "patchDataSource");
+
+        // Same mass-assignment/primitive-field hardening as createModel/updateModel above, for
+        // whichever PatchModel the patchDataSource override resolves to (best-effort: only when
+        // its direct supertype is a parameterized Default*/```PatchDataSource<E, K, P>``` -
+        // the shape every example in RestlessEntity's own javadoc uses).
+        TypeElement patchModelElement = resolvePatchModelType(patchDataSource);
+        if (patchModelElement != null) {
+            checkNoProtectedFields(patchModelElement.getQualifiedName().toString(), reservedFieldNames, "PatchModel", entityType);
+            checkPatchModelHasNoPrimitiveFields(patchModelElement);
+        }
 
         writeResourceClass(packageName, entityName, idType, createModel, updateModel, searchDto, mapper,
                 repository, restlessEntity.basePath(), restlessEntity.version(), restlessEntity.operations(),
@@ -230,6 +259,116 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                     """.formatted(packageName, simpleName, entityName, dtoType, ignoreArgs));
         }
         return qualifiedName;
+    }
+
+    /**
+     * Every field name on {@code entityType}'s own class hierarchy (up to, not including, {@code
+     * Object}) that {@code Default{Create,Update,Patch}DataSource} must never let a DTO's {@code
+     * BeanUtils.copyProperties} write into - {@code @Id}/{@code @Version}/the two Spring Data
+     * auditing annotations, plus {@code "deleted"} when the entity implements {@link
+     * #SOFT_DELETABLE_INTERFACE}. Walks superclasses the same reason {@code resolveIdType}
+     * arguably should but doesn't yet - any of these can live on a shared {@code
+     * @MappedSuperclass} (e.g. {@code AbstractAuditableEntity}) rather than the concrete entity.
+     */
+    private Set<String> reservedEntityFieldNames(TypeElement entityType) {
+        Set<String> names = new LinkedHashSet<>();
+        boolean softDeletable = false;
+        for (TypeElement type = entityType; type != null && !type.getQualifiedName().contentEquals("java.lang.Object");
+             type = asTypeElement(type.getSuperclass())) {
+            for (Element enclosed : type.getEnclosedElements()) {
+                if (enclosed.getKind() != ElementKind.FIELD) {
+                    continue;
+                }
+                for (AnnotationMirror mirror : enclosed.getAnnotationMirrors()) {
+                    String fqName = mirror.getAnnotationType().toString();
+                    if (fqName.equals(ID_ANNOTATION) || fqName.equals(VERSION_ANNOTATION)
+                            || fqName.equals(CREATED_DATE_ANNOTATION) || fqName.equals(LAST_MODIFIED_DATE_ANNOTATION)) {
+                        names.add(enclosed.getSimpleName().toString());
+                    }
+                }
+            }
+            for (TypeMirror iface : type.getInterfaces()) {
+                if (iface.toString().equals(SOFT_DELETABLE_INTERFACE)) {
+                    softDeletable = true;
+                }
+            }
+        }
+        if (softDeletable) {
+            names.add("deleted");
+        }
+        return names;
+    }
+
+    private static TypeElement asTypeElement(TypeMirror mirror) {
+        if (!(mirror instanceof DeclaredType declared)) {
+            return null;
+        }
+        return declared.asElement() instanceof TypeElement typeElement ? typeElement : null;
+    }
+
+    /** Emits a compile error for every field on {@code dtoQualifiedName} whose name shadows a {@link #reservedEntityFieldNames} entry - see the call sites' own comment for why this matters. */
+    private void checkNoProtectedFields(String dtoQualifiedName, Set<String> reservedNames, String dtoKind, TypeElement entityType) {
+        if (reservedNames.isEmpty()) {
+            return;
+        }
+        TypeElement dtoElement = elements.getTypeElement(dtoQualifiedName);
+        if (dtoElement == null) {
+            return;
+        }
+        for (Element enclosed : dtoElement.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.FIELD) {
+                continue;
+            }
+            String fieldName = enclosed.getSimpleName().toString();
+            if (reservedNames.contains(fieldName)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@RestlessEntity: " + dtoKind + " field '" + fieldName + "' shadows a protected property of "
+                                + entityType.getSimpleName() + " (@Id/@Version/soft-delete/audit) - a client-controlled "
+                                + "value for it would bypass Default*DataSource's mass-assignment protection; rename "
+                                + "or remove this field", enclosed);
+            }
+        }
+    }
+
+    /** Emits a compile error for every primitive field on a {@code PatchModel} - see Ground rules item 6: a primitive can never represent "the client didn't send this", so PATCH would always overwrite it. */
+    private void checkPatchModelHasNoPrimitiveFields(TypeElement patchModelElement) {
+        for (Element enclosed : patchModelElement.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.FIELD) {
+                continue;
+            }
+            if (enclosed.asType().getKind().isPrimitive()) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@RestlessEntity: PatchModel field '" + enclosed.getSimpleName() + "' is primitive ("
+                                + enclosed.asType() + ") - PATCH can never represent \"the client didn't send this "
+                                + "field\" for a primitive (it's never null), so every PATCH would overwrite it; "
+                                + "use the boxed type instead", enclosed);
+            }
+        }
+    }
+
+    /**
+     * Best-effort: resolves the {@code P} type argument of whatever {@code patchDataSource}
+     * resolves to, by reading its direct supertype's own type arguments - exactly the shape
+     * {@code class FooPatchDataSource extends DefaultPatchDataSource<Foo, Long, FooPatchModel>}
+     * (every example in {@code RestlessEntity#patchDataSource}'s own javadoc) has. {@code null}
+     * (no check performed, not an error) when {@code patchDataSource} isn't set, or its
+     * supertype isn't a plain 3-argument parameterized type - a hand-written {@code
+     * PatchDataSource} with a more unusual shape (e.g. implementing an intermediate interface)
+     * is still free to shadow a protected field; this is a safety net for the common case, not a
+     * guarantee.
+     */
+    private TypeElement resolvePatchModelType(VerbOverride patchDataSource) {
+        if (!patchDataSource.isOverridden()) {
+            return null;
+        }
+        TypeElement overrideElement = elements.getTypeElement(patchDataSource.typeFqn());
+        if (overrideElement == null) {
+            return null;
+        }
+        if (!(overrideElement.getSuperclass() instanceof DeclaredType superclass) || superclass.getTypeArguments().size() != 3) {
+            return null;
+        }
+        return asTypeElement(superclass.getTypeArguments().get(2));
     }
 
     private String resolveIdType(TypeElement entityType) {

@@ -34,7 +34,7 @@ public class DefaultCreateDataSource<E, K, C extends CreateModel>
     @Override
     public E create(C createDto) {
         E entity = BeanUtils.instantiate(entityType);
-        BeanUtils.copyProperties(createDto, entity);
+        BeanUtils.copyProperties(createDto, entity, ProtectedEntityFields.of(entityType));
         return specificationRepository.save(entity);
     }
 

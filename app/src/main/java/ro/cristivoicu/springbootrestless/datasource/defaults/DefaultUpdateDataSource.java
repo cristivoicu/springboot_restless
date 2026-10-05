@@ -27,7 +27,7 @@ public class DefaultUpdateDataSource<E, K, U extends UpdateModel>
     public E update(K id, U updateDto) {
         E entity = specificationRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found"));
-        BeanUtils.copyProperties(updateDto, entity);
+        BeanUtils.copyProperties(updateDto, entity, ProtectedEntityFields.of(entity.getClass()));
         return specificationRepository.save(entity);
     }
 

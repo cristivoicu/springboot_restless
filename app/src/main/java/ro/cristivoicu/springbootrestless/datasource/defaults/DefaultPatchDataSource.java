@@ -35,7 +35,7 @@ public class DefaultPatchDataSource<E, K, P extends PatchModel>
     public E patch(K id, P patchDto) {
         E entity = specificationRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found"));
-        BeanUtils.copyProperties(patchDto, entity, nullPropertyNames(patchDto));
+        BeanUtils.copyProperties(patchDto, entity, ignoredPropertyNames(patchDto, entity.getClass()));
         return specificationRepository.save(entity);
     }
 
@@ -50,5 +50,12 @@ public class DefaultPatchDataSource<E, K, P extends PatchModel>
                 .map(PropertyDescriptor::getName)
                 .filter(name -> wrapper.getPropertyValue(name) == null)
                 .toArray(String[]::new);
+    }
+
+    /** {@link #nullPropertyNames} unioned with {@link ProtectedEntityFields#of} - see that class's own javadoc for why a patch DTO's field names need the same shielding a create/update DTO's do. */
+    private static String[] ignoredPropertyNames(Object source, Class<?> entityType) {
+        java.util.LinkedHashSet<String> ignored = new java.util.LinkedHashSet<>(Arrays.asList(nullPropertyNames(source)));
+        ignored.addAll(Arrays.asList(ProtectedEntityFields.of(entityType)));
+        return ignored.toArray(new String[0]);
     }
 }
