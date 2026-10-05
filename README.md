@@ -932,6 +932,15 @@ above for what stability guarantees actually apply before 1.0.
 - **`findEmbeddedList` is now capped** by `restless.list.max-size`, the same cap every other
   unbounded read already had - an `@RestlessEmbed(many = true)` field was the one unbounded read
   that cap didn't reach yet.
+- **Default sort resolves the entity's real `@Id` property.** Previously `AbstractSearchDto`
+  always defaulted an unsorted request to a hardcoded `"id"` sort - a 400 on every single
+  unsorted request to any entity whose `@Id` isn't literally named `id` (a natural key, say).
+  An explicit client sort that doesn't already end in the id property now also gets it appended
+  as a tie-breaker, a prerequisite for stable pagination. Sortable properties are now also
+  restricted to plain scalar columns - associations, collections, static/transient fields, and
+  any property whose response DTO counterpart is `@CerbosHiddenField` are excluded (previously
+  some of these produced a confusing 500 from Hibernate instead of a clean 400; sorting by a
+  masked field would have leaked its order).
 - **Repo documentation consolidated.** Every standalone governance/meta doc (`ROADMAP.md`,
   `VERSIONING.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, this changelog) and the
   three `docs/design/*.md` design-rationale docs are now sections of this README instead of

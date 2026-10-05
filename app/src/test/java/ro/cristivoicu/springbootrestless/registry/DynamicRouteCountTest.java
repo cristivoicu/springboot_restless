@@ -38,6 +38,7 @@ class DynamicRouteCountTest {
     private static final int CUSTOM_WRITE_ACTION_COUNT = 1; // Gadget's "rename"
     private static final int NAMED_VIEW_COUNT = 1; // Gadget's "summary"
     private static final int OPT_IN_PATCH_ROUTE_COUNT = 1; // Doohickey's
+    private static final int NUGGET_ROUTE_COUNT = 7; // create, createBulk, findOne, findList, findPage, findPageOverview, findPageSelect (see NuggetRestlessResource#getEnabledOperations)
 
     @Autowired
     private RequestMappingHandlerMapping requestMappingHandlerMapping;
@@ -54,6 +55,6 @@ class DynamicRouteCountTest {
         assertThat(dynamicRouteCount).isEqualTo(
                 (long) (FIXED_ROUTES_PER_RESOURCE * FULL_CRUD_RESOURCE_COUNT) + READ_ONLY_ROUTE_COUNT
                         + CREATE_AND_LIST_ROUTE_COUNT + CUSTOM_READ_ACTION_COUNT + CUSTOM_WRITE_ACTION_COUNT
-                        + NAMED_VIEW_COUNT + OPT_IN_PATCH_ROUTE_COUNT);
+                        + NAMED_VIEW_COUNT + OPT_IN_PATCH_ROUTE_COUNT + NUGGET_ROUTE_COUNT);
     }
 }

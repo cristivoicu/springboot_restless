@@ -138,6 +138,7 @@ public abstract class RestlessResourceHandler<E, K> {
     private int maxListSize = DEFAULT_MAX_LIST_SIZE;
     private int maxPageSize = DEFAULT_MAX_PAGE_SIZE;
     private int maxBulkSize = DEFAULT_MAX_BULK_SIZE;
+    private String idPropertyName;
 
     /**
      * {@link #findList}'s default hard cap on how many rows a single unpaginated {@code
@@ -268,6 +269,7 @@ public abstract class RestlessResourceHandler<E, K> {
         this.maxListSize = maxListSize > 0 ? maxListSize : DEFAULT_MAX_LIST_SIZE;
         this.maxPageSize = maxPageSize > 0 ? maxPageSize : DEFAULT_MAX_PAGE_SIZE;
         this.maxBulkSize = maxBulkSize > 0 ? maxBulkSize : DEFAULT_MAX_BULK_SIZE;
+        this.idPropertyName = resolveIdPropertyName(metadata.entityType());
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
 
         this.customActionSearchDtoConstructors = new HashMap<>();
@@ -1083,14 +1085,47 @@ public abstract class RestlessResourceHandler<E, K> {
                     "Requested page size " + pageable.getPageSize() + " exceeds the maximum of " + maxPageSize);
         }
 
-        Set<String> entityProperties = entityPropertyNames();
+        // AbstractSearchDto.getPageable() always defaults to a literal "id" sort when the client
+        // sends none - wrong (and a guaranteed 400 below) for an entity whose @Id isn't literally
+        // named "id". Only for that base class (best-effort, same "known base, not the SearchDto
+        // interface in general" scope every other AbstractSearchDto-specific idiom here has): swap
+        // in the entity's real @Id property, and append it as a tie-breaker to an explicit sort
+        // that doesn't already end in it (a prerequisite for stable pagination - two rows tied on
+        // every client-requested sort key would otherwise have no guaranteed relative order at
+        // all between pages).
+        if (searchDto instanceof ro.cristivoicu.springbootrestless.models.AbstractSearchDto abstractSearchDto) {
+            Sort normalized = applyIdDefaultAndTieBreaker(abstractSearchDto.getSort(), pageable.getSort(), idPropertyName);
+            pageable = org.springframework.data.domain.PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), normalized);
+        }
+
+        Set<String> sortableProperties = sortablePropertyNames(metadata.entityType(), metadata.responseDtoType());
         for (Sort.Order order : pageable.getSort()) {
-            if (!entityProperties.contains(order.getProperty())) {
+            if (!sortableProperties.contains(order.getProperty())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Unknown sort property '" + order.getProperty() + "' for " + metadata.entityType().getSimpleName());
             }
         }
         return pageable;
+    }
+
+    /**
+     * Pure logic extracted out of {@link #pageableOf} purely so {@code
+     * RestlessResourceHandlerSortTest} can assert on the exact {@link Sort} produced without a
+     * database in the loop - two rows tied on every client-requested sort key coincidentally come
+     * back in insertion/id order on a tiny H2 table regardless of whether a tie-breaker was
+     * actually appended, so observed row order can't reliably prove this logic either way.
+     * {@code clientSortClauses}: the client's raw, pre-{@code Pageable} sort clauses ({@code
+     * AbstractSearchDto#getSort()}) - empty means "the client specified no sort at all" (not
+     * "sorted by nothing," which {@code AbstractSearchDto#getPageable()} never actually produces).
+     * Package-private for that same test.
+     */
+    static Sort applyIdDefaultAndTieBreaker(List<String> clientSortClauses, Sort boundSort, String idProperty) {
+        if (clientSortClauses.isEmpty()) {
+            return Sort.by(Sort.Direction.ASC, idProperty);
+        }
+        List<Sort.Order> orders = boundSort.toList();
+        boolean endsInId = !orders.isEmpty() && orders.get(orders.size() - 1).getProperty().equals(idProperty);
+        return endsInId ? boundSort : boundSort.and(Sort.by(Sort.Direction.ASC, idProperty));
     }
 
     /**
@@ -1114,6 +1149,91 @@ public abstract class RestlessResourceHandler<E, K> {
             }
         }
         return names;
+    }
+
+    /**
+     * {@link #entityPropertyNames}, narrowed to what's actually safe to sort by (Ground rules
+     * item 4): associations/collections excluded (ordering a JPA criteria query by a related
+     * entity or a collection either fails outright or means something far less obvious than
+     * "compare this column"), statics and {@code transient}/{@code @Transient} fields excluded
+     * (nothing backing them in a column to order by at all), and - unlike {@link
+     * #entityPropertyNames}, used for filter-DSL validation, which has no such concern - any
+     * property whose {@code responseDtoType} counterpart is marked hidden, since sorting by a
+     * masked field leaks its order to a caller who can't see its value. Matched by annotation
+     * <em>simple name</em> ({@code "CerbosHiddenField"}), not type: this module can't depend on
+     * the optional {@code cerbos} module that actually declares it (same reasoning {@code
+     * RestlessMapperExclude}'s own cross-module checks elsewhere already accept) - see
+     * {@code RestlessResourceHandlerSortTest} for a self-contained proof using a same-named local
+     * stand-in. {@code responseDtoType} may be {@code null} (an unreifiable {@code Mapper}, see
+     * {@link ResourceMetadata}'s own javadoc) - that exclusion is simply skipped then, not an
+     * error. Static (not instance) and side-effect-free, so a unit test can exercise it directly
+     * against arbitrary fixture classes with no {@code RestlessResourceHandler} instance at all.
+     */
+    static Set<String> sortablePropertyNames(Class<?> entityType, Class<?> responseDtoType) {
+        Set<String> hiddenByDto = responseDtoType == null ? Set.of() : maskedFieldNames(responseDtoType);
+        Set<String> names = new HashSet<>();
+        for (Class<?> type = entityType; type != null && type != Object.class; type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                int modifiers = field.getModifiers();
+                if (java.lang.reflect.Modifier.isStatic(modifiers) || java.lang.reflect.Modifier.isTransient(modifiers)) {
+                    continue;
+                }
+                if (field.isAnnotationPresent(jakarta.persistence.Transient.class)) {
+                    continue;
+                }
+                if (isAssociationOrCollection(field)) {
+                    continue;
+                }
+                if (hiddenByDto.contains(field.getName())) {
+                    continue;
+                }
+                names.add(field.getName());
+            }
+        }
+        return names;
+    }
+
+    private static boolean isAssociationOrCollection(Field field) {
+        if (field.isAnnotationPresent(jakarta.persistence.OneToMany.class)
+                || field.isAnnotationPresent(jakarta.persistence.ManyToMany.class)
+                || field.isAnnotationPresent(jakarta.persistence.OneToOne.class)
+                || field.isAnnotationPresent(jakarta.persistence.ManyToOne.class)
+                || field.isAnnotationPresent(jakarta.persistence.ElementCollection.class)) {
+            return true;
+        }
+        return Collection.class.isAssignableFrom(field.getType()) || Map.class.isAssignableFrom(field.getType());
+    }
+
+    private static Set<String> maskedFieldNames(Class<?> dtoType) {
+        Set<String> hidden = new HashSet<>();
+        for (Class<?> type = dtoType; type != null && type != Object.class; type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                for (java.lang.annotation.Annotation annotation : field.getAnnotations()) {
+                    if (annotation.annotationType().getSimpleName().equals("CerbosHiddenField")) {
+                        hidden.add(field.getName());
+                    }
+                }
+            }
+        }
+        return hidden;
+    }
+
+    /**
+     * The entity's own {@code @jakarta.persistence.Id} property name, walking superclasses the
+     * same way {@link #entityPropertyNames} does - resolved once in {@link #init} (cheap enough
+     * to not matter, but every other per-request reflection walk in this class is already a
+     * fresh computation rather than a cached one, so this one is too, for consistency). {@link
+     * #pageableOf} is the one reader.
+     */
+    private static String resolveIdPropertyName(Class<?> entityType) {
+        for (Class<?> type = entityType; type != null && type != Object.class; type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                if (field.isAnnotationPresent(jakarta.persistence.Id.class)) {
+                    return field.getName();
+                }
+            }
+        }
+        throw new IllegalStateException("No @Id field found on " + entityType);
     }
 
     private Object readBody(HttpServletRequest request, Class<?> type) throws java.io.IOException {
