@@ -913,6 +913,16 @@ above for what stability guarantees actually apply before 1.0.
 
 **Added**
 
+- **`@RestlessEmbed` now respects the target's `getEnabledOperations()`, excludes soft-deleted
+  rows, and applies `scope()` on a `many = false` embed too.** Previously `?expand=name` could
+  reach `findEmbeddedList`/`findEmbeddedOne` directly, bypassing a target resource's own
+  `READ_LIST`/`READ_ONE` opt-out, its soft-delete exclusion, and (for `many = false`) its
+  row-level `scope()` entirely - none of which the embedded field's own route (there isn't one)
+  would have let through. `findEmbeddedOne` also now queries with a limit of 2 and throws if the
+  join matches more than one row, instead of silently taking the first - more than one match
+  means `sourceField`/`targetField` don't actually form the natural key `@RestlessEmbed`
+  assumes, which is a configuration error worth surfacing, not papering over.
+
 - **Atomic write pipeline.** `create`/`update`/`patch`/`deleteById` (and `createBulk`/
   `updateBulk`) now run load, 404-if-missing, `canAccess`, `If-Match`, the data-source write,
   a flush, and `Mapper.map` inside one transaction, in that order - previously the guard/

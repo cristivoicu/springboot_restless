@@ -1633,10 +1633,17 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * should read as "nothing here" on the *embedding* resource's response, not fail it outright.
      */
     public final List<?> findEmbeddedList(Specification<E> joinFilter, HttpServletRequest request) {
+        // Ground rules item 8: a resource that disabled READ_LIST (see getEnabledOperations())
+        // never registers a GET .../list route for itself, but @RestlessEmbed could still reach
+        // its findEmbeddedList directly, bypassing that opt-out entirely - a caller who can't
+        // list this resource on its own route shouldn't be able to via someone else's expand=.
+        if (!getEnabledOperations().contains(AuthorizationGuard.Action.READ_LIST)) {
+            return List.of();
+        }
         if (!getAuthorizationGuard().preCheck(AuthorizationGuard.Action.READ_LIST, null, request)) {
             return List.of();
         }
-        Specification<E> spec = withScope(joinFilter, AuthorizationGuard.Action.READ_LIST, null, request);
+        Specification<E> spec = withScope(excludeSoftDeleted(joinFilter), AuthorizationGuard.Action.READ_LIST, null, request);
         // Capped by maxListSize, same reasoning as findList's own cap: an embedded relation is
         // otherwise exactly as unbounded as GET .../list was before that cap existed, just with
         // no X-Restless-List-Truncated header to signal it (there's nowhere to put one on a field
@@ -1648,17 +1655,31 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     /**
      * Same as {@link #findEmbeddedList}, for a {@code many = false} {@link RestlessEmbed} field:
      * {@code joinFilter} is expected to match at most one row (a natural-key equality check, the
-     * same assumption every other natural-key "join" in this codebase already makes) - the first
-     * match if more than one somehow satisfies it. {@code null} (not 404/403) for no match, a
-     * denied {@code preCheck}, or a denied {@code canAccess} on the row that did match.
+     * same assumption every other natural-key "join" in this codebase already makes). {@code
+     * null} (not 404/403) for no match, a disabled {@code READ_ONE} operation, a denied {@code
+     * preCheck}, or a denied {@code canAccess} on the row that did match.
+     * <p>
+     * Ground rules item 8: queries with a limit of 2, not 1 - more than one match means {@code
+     * sourceField}/{@code targetField} don't actually form the natural key this annotation
+     * assumes, which is a configuration error in the entity author's own {@code @RestlessEmbed}
+     * declaration, not a routine "which one do I show" runtime decision. Taking an arbitrary
+     * first row would silently hide that mistake instead of surfacing it.
      */
     public final Object findEmbeddedOne(Specification<E> joinFilter, HttpServletRequest request) {
+        if (!getEnabledOperations().contains(AuthorizationGuard.Action.READ_ONE)) {
+            return null;
+        }
         if (!getAuthorizationGuard().preCheck(AuthorizationGuard.Action.READ_ONE, null, request)) {
             return null;
         }
-        List<E> matches = getReadDataSource().findAll(joinFilter);
+        Specification<E> spec = withScope(excludeSoftDeleted(joinFilter), AuthorizationGuard.Action.READ_ONE, null, request);
+        List<E> matches = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, 2)).getContent();
         if (matches.isEmpty()) {
             return null;
+        }
+        if (matches.size() > 1) {
+            throw new IllegalStateException("@RestlessEmbed join matched more than one "
+                    + metadata.entityType().getSimpleName() + " row - sourceField/targetField don't form a natural key");
         }
         E found = matches.get(0);
         if (!getAuthorizationGuard().canAccess(AuthorizationGuard.Action.READ_ONE, request, found)) {
