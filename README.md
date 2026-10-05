@@ -913,6 +913,32 @@ above for what stability guarantees actually apply before 1.0.
 
 **Added**
 
+- **Atomic write pipeline.** `create`/`update`/`patch`/`deleteById` (and `createBulk`/
+  `updateBulk`) now run load, 404-if-missing, `canAccess`, `If-Match`, the data-source write,
+  a flush, and `Mapper.map` inside one transaction, in that order - previously the guard/
+  `If-Match` check loaded the entity separately, outside any transaction, and the data source
+  reloaded and wrote independently. Two consequences, now closed: a concurrent write landing
+  between the check and this request's own write now surfaces as `409`/`412`, never a silent
+  overwrite (see the new `ConcurrentUpdateRaceTest`); and a write-response `Mapper` touching a
+  lazy association now works under `spring.jpa.open-in-view=false` (see
+  `CreateWithLazyAssociationOsivOffTest`) - previously nothing in the write path ran inside a
+  transaction/session at all. `DataSource` gained a `flush()` method (public, concrete) so
+  `RestlessResourceHandler` can force a pending write to actually hit the database before
+  mapping the result.
+- **Row-level authorization on create, extended to writes generally.** `create`
+  (and `createBulk`) now calls `canAccess(CREATE, request, newEntity)` *after* the data source
+  saves it, inside the same transaction - a denial rolls the insert back. Previously create
+  never called `canAccess` at all; a resource's own guard had no say over what a client could
+  create. New `AuthorizationGuard#canAccessAfterWrite(Action, String, HttpServletRequest, E
+  after)` default method, additive, defaulting to `canAccess(...)` - `update`/`patch` (and
+  `updateBulk`) now call it *after* the write, on the now-mutated entity, in addition to the
+  existing pre-image check before it. **Default-on behavior change worth knowing about**: a
+  guard whose `canAccess` inspects mutable state that a legitimate update is expected to change
+  (e.g. `status == DRAFT` as part of an allowed draft→published transition) will now also run
+  that same check against the *new* state, and could unexpectedly deny a transition it used to
+  allow. Whether `canAccessAfterWrite` should default to `canAccess` at all, versus defaulting
+  to "always allow" (strictly opt-in), is flagged as a decision worth making before 1.0.
+
 - **Mass-assignment protection.** `Default{Create,Update,Patch}DataSource`'s `BeanUtils.copyProperties`
   now ignores whichever of the entity's `@Id`/`@Version`/`SoftDeletable`-`deleted`/audit-timestamp
   property names it finds (`ProtectedEntityFields`) - previously a `CreateModel` carrying a

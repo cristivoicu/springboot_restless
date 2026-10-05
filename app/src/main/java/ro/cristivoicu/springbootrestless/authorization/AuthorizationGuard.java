@@ -62,6 +62,34 @@ public interface AuthorizationGuard<E> {
     }
 
     /**
+     * Post-image check for {@code UPDATE}/{@code PATCH}: {@code RestlessResourceHandler} calls
+     * this <em>after</em> the write, on the now-mutated entity, in addition to the existing
+     * pre-image {@link #canAccess} check it already runs before the write. Catches a transition
+     * the pre-image check alone can't see at all - a client successfully passing the pre-check on
+     * their own row, then changing an owner/scoping field to something the guard would never have
+     * let them touch directly (e.g. reassigning a resource to someone else's account).
+     * <p>
+     * Defaults to delegating to {@link #canAccess}, so every existing guard implementation keeps
+     * behaving exactly as it already did - this is purely additive. <b>Default-on is a real
+     * behavior change worth knowing about</b>: a guard whose {@code canAccess} inspects mutable
+     * state that a legitimate update is expected to change (e.g. {@code status == DRAFT} as part
+     * of an allowed draft→published transition) will now also run that same check against the
+     * *new* status and could unexpectedly deny a transition it used to allow. See the Changelog's
+     * "Added" entry for this method - whether this should default on at all vs. being strictly
+     * opt-in is flagged there as worth revisiting before 1.0.
+     * <p>
+     * Deliberately no "before" parameter: within the one transaction {@code
+     * RestlessResourceHandler} now runs the whole write in, {@code after} the same managed JPA
+     * instance {@code canAccess}'s own pre-image check already saw as {@code entity} - the before
+     * state is already available by capturing it before the write if a transition rule actually
+     * needs to compare the two, same scope {@code WriteAction}-based illegal-transition checks
+     * already cover without needing this hook to grow a second entity parameter.
+     */
+    default boolean canAccessAfterWrite(Action action, String customActionName, HttpServletRequest request, E after) {
+        return canAccess(action, customActionName, request, after);
+    }
+
+    /**
      * The shared no-op instance {@code getAuthorizationGuard()} defaults to. A singleton (not a
      * fresh instance per call) so {@code RestlessResourceHandler} can reference-compare against
      * it to detect "no guard configured" and skip the extra per-instance load that {@code

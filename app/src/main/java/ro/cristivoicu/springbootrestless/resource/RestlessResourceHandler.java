@@ -620,6 +620,19 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
 
     // ---- shared handler methods: one Method object per route, inherited by every subclass ----
 
+    /**
+     * Atomic write pipeline (Ground rules item 1): {@link #inTransaction} now covers the write,
+     * the row-level {@link AuthorizationGuard#canAccess} check, the flush, and {@link
+     * Mapper#map} as one unit - previously none of this ran inside any transaction at all, so a
+     * write-response {@code Mapper} touching a lazy association failed under {@code
+     * spring.jpa.open-in-view=false} (see {@code CreateWithLazyAssociationOsivOffTest}).
+     * <p>
+     * Row-level authorization on writes (Ground rules item 2): unlike update/patch/delete,
+     * create has no pre-image to check - the very first check against the real, attributed
+     * entity (not {@link #checkPreCheck}'s coarse, pre-creation one) happens <em>after</em> the
+     * data source saves it, still inside the same transaction. A denial throws, which rolls the
+     * insert back - the row never actually exists from any other transaction's point of view.
+     */
     public final ResponseEntity<?> create(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
         Object body = readBody(request, metadata.createModelType());
@@ -629,20 +642,26 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         // just deserialized as exactly that class.
         @SuppressWarnings({"unchecked", "rawtypes"})
         CreateDataSource rawDataSource = getCreateDataSource();
-        @SuppressWarnings("unchecked")
-        E created = (E) rawDataSource.create((CreateModel) body);
-        // 201 + Location, not 200: RFC 9110 §15.3.2 - a successful POST that creates a resource
-        // should report 201 and point at where the new resource can be fetched. idOf(created)
-        // can come back null for an entity with no @Id field reachable via reflection walk-up
-        // (shouldn't happen for a real JPA entity, but a hand-rolled test double might skip it) -
-        // falls back to plain 200 with no Location rather than building a broken URI in that case.
-        Object id = idOf(created);
-        if (id != null) {
-            java.net.URI location = org.springframework.web.servlet.support.ServletUriComponentsBuilder
-                    .fromRequest(request).path("/{id}").buildAndExpand(id).toUri();
-            return ResponseEntity.created(location).body(getEntityMapper().map(created));
-        }
-        return ResponseEntity.ok(getEntityMapper().map(created));
+
+        return inTransaction(() -> {
+            @SuppressWarnings("unchecked")
+            E created = (E) rawDataSource.create((CreateModel) body);
+            checkCanAccess(AuthorizationGuard.Action.CREATE, request, created);
+            rawDataSource.flush();
+            // 201 + Location, not 200: RFC 9110 §15.3.2 - a successful POST that creates a
+            // resource should report 201 and point at where the new resource can be fetched.
+            // idOf(created) can come back null for an entity with no @Id field reachable via
+            // reflection walk-up (shouldn't happen for a real JPA entity, but a hand-rolled test
+            // double might skip it) - falls back to plain 200 with no Location rather than
+            // building a broken URI in that case.
+            Object id = idOf(created);
+            if (id != null) {
+                java.net.URI location = org.springframework.web.servlet.support.ServletUriComponentsBuilder
+                        .fromRequest(request).path("/{id}").buildAndExpand(id).toUri();
+                return ResponseEntity.created(location).body(getEntityMapper().map(created));
+            }
+            return ResponseEntity.ok(getEntityMapper().map(created));
+        });
     }
 
     /**
@@ -698,12 +717,19 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         }
         @SuppressWarnings({"unchecked", "rawtypes"})
         CreateDataSource rawDataSource = getCreateDataSource();
-        List<E> created = inTransaction(() -> {
+        // Row-level authorization on writes (Ground rules item 2) extends to bulk create too -
+        // otherwise this route would be a direct bypass of the same check single create() now
+        // runs. Every created item is checked (fail-fast, before the response goes out) inside
+        // the same transaction the write itself ran in, so a denial rolls back the whole batch.
+        return inTransaction(() -> {
             @SuppressWarnings("unchecked")
-            List<E> result = rawDataSource.createAll(bodies);
-            return result;
+            List<E> created = rawDataSource.createAll(bodies);
+            for (E entity : created) {
+                checkCanAccess(AuthorizationGuard.Action.CREATE, request, entity);
+            }
+            rawDataSource.flush();
+            return ResponseEntity.ok(getEntityMapper().map(created));
         });
-        return ResponseEntity.ok(getEntityMapper().map(created));
     }
 
     public final ResponseEntity<?> findOne(HttpServletRequest request) throws Exception {
@@ -885,31 +911,56 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         });
     }
 
+    /**
+     * Atomic write pipeline (Ground rules item 1): load, 404-if-missing, {@code canAccess},
+     * {@code If-Match}, the data-source write, flush, and {@code Mapper.map} all now run inside
+     * one {@link #inTransaction} boundary, in that order - previously the guard/{@code If-Match}
+     * check loaded the entity separately, outside any transaction, and {@code
+     * UpdateDataSource#update} reloaded it again independently to actually write. Two consequences
+     * of that gap, now closed: a concurrent write landing between the check and this request's own
+     * write could leave the check's decision based on data already stale by write time (see
+     * {@code ConcurrentUpdateRaceTest} - the data source's own {@code findById} now hits this same
+     * transaction's persistence context instead of re-querying, so a genuine conflict surfaces as
+     * {@code 409}/{@code 412}, never a silent overwrite); and the write-then-map sequence had no
+     * transaction/session to run in at all under {@code spring.jpa.open-in-view=false} (see {@code
+     * CreateWithLazyAssociationOsivOffTest}). The load that used to be skipped entirely when
+     * {@code !hasGuard() && ifMatch == null} now always happens - the data source's own internal
+     * reload being a persistence-context hit, not an extra query, is exactly what makes that an
+     * acceptable one-SELECT-per-write cost rather than a doubled one.
+     * <p>
+     * Row-level authorization on writes (Ground rules item 2): the existing pre-image {@link
+     * AuthorizationGuard#canAccess} check (unchanged) runs before the write; {@link
+     * AuthorizationGuard#canAccessAfterWrite} is new, and runs after it, on the now-mutated
+     * entity - catching a transition the pre-image check alone can't (e.g. a client who owns a
+     * row reassigning it to someone else's account). A denial throws, rolling the whole write
+     * back.
+     */
     public final ResponseEntity<?> update(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
         K id = extractId(request);
         String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
-        // Loaded purely for the guard check and/or the If-Match precondition (see checkIfMatch) -
-        // UpdateDataSource.update() loads/mutates/saves as one atomic unit and never hands the
-        // entity back to us beforehand. Skipped entirely (not just short-circuited on a denial)
-        // when neither applies, so a resource with no guard and no @Version field doesn't pay
-        // for an extra SELECT on every write.
-        if (hasGuard() || ifMatch != null) {
-            E existing = getReadDataSource().findOne(id);
-            if (existing != null) {
-                if (hasGuard()) {
-                    checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
-                }
-                checkIfMatch(ifMatch, existing);
-            }
-        }
         Object body = readBody(request, metadata.updateModelType());
         validate(body);
         @SuppressWarnings({"unchecked", "rawtypes"})
         UpdateDataSource rawDataSource = getUpdateDataSource();
-        @SuppressWarnings("unchecked")
-        E updated = (E) rawDataSource.update(id, (UpdateModel) body);
-        return ResponseEntity.ok(getEntityMapper().map(updated));
+
+        return inTransaction(() -> {
+            E existing = getReadDataSource().findOne(id);
+            if (existing == null) {
+                // Same ResponseStatusException/ProblemDetail shape DefaultUpdateDataSource's own
+                // not-found used to throw (now redundant there, but every hand-written
+                // UpdateDataSource is still free to also throw it for the same id) - not a bare
+                // 404, to keep this byte-for-byte compatible with before this pipeline existed.
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
+            }
+            checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
+            checkIfMatch(ifMatch, existing);
+            @SuppressWarnings("unchecked")
+            E updated = (E) rawDataSource.update(id, (UpdateModel) body);
+            checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, updated);
+            rawDataSource.flush();
+            return ResponseEntity.ok(getEntityMapper().map(updated));
+        });
     }
 
     /**
@@ -921,27 +972,30 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * without an explicit decision (see {@code AuthorizationGuard.Action}'s javadoc-equivalent
      * reasoning already applied to every other action here).
      */
+    /** Same atomic-write-pipeline/post-image-check shape as {@link #update} - see its own javadoc for the full reasoning. */
     public final ResponseEntity<?> patch(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.PATCH, null, request);
         K id = extractId(request);
         String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
-        if (hasGuard() || ifMatch != null) {
-            E existing = getReadDataSource().findOne(id);
-            if (existing != null) {
-                if (hasGuard()) {
-                    checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
-                }
-                checkIfMatch(ifMatch, existing);
-            }
-        }
         Object body = readBody(request, patchModelType);
         validate(body);
         @SuppressWarnings({"unchecked", "rawtypes"})
         PatchDataSource rawDataSource = getPatchDataSource().orElseThrow(
                 () -> new IllegalStateException("PATCH route registered but getPatchDataSource() is now empty"));
-        @SuppressWarnings("unchecked")
-        E patched = (E) rawDataSource.patch(id, (PatchModel) body);
-        return ResponseEntity.ok(getEntityMapper().map(patched));
+
+        return inTransaction(() -> {
+            E existing = getReadDataSource().findOne(id);
+            if (existing == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
+            }
+            checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
+            checkIfMatch(ifMatch, existing);
+            @SuppressWarnings("unchecked")
+            E patched = (E) rawDataSource.patch(id, (PatchModel) body);
+            checkCanAccessAfterWrite(AuthorizationGuard.Action.PATCH, request, patched);
+            rawDataSource.flush();
+            return ResponseEntity.ok(getEntityMapper().map(patched));
+        });
     }
 
     /**
@@ -969,7 +1023,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         }
         @SuppressWarnings({"unchecked", "rawtypes"})
         UpdateDataSource rawDataSource = getUpdateDataSource();
-        List<E> updated = inTransaction(() -> {
+        return inTransaction(() -> {
             if (hasGuard()) {
                 for (K id : byId.keySet()) {
                     E existing = getReadDataSource().findOne(id);
@@ -979,30 +1033,46 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 }
             }
             @SuppressWarnings("unchecked")
-            List<E> result = rawDataSource.updateAll(byId);
-            return result;
+            List<E> updated = rawDataSource.updateAll(byId);
+            // Row-level authorization on writes (Ground rules item 2), same post-image check
+            // single update() now runs, extended to every item in the batch - otherwise this
+            // route would be a direct bypass of it.
+            for (E entity : updated) {
+                checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, entity);
+            }
+            rawDataSource.flush();
+            return ResponseEntity.ok(getEntityMapper().map(updated));
         });
-        return ResponseEntity.ok(getEntityMapper().map(updated));
     }
 
-    public final ResponseEntity<?> deleteById(HttpServletRequest request) {
+    /**
+     * Same atomic-write-pipeline shape as {@link #update} (Ground rules item 1): load,
+     * 404-if-missing, {@code canAccess}, {@code If-Match}, then the actual delete, all inside one
+     * {@link #inTransaction}. No post-image check (item 2 only applies to update/patch/create -
+     * there's no "after" state for a deleted row) and no {@code Mapper.map} (a {@code 204} has no
+     * body), but the flush still runs, so the delete has genuinely landed before the response
+     * goes out. Previously the guard/{@code If-Match} load ran separately, outside any
+     * transaction, and a missing row fell through to whatever {@code DeleteDataSource#deleteById}
+     * happened to do with an absent id (the default throws an uncaught {@code
+     * EmptyResultDataAccessException} - a {@code 500} - rather than this clean {@code 404}).
+     */
+    public final ResponseEntity<?> deleteById(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.DELETE_ONE, null, request);
         K id = extractId(request);
         String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
-        // Same reasoning as update(): loaded purely for the guard check and/or If-Match, skipped
-        // entirely when neither applies; not found falls through unchanged to DeleteDataSource's
-        // own (today: silent) not-found behavior.
-        if (hasGuard() || ifMatch != null) {
+        DeleteDataSource<E, K, ?> dataSource = getDeleteDataSource();
+
+        return inTransaction(() -> {
             E existing = getReadDataSource().findOne(id);
-            if (existing != null) {
-                if (hasGuard()) {
-                    checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
-                }
-                checkIfMatch(ifMatch, existing);
+            if (existing == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
             }
-        }
-        getDeleteDataSource().deleteById(id);
-        return ResponseEntity.noContent().build();
+            checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
+            checkIfMatch(ifMatch, existing);
+            dataSource.deleteById(id);
+            dataSource.flush();
+            return ResponseEntity.noContent().build();
+        });
     }
 
     public final ResponseEntity<?> deleteAll(HttpServletRequest request) throws Exception {
@@ -1435,6 +1505,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         if (!getAuthorizationGuard().canAccess(action, request, entity)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
+        }
+    }
+
+    /** Post-image counterpart to {@link #checkCanAccess} (Ground rules item 2) - see {@link AuthorizationGuard#canAccessAfterWrite}'s own javadoc. */
+    private void checkCanAccessAfterWrite(AuthorizationGuard.Action action, HttpServletRequest request, E after) {
+        if (!getAuthorizationGuard().canAccessAfterWrite(action, null, request, after)) {
+            metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccessAfterWrite");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to leave this " + metadata.entityType().getSimpleName() + " in its new state");
         }
     }
 

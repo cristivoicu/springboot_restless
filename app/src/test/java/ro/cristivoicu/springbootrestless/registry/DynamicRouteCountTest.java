@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DynamicRouteCountTest {
 
     private static final int FIXED_ROUTES_PER_RESOURCE = 11;
-    private static final int FULL_CRUD_RESOURCE_COUNT = 5; // Gadget, Gizmo, Sprocket, Doohickey (both generated), Widget
+    private static final int FULL_CRUD_RESOURCE_COUNT = 7; // Gadget, Gizmo, Sprocket, Doohickey (both generated), Widget, Task, Racer
     private static final int READ_ONLY_ROUTE_COUNT = 3; // Cog: READ_ONE, READ_LIST, READ_PAGE only
     private static final int CREATE_AND_LIST_ROUTE_COUNT = 3; // Bolt: create, createBulk, findList only
     private static final int CUSTOM_READ_ACTION_COUNT = 1; // Gadget's "byEmailDomain"
@@ -39,6 +39,7 @@ class DynamicRouteCountTest {
     private static final int NAMED_VIEW_COUNT = 1; // Gadget's "summary"
     private static final int OPT_IN_PATCH_ROUTE_COUNT = 1; // Doohickey's
     private static final int NUGGET_ROUTE_COUNT = 7; // create, createBulk, findOne, findList, findPage, findPageOverview, findPageSelect (see NuggetRestlessResource#getEnabledOperations)
+    private static final int CRATE_ROUTE_COUNT = 7; // same shape as Nugget - see CrateRestlessResource#getEnabledOperations
 
     @Autowired
     private RequestMappingHandlerMapping requestMappingHandlerMapping;
@@ -55,6 +56,6 @@ class DynamicRouteCountTest {
         assertThat(dynamicRouteCount).isEqualTo(
                 (long) (FIXED_ROUTES_PER_RESOURCE * FULL_CRUD_RESOURCE_COUNT) + READ_ONLY_ROUTE_COUNT
                         + CREATE_AND_LIST_ROUTE_COUNT + CUSTOM_READ_ACTION_COUNT + CUSTOM_WRITE_ACTION_COUNT
-                        + NAMED_VIEW_COUNT + OPT_IN_PATCH_ROUTE_COUNT + NUGGET_ROUTE_COUNT);
+                        + NAMED_VIEW_COUNT + OPT_IN_PATCH_ROUTE_COUNT + NUGGET_ROUTE_COUNT + CRATE_ROUTE_COUNT);
     }
 }
