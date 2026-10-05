@@ -94,7 +94,7 @@ import java.util.concurrent.Callable;
  * check points (coarse pre-check, row-level scope, per-instance access) and exactly where each
  * fires in the handler methods below.
  */
-public abstract class RestlessResourceHandler<E, K> {
+public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.springbootrestless.error.RestlessErrorScope {
 
     /**
      * The full, default set {@link #getEnabledOperations} returns unless overridden - every

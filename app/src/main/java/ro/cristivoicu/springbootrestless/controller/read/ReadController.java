@@ -21,7 +21,7 @@ import java.util.List;
  * types doesn't fit this shared base at all - same "known simplification" the generated tier's
  * own {@code RestlessOpenApiCustomizer} javadoc already accepts for exactly this reason.
  */
-public abstract class ReadController<E,K,S extends SearchDto,R> {
+public abstract class ReadController<E,K,S extends SearchDto,R> implements ro.cristivoicu.springbootrestless.error.RestlessErrorScope {
     protected final ReadDataSource<E,K,S> dataSource;
 
     protected abstract Specification<E> getSpecification(S searchDto);

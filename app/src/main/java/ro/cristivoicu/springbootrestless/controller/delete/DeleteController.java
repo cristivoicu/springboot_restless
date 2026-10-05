@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.models.DeleteModel;
 
-public abstract class DeleteController<E, K, D extends DeleteModel> {
+public abstract class DeleteController<E, K, D extends DeleteModel> implements ro.cristivoicu.springbootrestless.error.RestlessErrorScope {
     protected final DeleteDataSource<E, K, D> dataSource;
 
     protected DeleteController(DeleteDataSource<E, K, D> dataSource) {

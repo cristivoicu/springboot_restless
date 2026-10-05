@@ -9,7 +9,7 @@ import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.models.UpdateModel;
 
 /** {@code R} is a real type parameter, not {@code ?} - same reasoning as {@code CreateController}'s own javadoc. */
-public abstract class UpdateController<E, K, U extends UpdateModel, R> {
+public abstract class UpdateController<E, K, U extends UpdateModel, R> implements ro.cristivoicu.springbootrestless.error.RestlessErrorScope {
     protected final UpdateDataSource<E, K, U> dataSource;
 
     protected UpdateController(UpdateDataSource<E, K, U> dataSource) {

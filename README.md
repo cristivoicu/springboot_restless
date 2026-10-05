@@ -1021,6 +1021,22 @@ above for what stability guarantees actually apply before 1.0.
   RFC 9110 gives a `DELETE` request body no defined semantics, and in practice proxies/CDNs/
   `fetch()` are known to drop it. Applies to both the dynamic mechanism and the hand-subclassed
   `DeleteController` tier.
+- **`RestlessExceptionHandler` is now scoped** (`@RestControllerAdvice(assignableTypes =
+  RestlessErrorScope.class)`) to restless handlers and the hand-subclassed `*Controller` tier -
+  previously an unscoped advice, so its `Exception` catch-all changed error handling for a
+  consumer's own, unrelated controllers too (e.g. turning a Spring Security
+  `AuthorizationDeniedException` into a generic 500). `RestlessResourceHandler` and the four
+  `*Controller` base classes now implement the new `RestlessErrorScope` marker interface.
+- **Every `ProblemDetail` now carries a stable `type` URI**, one per error kind (e.g.
+  `.../problems/validation-failed`, `.../problems/not-found`) - previously the RFC 9457 default
+  of `about:blank` for every response, which can't distinguish one error kind from another.
+- **`errors` entries are now objects (`{field, message, code}`)**, not a single
+  `"field: message"` string - a client parsing them programmatically had no reliable way to
+  separate the field name from the message, or key off the violated constraint at all.
+- **`DataIntegrityViolationException` now maps to `409`** with a generic detail - previously
+  fell through to the generic `500` handler, which also meant the underlying SQL exception's own
+  message (routinely embedding table/column/constraint names, even literal values) could leak
+  into the response body.
 
 **Fixed**
 

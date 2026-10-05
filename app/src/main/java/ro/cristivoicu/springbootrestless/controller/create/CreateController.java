@@ -23,7 +23,7 @@ import java.net.URI;
  * reflection sees exactly that, no different from any hand-written {@code
  * ResponseEntity<EmployeeDto>} return type would document.
  */
-public abstract class CreateController<E, K, C extends CreateModel, R> {
+public abstract class CreateController<E, K, C extends CreateModel, R> implements ro.cristivoicu.springbootrestless.error.RestlessErrorScope {
     protected final CreateDataSource<E, K, C> dataSource;
 
     protected CreateController(CreateDataSource<E, K, C> dataSource) {
