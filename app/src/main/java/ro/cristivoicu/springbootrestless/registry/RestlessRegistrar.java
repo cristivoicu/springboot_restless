@@ -18,6 +18,7 @@ import ro.cristivoicu.springbootrestless.autoconfigure.RestlessProperties;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
 import ro.cristivoicu.springbootrestless.resource.ResourceMetadata;
+import ro.cristivoicu.springbootrestless.resource.RestlessInitContext;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
 import tools.jackson.databind.ObjectMapper;
 
@@ -95,8 +96,9 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         String version = annotation.version();
 
         ResourceMetadata metadata = resource.resolveMetadata(basePath, version);
-        resource.init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics,
-                properties.getList().getMaxSize(), properties.getPage().getMaxSize(), properties.getBulk().getMaxSize());
+        resource.init(new RestlessInitContext(metadata, objectMapper, conversionService, validator, embedResolver,
+                transactionManager, metrics, properties.getList().getMaxSize(), properties.getPage().getMaxSize(),
+                properties.getBulk().getMaxSize()));
 
         // Fail-fast, not fail-open: a resource with no real AuthorizationGuard (still the
         // default-permissive AuthorizationGuard.allowAll()) never gets registered at all unless

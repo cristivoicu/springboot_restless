@@ -91,17 +91,19 @@ class EmbedHardeningTest {
         RestrictedGizmoResource resource = new RestrictedGizmoResource(gizmoRepository, gizmoMapper);
         resource.enabled = enabledOperations;
         resource.guard = guard;
-        resource.init(resource.resolveMetadata("/gizmos-embed-test"), objectMapper, conversionService, validator,
+        resource.init(new ro.cristivoicu.springbootrestless.resource.RestlessInitContext(
+                resource.resolveMetadata("/gizmos-embed-test"), objectMapper, conversionService, validator,
                 RestlessEmbedResolver.NONE, transactionManager, ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics.NONE,
-                10_000, 2_000, 1_000);
+                10_000, 2_000, 1_000));
         return resource;
     }
 
     private WidgetRestlessResource initWidgetResource() {
         WidgetRestlessResource resource = new WidgetRestlessResource(widgetRepository, widgetMapper);
-        resource.init(resource.resolveMetadata("/widgets-embed-test"), objectMapper, conversionService, validator,
+        resource.init(new ro.cristivoicu.springbootrestless.resource.RestlessInitContext(
+                resource.resolveMetadata("/widgets-embed-test"), objectMapper, conversionService, validator,
                 RestlessEmbedResolver.NONE, transactionManager, ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics.NONE,
-                10_000, 2_000, 1_000);
+                10_000, 2_000, 1_000));
         return resource;
     }
 

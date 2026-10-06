@@ -1,6 +1,5 @@
 package ro.cristivoicu.springbootrestless.resource;
 
-import jakarta.persistence.Version;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.GenericTypeResolver;
@@ -14,8 +13,6 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.BeanPropertyBindingResult;
 import org.springframework.validation.BindingResult;
@@ -60,7 +57,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.Callable;
 
 /**
  * Runtime-registered replacement for the four hand-subclassed {@code *Controller} classes.
@@ -133,12 +129,16 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     private Map<String, Constructor<?>> customActionSearchDtoConstructors;
     private Class<?> patchModelType;
     private RestlessEmbedResolver embedResolver = RestlessEmbedResolver.NONE;
-    private PlatformTransactionManager transactionManager;
     private RestlessAuthorizationMetrics metrics = RestlessAuthorizationMetrics.NONE;
     private int maxListSize = DEFAULT_MAX_LIST_SIZE;
     private int maxPageSize = DEFAULT_MAX_PAGE_SIZE;
     private int maxBulkSize = DEFAULT_MAX_BULK_SIZE;
     private String idPropertyName;
+
+    /** {@link #getAuthorizationGuard()}, resolved once in {@link #init} - see that method's own javadoc for why. */
+    private AuthorizationGuard<E> cachedGuard;
+
+    private TransactionSupport transactionSupport;
 
     /**
      * {@link #findList}'s default hard cap on how many rows a single unpaginated {@code
@@ -177,99 +177,32 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * Wires this resource's infra collaborators. Called once by whichever registrar discovered
      * this bean (a hardcoded call in Stage 1, {@code RestlessRegistrar} from Stage 2 on) — kept
      * separate from the constructor so the entity author's subclass stays free of infra plumbing.
+     * <p>
+     * One {@link RestlessInitContext} parameter, not the telescoping chain of same-named
+     * overloads this replaced (Ground rules Phase 2 item 14) - each of those existed purely so
+     * an older caller/test kept compiling unchanged as one more collaborator was added over
+     * time; a record names every field at the call site instead, so this never needs a seventh
+     * overload the next time one more thing needs threading through.
+     * <p>
+     * Also resolves and caches {@link #getAuthorizationGuard()} into {@link #cachedGuard} here,
+     * once - every internal call site ({@link #checkPreCheck}, {@link #checkCanAccess}, {@link
+     * #withScope}, ...) reads that field instead of calling the (overridable, possibly
+     * expensive-to-construct - see this method's own README-documented pattern) accessor again
+     * on every single request.
      */
-    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
-                            ConversionService conversionService, Validator validator) {
-        init(metadata, objectMapper, conversionService, validator, RestlessEmbedResolver.NONE, null);
-    }
-
-    /**
-     * Same as the four-arg {@link #init}, plus the {@link RestlessEmbedResolver} {@code
-     * findOne()} uses to resolve {@code expand=} - a separate overload (not a fifth required
-     * parameter on the original) purely so every pre-existing caller/test that constructs a
-     * {@code RestlessResourceHandler} by hand keeps compiling unchanged, defaulted to {@link
-     * RestlessEmbedResolver#NONE}. Only {@code RestlessRegistrar} calls this overload, with the
-     * real, Spring-wired resolver bean.
-     */
-    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
-                            ConversionService conversionService, Validator validator,
-                            RestlessEmbedResolver embedResolver) {
-        init(metadata, objectMapper, conversionService, validator, embedResolver, null);
-    }
-
-    /**
-     * Same as the five-arg {@link #init}, plus the {@link PlatformTransactionManager} {@link
-     * #createBulk}/{@link #updateBulk}/{@link #deleteAll} wrap their actual database write in -
-     * <b>not</b> {@code @Transactional}: every handler method here is deliberately {@code final}
-     * (one shared {@link Method} object dispatched reflectively across every resource instance,
-     * see this class's own javadoc), and Spring's proxy-based {@code @Transactional} support
-     * cannot intercept a final method at all - CGLIB can't override it, so the annotation would
-     * silently do nothing while still triggering a (useless) proxy and its own startup warnings
-     * for every other final method here. {@code null} (the four/five-arg overloads' default) runs
-     * a bulk write with no transaction boundary at all - today's original behavior, not a broken
-     * one: every {@code Default*DataSource}/hand-written {@code *DataSource} still worked before
-     * this existed, just without the atomicity guarantee a genuinely large batch benefits from.
-     * Only {@code RestlessRegistrar} calls this overload, with the real
-     * {@code JpaTransactionManager} Spring Data JPA already auto-configures.
-     */
-    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
-                            ConversionService conversionService, Validator validator,
-                            RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager) {
-        init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, RestlessAuthorizationMetrics.NONE);
-    }
-
-    /**
-     * Same as the six-arg {@link #init}, plus the {@link RestlessAuthorizationMetrics} {@link
-     * #checkPreCheck}/{@link #checkCanAccess} record an authorization-denial count to - a separate
-     * overload for the same reason the five/six-arg ones are, defaulted to {@link
-     * RestlessAuthorizationMetrics#NONE} (a no-op) for every pre-existing caller. Only {@code
-     * RestlessRegistrar} calls this overload, with the real conditionally-registered bean (or its
-     * own {@code NONE} fallback when Micrometer/Actuator aren't on the consumer's classpath).
-     */
-    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
-                            ConversionService conversionService, Validator validator,
-                            RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager,
-                            RestlessAuthorizationMetrics metrics) {
-        init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics, DEFAULT_MAX_LIST_SIZE);
-    }
-
-    /**
-     * Same as the seven-arg {@link #init}, plus {@link #maxListSize} - a separate overload for
-     * the same reason the others are: only {@code RestlessRegistrar} calls this one, with the
-     * real value bound from {@code restless.list.max-size} (see {@code RestlessProperties}),
-     * every pre-existing caller keeps getting {@link #DEFAULT_MAX_LIST_SIZE} unchanged.
-     */
-    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
-                            ConversionService conversionService, Validator validator,
-                            RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager,
-                            RestlessAuthorizationMetrics metrics, int maxListSize) {
-        init(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics,
-                maxListSize, DEFAULT_MAX_PAGE_SIZE, DEFAULT_MAX_BULK_SIZE);
-    }
-
-    /**
-     * Same as the eight-arg {@link #init}, plus {@link #maxPageSize}/{@link #maxBulkSize} - a
-     * separate overload for the same reason the others are: only {@code RestlessRegistrar} calls
-     * this one, with the real values bound from {@code restless.page.max-size}/{@code
-     * restless.bulk.max-size} (see {@code RestlessProperties}), every pre-existing caller keeps
-     * getting {@link #DEFAULT_MAX_PAGE_SIZE}/{@link #DEFAULT_MAX_BULK_SIZE} unchanged. (Replacing
-     * this telescoping chain with a single context record is tracked separately - Phase 2.)
-     */
-    public final void init(ResourceMetadata metadata, ObjectMapper objectMapper,
-                            ConversionService conversionService, Validator validator,
-                            RestlessEmbedResolver embedResolver, PlatformTransactionManager transactionManager,
-                            RestlessAuthorizationMetrics metrics, int maxListSize, int maxPageSize, int maxBulkSize) {
-        this.metadata = metadata;
-        this.objectMapper = objectMapper;
-        this.conversionService = conversionService;
-        this.validator = validator;
-        this.embedResolver = embedResolver;
-        this.transactionManager = transactionManager;
-        this.metrics = metrics == null ? RestlessAuthorizationMetrics.NONE : metrics;
-        this.maxListSize = maxListSize > 0 ? maxListSize : DEFAULT_MAX_LIST_SIZE;
-        this.maxPageSize = maxPageSize > 0 ? maxPageSize : DEFAULT_MAX_PAGE_SIZE;
-        this.maxBulkSize = maxBulkSize > 0 ? maxBulkSize : DEFAULT_MAX_BULK_SIZE;
+    public final void init(RestlessInitContext context) {
+        this.metadata = context.metadata();
+        this.objectMapper = context.objectMapper();
+        this.conversionService = context.conversionService();
+        this.validator = context.validator();
+        this.embedResolver = context.embedResolver();
+        this.transactionSupport = new TransactionSupport(context.transactionManager());
+        this.metrics = context.metrics() == null ? RestlessAuthorizationMetrics.NONE : context.metrics();
+        this.maxListSize = context.maxListSize() > 0 ? context.maxListSize() : DEFAULT_MAX_LIST_SIZE;
+        this.maxPageSize = context.maxPageSize() > 0 ? context.maxPageSize() : DEFAULT_MAX_PAGE_SIZE;
+        this.maxBulkSize = context.maxBulkSize() > 0 ? context.maxBulkSize() : DEFAULT_MAX_BULK_SIZE;
         this.idPropertyName = resolveIdPropertyName(metadata.entityType());
+        this.cachedGuard = getAuthorizationGuard();
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
         resolveFilterBindings();
 
@@ -739,7 +672,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         @SuppressWarnings({"unchecked", "rawtypes"})
         CreateDataSource rawDataSource = getCreateDataSource();
 
-        return inTransaction(() -> {
+        return transactionSupport.inTransaction(() -> {
             @SuppressWarnings("unchecked")
             E created = (E) rawDataSource.create((CreateModel) body);
             checkCanAccess(AuthorizationGuard.Action.CREATE, request, created);
@@ -817,7 +750,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         // otherwise this route would be a direct bypass of the same check single create() now
         // runs. Every created item is checked (fail-fast, before the response goes out) inside
         // the same transaction the write itself ran in, so a denial rolls back the whole batch.
-        return inTransaction(() -> {
+        return transactionSupport.inTransaction(() -> {
             @SuppressWarnings("unchecked")
             List<E> created = rawDataSource.createAll(bodies);
             for (E entity : created) {
@@ -833,7 +766,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         K id = extractId(request);
         // inReadOnlyTransaction: getEntityMapper().map(...) and embedResolver.resolve(...) both
         // run inside it - see that method's own javadoc for why a lazy association needs this.
-        return inReadOnlyTransaction(() -> {
+        return transactionSupport.inReadOnlyTransaction(() -> {
             E found = getReadDataSource().findOne(id);
             if (found == null) {
                 return ResponseEntity.notFound().build();
@@ -858,7 +791,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         Sort sort = pageableOf(searchDto).getSort();
         // inReadOnlyTransaction: getOverviewMapper().map(...) runs inside it too - see that
         // method's own javadoc for why a lazy association needs this.
-        return inReadOnlyTransaction(() -> {
+        return transactionSupport.inReadOnlyTransaction(() -> {
             List<E> data = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, maxListSize + 1, sort)).getContent();
             boolean truncated = data.size() > maxListSize;
             List<E> page = truncated ? data.subList(0, maxListSize) : data;
@@ -926,7 +859,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         K id = extractId(request);
         // inReadOnlyTransaction: mapper.map(...)/embedResolver.resolve(...) run inside it too -
         // see that method's own javadoc for why a lazy association needs this.
-        return inReadOnlyTransaction(() -> {
+        return transactionSupport.inReadOnlyTransaction(() -> {
             E found = getReadDataSource().findOne(id);
             if (found == null) {
                 return ResponseEntity.notFound().build();
@@ -995,7 +928,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         @SuppressWarnings({"unchecked", "rawtypes"})
         WriteAction rawAction = action;
 
-        return inTransaction(() -> {
+        return transactionSupport.inTransaction(() -> {
             E found = getReadDataSource().findOne(id);
             if (found == null) {
                 return ResponseEntity.notFound().build();
@@ -1040,7 +973,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         @SuppressWarnings({"unchecked", "rawtypes"})
         UpdateDataSource rawDataSource = getUpdateDataSource();
 
-        return inTransaction(() -> {
+        return transactionSupport.inTransaction(() -> {
             E existing = getReadDataSource().findOne(id);
             if (existing == null) {
                 // Same ResponseStatusException/ProblemDetail shape DefaultUpdateDataSource's own
@@ -1050,7 +983,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
             }
             checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
-            checkIfMatch(ifMatch, existing);
+            PreconditionSupport.checkIfMatch(ifMatch, existing);
             @SuppressWarnings("unchecked")
             E updated = (E) rawDataSource.update(id, (UpdateModel) body);
             checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, updated);
@@ -1079,13 +1012,13 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         PatchDataSource rawDataSource = getPatchDataSource().orElseThrow(
                 () -> new IllegalStateException("PATCH route registered but getPatchDataSource() is now empty"));
 
-        return inTransaction(() -> {
+        return transactionSupport.inTransaction(() -> {
             E existing = getReadDataSource().findOne(id);
             if (existing == null) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
             }
             checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
-            checkIfMatch(ifMatch, existing);
+            PreconditionSupport.checkIfMatch(ifMatch, existing);
             @SuppressWarnings("unchecked")
             E patched = (E) rawDataSource.patch(id, (PatchModel) body);
             checkCanAccessAfterWrite(AuthorizationGuard.Action.PATCH, request, patched);
@@ -1119,7 +1052,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         }
         @SuppressWarnings({"unchecked", "rawtypes"})
         UpdateDataSource rawDataSource = getUpdateDataSource();
-        return inTransaction(() -> {
+        return transactionSupport.inTransaction(() -> {
             if (hasGuard()) {
                 for (K id : byId.keySet()) {
                     E existing = getReadDataSource().findOne(id);
@@ -1158,13 +1091,13 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
         DeleteDataSource<E, K, ?> dataSource = getDeleteDataSource();
 
-        return inTransaction(() -> {
+        return transactionSupport.inTransaction(() -> {
             E existing = getReadDataSource().findOne(id);
             if (existing == null) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
             }
             checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
-            checkIfMatch(ifMatch, existing);
+            PreconditionSupport.checkIfMatch(ifMatch, existing);
             dataSource.deleteById(id);
             dataSource.flush();
             return ResponseEntity.noContent().build();
@@ -1183,7 +1116,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         // whole loop, not just the check) when no guard is configured. Both the check loop and
         // the actual delete run inside the same transaction (see #inTransaction) - a row can't
         // change between being checked and being deleted either.
-        this.<Void>inTransaction(() -> {
+        transactionSupport.<Void>inTransaction(() -> {
             if (hasGuard()) {
                 for (String rawId : deleteModel.getIds()) {
                     E existing = getReadDataSource().findOne(convertId(rawId));
@@ -1216,7 +1149,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         // inReadOnlyTransaction: mapper.map(...) runs inside it too - see that method's own
         // javadoc for why a lazy association needs this. Shared by findPage/findPageOverview/
         // findPageSelect/customRead (via the two callers below), so this one wrap covers all four.
-        return inReadOnlyTransaction(() -> {
+        return transactionSupport.inReadOnlyTransaction(() -> {
             Page<E> page = getReadDataSource().findAll(spec, pageable);
 
             PageableResponse<List<?>> response = new PageableResponse<>();
@@ -1515,7 +1448,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * denial) when nothing is actually going to deny anything.
      */
     private boolean hasGuard() {
-        return getAuthorizationGuard() != AuthorizationGuard.allowAll();
+        return cachedGuard != AuthorizationGuard.allowAll();
     }
 
     /**
@@ -1531,74 +1464,15 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         return hasGuard();
     }
 
-    /**
-     * Opt-in optimistic-concurrency precondition for single-item {@link #update}/{@link
-     * #patch}/{@link #deleteById}: a no-op whenever {@code ifMatch} is {@code null} (no header
-     * sent) or {@code entity}'s type has no {@code @jakarta.persistence.Version} field at all (see
-     * {@link #readVersion}) - fully backward compatible with every entity that predates this
-     * feature. When both are present and disagree, this is the client racing a stale read against
-     * a write that already landed - reported as 412, not the 409 a raw {@code
-     * ObjectOptimisticLockingFailureException} from an actual concurrent {@code save()} maps to
-     * (see {@code RestlessExceptionHandler}), since this check runs before any write is even
-     * attempted.
-     */
-    private void checkIfMatch(String ifMatch, E entity) {
-        if (ifMatch == null) {
-            return;
-        }
-        String expected = stripEtagWrapper(ifMatch);
-        readVersion(entity).ifPresent(actual -> {
-            if (!expected.equals(actual)) {
-                throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,
-                        "If-Match '" + ifMatch + "' does not match current version '" + actual + "'");
-            }
-        });
-    }
-
-    /**
-     * Reflectively finds {@code entity}'s {@code @jakarta.persistence.Version} field (if any) and
-     * returns its current value as a string - the same "scan declared fields for an annotation"
-     * idiom {@link #getSpecification}'s default equality filter already uses. {@link
-     * Optional#empty()} for an entity type with no such field, which {@link #checkIfMatch} treats
-     * as "this entity doesn't support optimistic locking, so an If-Match header on it can't be
-     * honored" rather than an error.
-     */
-    private Optional<String> readVersion(E entity) {
-        for (Field field : entity.getClass().getDeclaredFields()) {
-            if (field.isAnnotationPresent(Version.class)) {
-                field.setAccessible(true);
-                try {
-                    Object value = field.get(entity);
-                    return value == null ? Optional.empty() : Optional.of(String.valueOf(value));
-                } catch (IllegalAccessException e) {
-                    throw new IllegalStateException("Could not read @Version field " + field + " for If-Match support", e);
-                }
-            }
-        }
-        return Optional.empty();
-    }
-
-    /** Strips a leading weak-validator marker ({@code W/}) and surrounding quotes, so both a raw version number and a properly-quoted HTTP ETag are accepted as {@code If-Match}. */
-    private static String stripEtagWrapper(String etag) {
-        String value = etag.trim();
-        if (value.startsWith("W/")) {
-            value = value.substring(2);
-        }
-        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
-            value = value.substring(1, value.length() - 1);
-        }
-        return value;
-    }
-
     private void checkPreCheck(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {
-        if (!getAuthorizationGuard().preCheck(action, customActionName, request)) {
+        if (!cachedGuard.preCheck(action, customActionName, request)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "preCheck");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to perform " + action);
         }
     }
 
     private void checkCanAccess(AuthorizationGuard.Action action, HttpServletRequest request, E entity) {
-        if (!getAuthorizationGuard().canAccess(action, request, entity)) {
+        if (!cachedGuard.canAccess(action, request, entity)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
         }
@@ -1606,7 +1480,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
 
     /** Post-image counterpart to {@link #checkCanAccess} (Ground rules item 2) - see {@link AuthorizationGuard#canAccessAfterWrite}'s own javadoc. */
     private void checkCanAccessAfterWrite(AuthorizationGuard.Action action, HttpServletRequest request, E after) {
-        if (!getAuthorizationGuard().canAccessAfterWrite(action, null, request, after)) {
+        if (!cachedGuard.canAccessAfterWrite(action, null, request, after)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccessAfterWrite");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to leave this " + metadata.entityType().getSimpleName() + " in its new state");
         }
@@ -1614,14 +1488,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
 
     /** Same as {@link #checkCanAccess(AuthorizationGuard.Action, HttpServletRequest, Object)}, threading a name through to the guard's own name-aware overload - see {@link #namedView}, the only caller. */
     private void checkCanAccess(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request, E entity) {
-        if (!getAuthorizationGuard().canAccess(action, customActionName, request, entity)) {
+        if (!cachedGuard.canAccess(action, customActionName, request, entity)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
         }
     }
 
     private Specification<E> withScope(Specification<E> spec, AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {
-        Specification<E> scope = getAuthorizationGuard().scope(action, customActionName, request);
+        Specification<E> scope = cachedGuard.scope(action, customActionName, request);
         return scope == null ? spec : spec.and(scope);
     }
 
@@ -1642,80 +1516,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         return spec.and((root, query, cb) -> cb.equal(root.get("deleted"), false));
     }
 
-    // ---- explicit transaction demarcation for the three bulk-write routes ----
-
-    /**
-     * Runs {@code work} inside a real transaction when {@link #init} was given a {@link
-     * PlatformTransactionManager} (see the six-arg overload's javadoc for why this - not {@code
-     * @Transactional} - is how {@link #createBulk}/{@link #updateBulk}/{@link #deleteAll} get
-     * atomicity); runs it directly, no transaction boundary at all, when it wasn't. {@link
-     * Callable}, not a plain {@link java.util.function.Supplier}, specifically because {@code
-     * CreateDataSource#createAll}/{@code UpdateDataSource#updateAll}/{@code
-     * DeleteDataSource#deleteAll} all declare {@code throws Exception} - {@code
-     * TransactionCallback#doInTransaction} has no {@code throws} clause of its own, so a checked
-     * exception thrown inside has to be wrapped to escape the callback, then unwrapped back to
-     * its original type once outside the transaction (any {@code RuntimeException} - including
-     * the wrapper - already triggers rollback on the way out, which is exactly the point).
-     */
-    private <T> T inTransaction(Callable<T> work) throws Exception {
-        if (transactionManager == null) {
-            return work.call();
-        }
-        try {
-            return new TransactionTemplate(transactionManager).execute(status -> {
-                try {
-                    return work.call();
-                } catch (Exception e) {
-                    throw new TransactionRollbackWrapper(e);
-                }
-            });
-        } catch (TransactionRollbackWrapper wrapper) {
-            throw wrapper.cause;
-        }
-    }
-
-    /**
-     * Read counterpart to {@link #inTransaction} - wraps a single-entity/page fetch plus its
-     * {@code Mapper}/{@code RestlessEmbedResolver} call in one {@code readOnly} transaction, so a
-     * lazy JPA association a hand-written {@code Mapper} or {@code @RestlessEmbed} field touches
-     * is still initializable when the consumer runs with {@code spring.jpa.open-in-view=false}
-     * (Spring Boot's own OSIV default is {@code true}, which papers over exactly this - a
-     * consumer who turns it off, the generally-recommended production setting, would otherwise
-     * hit a {@link org.hibernate.LazyInitializationException} the moment mapping touched an
-     * uninitialized proxy outside any session at all). {@code readOnly = true}: this path never
-     * writes, so Hibernate can skip dirty-checking - a real (if modest) win, not just a label.
-     * Same "no {@link PlatformTransactionManager} configured means no transaction boundary at
-     * all" fallback as {@link #inTransaction} - unchanged behavior for every caller that
-     * constructs a {@code RestlessResourceHandler} by hand (tests, mainly) rather than through
-     * {@code RestlessRegistrar}.
-     */
-    private <T> T inReadOnlyTransaction(Callable<T> work) throws Exception {
-        if (transactionManager == null) {
-            return work.call();
-        }
-        TransactionTemplate template = new TransactionTemplate(transactionManager);
-        template.setReadOnly(true);
-        try {
-            return template.execute(status -> {
-                try {
-                    return work.call();
-                } catch (Exception e) {
-                    throw new TransactionRollbackWrapper(e);
-                }
-            });
-        } catch (TransactionRollbackWrapper wrapper) {
-            throw wrapper.cause;
-        }
-    }
-
-    /** See {@link #inTransaction}'s own javadoc for why this exists at all. */
-    private static final class TransactionRollbackWrapper extends RuntimeException {
-        private final Exception cause;
-
-        TransactionRollbackWrapper(Exception cause) {
-            this.cause = cause;
-        }
-    }
+    // ---- explicit transaction demarcation for the three bulk-write routes - see TransactionSupport ----
 
     // ---- RestlessEmbed support: called from another resource's RestlessEmbedResolver, never ----
     // ---- directly by RestlessRegistrar - see RestlessEmbed's javadoc. ----
@@ -1736,7 +1537,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         if (!getEnabledOperations().contains(AuthorizationGuard.Action.READ_LIST)) {
             return List.of();
         }
-        if (!getAuthorizationGuard().preCheck(AuthorizationGuard.Action.READ_LIST, null, request)) {
+        if (!cachedGuard.preCheck(AuthorizationGuard.Action.READ_LIST, null, request)) {
             return List.of();
         }
         Specification<E> spec = withScope(excludeSoftDeleted(joinFilter), AuthorizationGuard.Action.READ_LIST, null, request);
@@ -1765,7 +1566,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         if (!getEnabledOperations().contains(AuthorizationGuard.Action.READ_ONE)) {
             return null;
         }
-        if (!getAuthorizationGuard().preCheck(AuthorizationGuard.Action.READ_ONE, null, request)) {
+        if (!cachedGuard.preCheck(AuthorizationGuard.Action.READ_ONE, null, request)) {
             return null;
         }
         Specification<E> spec = withScope(excludeSoftDeleted(joinFilter), AuthorizationGuard.Action.READ_ONE, null, request);
@@ -1778,7 +1579,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                     + metadata.entityType().getSimpleName() + " row - sourceField/targetField don't form a natural key");
         }
         E found = matches.get(0);
-        if (!getAuthorizationGuard().canAccess(AuthorizationGuard.Action.READ_ONE, request, found)) {
+        if (!cachedGuard.canAccess(AuthorizationGuard.Action.READ_ONE, request, found)) {
             return null;
         }
         return getEntityMapper().map(found);

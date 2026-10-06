@@ -924,6 +924,16 @@ above for what stability guarantees actually apply before 1.0.
 
 **Added**
 
+- **Internals cleanup (Phase 2 item 14).** `getAuthorizationGuard()` is now resolved once, in
+  `init()`, and cached - every internal check (`checkPreCheck`/`checkCanAccess`/`scope()`/...)
+  reads that cached instance instead of calling the (overridable, possibly expensive-to-construct)
+  accessor again on every single request. `init()`'s six telescoping overloads are replaced by
+  one `init(RestlessInitContext)` - a plain record naming every collaborator, so a future new one
+  doesn't need a seventh overload. Transaction demarcation
+  (`inTransaction`/`inReadOnlyTransaction`) and `If-Match`/`@Version` precondition handling moved
+  into new package-private `TransactionSupport`/`PreconditionSupport` classes - no change to
+  `RestlessResourceHandler`'s own protected/public surface, both were already private there.
+
 - **Filter DSL hardening.** Every `SearchDto` field/operator binding is now precomputed and
   validated once at startup (not per request, and not via per-request `getDeclaredFields`/
   `setAccessible`) - an equality field naming no real entity property, an operator the resolved
