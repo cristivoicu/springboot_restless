@@ -27,6 +27,15 @@
              artifact via spring-boot-starter-data-jpa, this module never needs it as a real
              dependency since it only ever compares annotation-mirror strings. -->
 
+        <!-- Ground rules Phase 3 item 17: backs this module's package-info.java @NullMarked
+             annotations. Pinned, same reasoning as every other dependency/plugin version in
+             this pom - no spring-boot-starter-parent to inherit a managed version from. -->
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <version>1.0.1</version>
+        </dependency>
+
         <!-- Test-only: RestlessEntityProcessorMassAssignmentTest drives the real javax.tools
              JavaCompiler API in-memory (no extra compile-testing library needed) to assert this
              processor actually raises the compile errors Ground rules item 6 requires - the only
@@ -76,6 +85,29 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.6</version>
+            </plugin>
+
+            <!-- Ground rules Phase 3 item 17: per-module coverage report, same as app/cerbos -
+                 pinned, same reasoning as every other plugin version in this pom. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.15</version>
+                <executions>
+                    <execution>
+                        <id>jacoco-prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

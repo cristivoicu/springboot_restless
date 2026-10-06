@@ -52,3 +52,34 @@ jobs:
           name: surefire-reports-java${{ matrix.java }}
           path: '**/target/surefire-reports/**'
           retention-days: 7
+
+  test-postgres:
+    name: example against real PostgreSQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+
+      # Ground rules Phase 3 item 17: excludedGroups=postgres in example's own pom keeps every
+      # other job's H2-backed run from paying for this - -Dgroups=postgres overrides that here to
+      # run exactly DepartmentPostgresCudTest (a real Testcontainers Postgres, not H2's emulation
+      # of one) against the LIKE-wildcard-escaping/collation/null-ordering differences H2 papers
+      # over. -am: processor/app/cerbos need to be installed into the local repo first, same as
+      # the main job's reactor build.
+      - name: Build processor/app/cerbos, then run example's postgres-tagged tests
+        run: ./mvnw -B -ntp -pl example -am install -DskipTests
+          && ./mvnw -B -ntp -pl example test -Dgroups=postgres
+
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-postgres
+          path: 'example/target/surefire-reports/**'
+          retention-days: 7

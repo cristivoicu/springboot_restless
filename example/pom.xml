@@ -156,6 +156,22 @@
             <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Ground rules Phase 3 item 17: PostgresBackedTest's real Postgres container - catches
+             the LIKE-wildcard-escaping/collation/null-ordering differences the default H2-backed
+             suite papers over. No dedicated org.testcontainers:postgresql dependency: at the time
+             of writing it has no release compatible with testcontainers-junit-jupiter's 2.0.x
+             line above (its own latest is still 1.21.x) - PostgresBackedTest uses a plain
+             GenericContainer instead (already transitively available via
+             testcontainers-junit-jupiter), the same idiom cerbos-sdk-java's own CerbosContainer
+             already uses elsewhere in this reactor. Only the real JDBC driver is needed here;
+             version managed by spring-boot-dependencies, same as every other unversioned
+             dependency above. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -179,6 +195,19 @@
                             <version>0.0.1-SNAPSHOT</version>
                         </path>
                     </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+
+            <!-- Ground rules Phase 3 item 17: excluded by default so the fast H2-backed run (the
+                 reactor's own `mvn verify`, and every local `mvn test` here) never pays for a
+                 Postgres image pull/container startup - CI's dedicated job overrides this with
+                 -Dgroups=postgres (surefire's own CLI property binding) to run exactly the
+                 "postgres"-tagged tests instead. See DepartmentPostgresCudTest's own javadoc. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludedGroups>postgres</excludedGroups>
                 </configuration>
             </plugin>
         </plugins>

@@ -71,6 +71,14 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Ground rules Phase 3 item 17: backs this module's package-info.java @NullMarked
+             annotation. Version managed by spring-boot-starter-parent, same as every other
+             unversioned dependency above. -->
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+        </dependency>
+
         <!-- Optional: only backs CerbosHealthIndicator, which is itself @ConditionalOnClass on
              HealthIndicator - a consumer who never adds actuator to their own app never pulls
              this in transitively (optional=true), and the bean simply never activates for one
@@ -148,6 +156,30 @@
                         <include>**/*IT.java</include>
                     </includes>
                 </configuration>
+            </plugin>
+
+            <!-- Ground rules Phase 3 item 17: per-module coverage report, same as app/processor -
+                 no shared pluginManagement to hang this off, same reasoning as app's own copy of
+                 this plugin block. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.15</version>
+                <executions>
+                    <execution>
+                        <id>jacoco-prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

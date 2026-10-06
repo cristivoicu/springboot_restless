@@ -114,6 +114,16 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
             <optional>true</optional>
         </dependency>
+
+        <!-- Ground rules Phase 3 item 17: backs this module's package-info.java @NullMarked
+             annotations - documentation of intent only, no null-checking build step (NullAway,
+             an IDE inspection, ...) wired in here, that's a separate, bigger decision. Version
+             managed by spring-boot-starter-parent, same as every other unversioned dependency
+             above. -->
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
@@ -141,6 +151,88 @@
                         </path>
                     </annotationProcessorPaths>
                 </configuration>
+            </plugin>
+
+            <!-- Ground rules Phase 3 item 17: per-module coverage report (target/site/jacoco/
+                 index.html after `mvn verify`) - no shared pluginManagement to hang this off,
+                 since this module parents to spring-boot-starter-parent directly, not the
+                 reactor root pom (see that pom's own description for why). -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.15</version>
+                <executions>
+                    <execution>
+                        <id>jacoco-prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Ground rules Phase 3 item 17: wired against the stable-surface packages (see
+                 the README's "Versioning and API Stability" section for the full list by class
+                 name), but there is no previously published release of this artifact to diff
+                 against yet - only 0.0.1-SNAPSHOT, nothing on Maven Central.
+                 ignoreMissingOldVersion makes that a correctly-wired no-op today (oldVersion's
+                 RELEASE simply can't resolve) rather than a build failure; it starts actually
+                 comparing the moment a real first version is published. Not a meaningful
+                 enforcement gate until then - flagging that plainly rather than faking a
+                 baseline. -->
+            <plugin>
+                <groupId>com.github.siom79.japicmp</groupId>
+                <artifactId>japicmp-maven-plugin</artifactId>
+                <version>0.26.3</version>
+                <configuration>
+                    <oldVersion>
+                        <dependency>
+                            <groupId>${project.groupId}</groupId>
+                            <artifactId>${project.artifactId}</artifactId>
+                            <version>RELEASE</version>
+                        </dependency>
+                    </oldVersion>
+                    <newVersion>
+                        <file>
+                            <path>${project.build.directory}/${project.build.finalName}.jar</path>
+                        </file>
+                    </newVersion>
+                    <parameter>
+                        <ignoreMissingOldVersion>true</ignoreMissingOldVersion>
+                        <breakBuildOnBinaryIncompatibleModifications>true</breakBuildOnBinaryIncompatibleModifications>
+                        <breakBuildOnSourceIncompatibleModifications>false</breakBuildOnSourceIncompatibleModifications>
+                        <includes>
+                            <include>ro.cristivoicu.springbootrestless.resource</include>
+                            <include>ro.cristivoicu.springbootrestless.authorization</include>
+                            <include>ro.cristivoicu.springbootrestless.annotation</include>
+                            <include>ro.cristivoicu.springbootrestless.embed</include>
+                            <include>ro.cristivoicu.springbootrestless.controller.create</include>
+                            <include>ro.cristivoicu.springbootrestless.controller.read</include>
+                            <include>ro.cristivoicu.springbootrestless.controller.update</include>
+                            <include>ro.cristivoicu.springbootrestless.controller.patch</include>
+                            <include>ro.cristivoicu.springbootrestless.controller.delete</include>
+                            <include>ro.cristivoicu.springbootrestless.datasource</include>
+                            <include>ro.cristivoicu.springbootrestless.datasource.defaults</include>
+                            <include>ro.cristivoicu.springbootrestless.mapper</include>
+                            <include>ro.cristivoicu.springbootrestless.models</include>
+                        </includes>
+                    </parameter>
+                </configuration>
+                <executions>
+                    <execution>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>cmp</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

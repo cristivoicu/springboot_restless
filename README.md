@@ -945,6 +945,21 @@ above for what stability guarantees actually apply before 1.0.
   on named write actions (previously not checked there at all). `readVersion` now walks
   superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
 
+- **Tooling (Phase 3 item 17).**
+  - **JaCoCo**: `app`/`processor`/`cerbos` each produce a per-module coverage report
+    (`target/site/jacoco/index.html`) on `mvn verify`.
+  - **japicmp**: wired into `app`'s pom against the stable-surface packages (see "Versioning and
+    API Stability" above), but there is no previously published release of this artifact yet to
+    diff against - `ignoreMissingOldVersion` makes that a correctly-wired no-op today rather than
+    a build failure; it starts actually comparing the moment a real first version is published.
+  - **JSpecify**: every main package in `app`/`processor`/`cerbos` now has a `package-info.java`
+    with `@NullMarked` - documentation of intent only, no null-checking build step wired in.
+  - **PostgreSQL Testcontainers for `example`**: `PostgresBackedTest` + `DepartmentPostgresCudTest`
+    (tagged `"postgres"`, excluded from the default H2-backed run) exercise the full CUD cycle
+    against a real Postgres container instead of H2's emulation of one - catches the class of
+    `LIKE`-wildcard/collation/null-ordering bug H2 papers over. CI runs it as its own job
+    (`-Dgroups=postgres`), separate from the fast default run.
+
 - **Java 17 baseline for the shipped library (Phase 3 item 16).** `app`/`processor`/`cerbos`/
   `spring-boot-restless-test` now build down to Java 17 (`example`, never shipped, stays on 25).
   One real Java-21-only construct turned up along the way and was rewritten: `CerbosAttributeValues`
