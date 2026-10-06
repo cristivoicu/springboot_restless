@@ -683,13 +683,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             // reflection walk-up (shouldn't happen for a real JPA entity, but a hand-rolled test
             // double might skip it) - falls back to plain 200 with no Location rather than
             // building a broken URI in that case.
+            Object dto = postProcessResponse(AuthorizationGuard.Action.CREATE, null, request, created, getEntityMapper().map(created));
             Object id = idOf(created);
             if (id != null) {
                 java.net.URI location = org.springframework.web.servlet.support.ServletUriComponentsBuilder
                         .fromRequest(request).path("/{id}").buildAndExpand(id).toUri();
-                return withETag(ResponseEntity.created(location), created).body(getEntityMapper().map(created));
+                return withETag(ResponseEntity.created(location), created).body(dto);
             }
-            return withETag(ResponseEntity.ok(), created).body(getEntityMapper().map(created));
+            return withETag(ResponseEntity.ok(), created).body(dto);
         });
     }
 
@@ -791,7 +792,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             if (etag.isPresent() && PreconditionSupport.matchesIfNoneMatch(ifNoneMatch, etag.get())) {
                 return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag.get()).build();
             }
-            Object dto = getEntityMapper().map(found);
+            Object dto = postProcessResponse(AuthorizationGuard.Action.READ_ONE, null, request, found, getEntityMapper().map(found));
             // Opt-in (?expand=name,...), see RestlessEmbed - a no-op for a request that doesn't
             // ask for anything, and for a resource whose DTO declares no @RestlessEmbed field.
             embedResolver.resolve(dto, found, request);
@@ -888,7 +889,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             if (mapper == null) {
                 return ResponseEntity.notFound().build();
             }
-            Object dto = mapper.map(found);
+            Object dto = postProcessResponse(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found, mapper.map(found));
             embedResolver.resolve(dto, found, request);
             return withETag(ResponseEntity.ok(), found).body(dto);
         });
@@ -1013,7 +1014,8 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             E updated = (E) rawDataSource.update(id, (UpdateModel) body);
             checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, updated);
             rawDataSource.flush();
-            return withETag(ResponseEntity.ok(), updated).body(getEntityMapper().map(updated));
+            Object dto = postProcessResponse(AuthorizationGuard.Action.UPDATE, null, request, updated, getEntityMapper().map(updated));
+            return withETag(ResponseEntity.ok(), updated).body(dto);
         });
     }
 
@@ -1048,7 +1050,8 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             E patched = (E) rawDataSource.patch(id, (PatchModel) body);
             checkCanAccessAfterWrite(AuthorizationGuard.Action.PATCH, request, patched);
             rawDataSource.flush();
-            return withETag(ResponseEntity.ok(), patched).body(getEntityMapper().map(patched));
+            Object dto = postProcessResponse(AuthorizationGuard.Action.PATCH, null, request, patched, getEntityMapper().map(patched));
+            return withETag(ResponseEntity.ok(), patched).body(dto);
         });
     }
 
@@ -1521,6 +1524,19 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
         }
+    }
+
+    /**
+     * Ground rules Phase 2 item 12 ("Fail-closed masking"): runs {@link AuthorizationGuard#postProcessResponse}
+     * right after {@code Mapper.map(...)} on every single-entity response ({@link #create}/{@link
+     * #findOne}/{@link #namedView}/{@link #update}/{@link #patch}) - a no-op for the default guard
+     * and for any guard that doesn't override it, but the seam a {@code CerbosAuthorizationGuard}
+     * needs to automatically mask {@code @CerbosHiddenField}-annotated DTO fields without every
+     * hand-written {@code Mapper} needing to call {@code CerbosFieldMasker} itself. Not wired into
+     * any list/page/bulk response - see the Changelog entry for this item.
+     */
+    private <D> D postProcessResponse(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request, E entity, D dto) {
+        return cachedGuard.postProcessResponse(action, customActionName, request, entity, dto);
     }
 
     private Specification<E> withScope(Specification<E> spec, AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {

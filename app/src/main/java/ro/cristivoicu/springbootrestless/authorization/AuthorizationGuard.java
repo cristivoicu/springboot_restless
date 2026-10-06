@@ -110,6 +110,24 @@ public interface AuthorizationGuard<E> {
     }
 
     /**
+     * Response-shaping hook (Ground rules Phase 2 item 12) - {@code RestlessResourceHandler} calls
+     * this right after {@code Mapper.map(...)} on every single-entity response ({@code create}/
+     * {@code findOne}/{@code namedView}/{@code update}/{@code patch}), passing the loaded/written
+     * {@code entity} alongside the DTO it just produced. Default returns {@code dto} unchanged -
+     * row-level access ({@link #canAccess}/{@link #scope}) is an all-or-nothing decision about
+     * whether a principal may see a row at all; this is the seam for the narrower case of a
+     * principal who may see the row but not every field on it. {@code <D>} is independent of this
+     * interface's own {@code <E>} since a guard's DTO type is whatever each action's own {@code
+     * Mapper} happens to produce, not fixed per guard. See {@code CerbosAuthorizationGuard}, which
+     * overrides this to automatically mask {@code @CerbosHiddenField}-annotated fields via a
+     * Cerbos policy {@code output} - a hand-written {@code Mapper} that already calls {@code
+     * CerbosFieldMasker} itself keeps working unaffected, masking is idempotent.
+     */
+    default <D> D postProcessResponse(Action action, String customActionName, HttpServletRequest request, E entity, D dto) {
+        return dto;
+    }
+
+    /**
      * The shared no-op instance {@code getAuthorizationGuard()} defaults to. A singleton (not a
      * fresh instance per call) so {@code RestlessResourceHandler} can reference-compare against
      * it to detect "no guard configured" and skip the extra per-instance load that {@code

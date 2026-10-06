@@ -939,6 +939,17 @@ above for what stability guarantees actually apply before 1.0.
   on named write actions (previously not checked there at all). `readVersion` now walks
   superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
 
+- **Fail-closed field masking (Phase 2 item 12).** New `AuthorizationGuard.postProcessResponse(action,
+  customActionName, request, entity, dto)` default hook (returns `dto` unchanged) -
+  `RestlessResourceHandler` now calls it right after `Mapper.map(...)` on every single-entity
+  response (`create`/`findOne`/`namedView`/`update`/`patch`). `CerbosAuthorizationGuard` overrides
+  it to automatically run `CerbosFieldMasker` against any `@CerbosHiddenField`-annotated DTO field
+  - a hand-written `Mapper` no longer has to remember to call the masker itself (one that already
+  does keeps working unaffected; masking is idempotent). Skips the Cerbos `check()` RPC entirely
+  when the DTO type carries no `@CerbosHiddenField` field at all. If the PDP can't be reached to
+  say which fields to hide, every `@CerbosHiddenField` field is masked rather than none - fail
+  closed, consistent with this guard's other hooks.
+
 - **Cerbos query plan translator hardening (Phase 2 item 11).** `eq`/`ne` against a `null`
   literal now translate to `IS NULL`/`IS NOT NULL` instead of `cb.equal(path, null)` (which
   Hibernate does not treat as a null check, so a condition like `request.resource.attr.ownerId ==

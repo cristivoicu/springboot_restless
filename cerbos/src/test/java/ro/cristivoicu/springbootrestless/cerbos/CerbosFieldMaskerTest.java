@@ -77,6 +77,42 @@ class CerbosFieldMaskerTest {
                 .hasMessageContaining("flag");
     }
 
+    @Test
+    void hasAnyHiddenFieldIsTrueWhenTheClassCarriesOne() {
+        assertThat(CerbosFieldMasker.hasAnyHiddenField(MaskableDto.class)).isTrue();
+    }
+
+    @Test
+    void hasAnyHiddenFieldIsFalseForAPlainDto() {
+        assertThat(CerbosFieldMasker.hasAnyHiddenField(NoHiddenFieldsDto.class)).isFalse();
+    }
+
+    @Test
+    void maskAllHiddenFieldsNullsOutEveryAnnotatedFieldRegardlessOfAnyPolicyOutput() {
+        NonPrimitiveMaskableDto dto = new NonPrimitiveMaskableDto(1L, "Ada", "s3cr3t");
+
+        CerbosFieldMasker.maskAllHiddenFields(dto);
+
+        assertThat(dto.getId()).isEqualTo(1L); // not annotated - untouched
+        assertThat(dto.getName()).isNull();
+        assertThat(dto.getSecret()).isNull();
+    }
+
+    private static class NoHiddenFieldsDto {
+        private Long id;
+        private String name;
+    }
+
+    @lombok.Getter
+    @lombok.AllArgsConstructor
+    private static class NonPrimitiveMaskableDto {
+        private Long id;
+        @ro.cristivoicu.springbootrestless.cerbos.CerbosHiddenField
+        private String name;
+        @ro.cristivoicu.springbootrestless.cerbos.CerbosHiddenField("secretKey")
+        private String secret;
+    }
+
     private static Value stringValue(String value) {
         return Value.newBuilder().setStringValue(value).build();
     }

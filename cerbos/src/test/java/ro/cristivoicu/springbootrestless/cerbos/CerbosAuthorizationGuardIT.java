@@ -19,6 +19,7 @@ import org.testcontainers.containers.BindMode;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard.Action;
+import ro.cristivoicu.springbootrestless.cerbos.fixtures.MaskableDto;
 import ro.cristivoicu.springbootrestless.cerbos.fixtures.Widget;
 import ro.cristivoicu.springbootrestless.cerbos.fixtures.WidgetRepository;
 
@@ -152,6 +153,40 @@ class CerbosAuthorizationGuardIT {
         guard.scope(Action.READ_LIST, null, sameRequest);
 
         assertThat(extenderCalls.get()).isEqualTo(1);
+    }
+
+    /**
+     * Ground rules Phase 2 item 12 ("Fail-closed masking"): {@code policies/maskable.yaml}'s
+     * "limited" rule hides the "name" field via a policy {@code output} - this DTO is built by
+     * hand here, standing in for whatever a real {@code Mapper} would have produced, and
+     * deliberately never passed through {@link CerbosFieldMasker} itself. {@code
+     * postProcessResponse} is the only thing doing the masking, proving it happens automatically.
+     */
+    @Test
+    void postProcessResponseAutomaticallyMasksAFieldAPolicyOutputNames() {
+        CerbosAuthorizationGuard<Widget> guard = new CerbosAuthorizationGuard<>(client, "maskable", Widget::getId,
+                CerbosResourceAttributesMapper.reflective(Widget.class));
+        authenticateAs("limited-user", "limited", Map.of());
+        MaskableDto dto = new MaskableDto(1L, "Ada", "s3cr3t", false);
+
+        MaskableDto result = guard.postProcessResponse(Action.READ_ONE, null, request(),
+                new Widget(1L, "widget-name", 1L, "engineering"), dto);
+
+        assertThat(result.getName()).isNull();
+        assertThat(result.getSecret()).isEqualTo("s3cr3t"); // not named in the policy output
+    }
+
+    @Test
+    void postProcessResponseLeavesTheDtoUntouchedWhenNoRuleOutputNamesAnything() {
+        CerbosAuthorizationGuard<Widget> guard = new CerbosAuthorizationGuard<>(client, "maskable", Widget::getId,
+                CerbosResourceAttributesMapper.reflective(Widget.class));
+        authenticateAs("admin-user", "admin", Map.of());
+        MaskableDto dto = new MaskableDto(1L, "Ada", "s3cr3t", false);
+
+        MaskableDto result = guard.postProcessResponse(Action.READ_ONE, null, request(),
+                new Widget(1L, "widget-name", 1L, "engineering"), dto);
+
+        assertThat(result.getName()).isEqualTo("Ada");
     }
 
     private CerbosAuthorizationGuard<Widget> widgetGuard() {

@@ -246,6 +246,32 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
         };
     }
 
+    /**
+     * Ground rules Phase 2 item 12 ("Fail-closed masking"): automatically runs {@link
+     * CerbosFieldMasker} against every {@code @CerbosHiddenField}-annotated field of a response
+     * DTO, keyed off the same policy {@code output} {@link CerbosFieldMasker}'s own javadoc
+     * describes - no hand-written {@code Mapper} needs to call it itself (one already doing so,
+     * e.g. for a list/page read via {@link CerbosFieldMasker#maskAll}, keeps working unaffected;
+     * masking is idempotent). Skips the Cerbos {@code check()} RPC entirely when {@code dto}'s
+     * type carries no {@code @CerbosHiddenField} field at all - the common case for most
+     * entities, which shouldn't cost an extra round trip on every single-entity response.
+     */
+    @Override
+    public <D> D postProcessResponse(Action action, String customActionName, HttpServletRequest request, E entity, D dto) {
+        if (dto == null || !CerbosFieldMasker.hasAnyHiddenField(dto.getClass())) {
+            return dto;
+        }
+        String cerbosAction = actionNaming.apply(action, customActionName);
+        Principal principal = principalOf(request);
+        Resource resource = resourceOf(entity);
+        try {
+            return CerbosFieldMasker.mask(client, principal, resource, cerbosAction, dto);
+        } catch (CerbosException e) {
+            logFailedClosed("postProcessResponse", cerbosAction, e);
+            return CerbosFieldMasker.maskAllHiddenFields(dto);
+        }
+    }
+
     private void logFailedClosed(String hook, String cerbosAction, CerbosException e) {
         log.warn("Cerbos PDP unreachable/errored during {}('{}') on resource kind '{}' "
                         + "(gRPC status {}) - failing closed (denied)",

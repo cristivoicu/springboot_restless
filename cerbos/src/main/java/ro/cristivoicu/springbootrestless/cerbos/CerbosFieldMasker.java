@@ -105,6 +105,38 @@ public final class CerbosFieldMasker {
         return dtos;
     }
 
+    /**
+     * Whether {@code type} carries any {@link CerbosHiddenField}-annotated field at all - the
+     * cheap, reflection-only check {@link CerbosAuthorizationGuard#postProcessResponse} runs
+     * first, so a DTO that never uses field masking costs nothing extra (no Cerbos {@code
+     * check()} RPC) on every single-entity response.
+     */
+    static boolean hasAnyHiddenField(Class<?> type) {
+        return CerbosReflection.declaredFieldsOf(type).stream()
+                .anyMatch(field -> field.isAnnotationPresent(CerbosHiddenField.class));
+    }
+
+    /**
+     * Unconditionally nulls out every {@link CerbosHiddenField}-annotated field, bypassing the
+     * outputs-based selection {@link #mask} otherwise uses - for {@link
+     * CerbosAuthorizationGuard#postProcessResponse}'s own fail-closed fallback when the PDP can't
+     * be reached to say which fields (if any) should actually be hidden. Revealing every
+     * {@code @CerbosHiddenField} field by default in that situation would be fail-<em>open</em>;
+     * hiding all of them is the fail-closed choice consistent with this class's sibling guard
+     * methods.
+     */
+    static <D> D maskAllHiddenFields(D dto) {
+        Set<String> allKeys = new LinkedHashSet<>();
+        for (Field field : CerbosReflection.declaredFieldsOf(dto.getClass())) {
+            CerbosHiddenField annotation = field.getAnnotation(CerbosHiddenField.class);
+            if (annotation != null) {
+                allKeys.add(annotation.value().isEmpty() ? field.getName() : annotation.value());
+            }
+        }
+        applyMask(dto, allKeys);
+        return dto;
+    }
+
     private static void collectStrings(Value value, Set<String> into) {
         switch (value.getKindCase()) {
             case STRING_VALUE -> into.add(value.getStringValue());
