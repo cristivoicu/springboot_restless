@@ -13,15 +13,24 @@ concurrency:
 
 jobs:
   test:
-    name: Build and test (reactor)
+    name: Build and test (Java ${{ matrix.java }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Ground rules Phase 3 item 16: app/processor/cerbos/spring-boot-restless-test build down
+      # to Java 17; example stays on 25 (it's not shipped, free to use newer syntax). 25 is the
+      # only leg that can build example at all - a JDK 17/21 javac can't target a --release newer
+      # than the JDK actually running it, for reasons unrelated to whether the library modules
+      # themselves are Java-17/21 compatible - so the 17/21 legs build only the library modules.
+      matrix:
+        java: ['17', '21', '25']
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 25
+      - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
-          java-version: '25'
+          java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: maven
 
@@ -29,12 +38,17 @@ jobs:
       # module's Testcontainers-backed tests and example's Cerbos-backed suite
       # (a real Cerbos PDP is started per test class, see CerbosBackedTest).
       - name: Build and run the full reactor
+        if: matrix.java == '25'
         run: ./mvnw -B -ntp verify
+
+      - name: Build and run the library modules only
+        if: matrix.java != '25'
+        run: ./mvnw -B -ntp -pl processor,app,cerbos,spring-boot-restless-test -am verify
 
       - name: Upload surefire reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports
+          name: surefire-reports-java${{ matrix.java }}
           path: '**/target/surefire-reports/**'
           retention-days: 7

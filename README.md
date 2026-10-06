@@ -810,7 +810,10 @@ without prior discussion is likely to be declined even if the code itself is goo
 
 **Development setup:**
 
-- **Java 25** and **Maven 3.9+** (`./mvnw` is included, no local Maven install required).
+- **Java 25** and **Maven 3.9+** (`./mvnw` is included, no local Maven install required) - needed
+  for the full reactor, since `example` targets `--release 25`. The shipped library itself
+  (`app`/`processor`/`cerbos`/`spring-boot-restless-test`) builds down to Java 17: `./mvnw -pl
+  processor,app,cerbos,spring-boot-restless-test -am verify` works with just a JDK 17+ toolchain.
 - **Docker** and **Docker Compose**, only for the `cerbos` module's Testcontainers-backed tests and
   `example`'s Cerbos-backed test suite (every `EmployeeAuthorizationGuardTest`-style test starts a
   real Cerbos PDP container). Everything else runs against plain H2, no Docker needed.
@@ -941,6 +944,14 @@ above for what stability guarantees actually apply before 1.0.
   RFC-incorrect behavior) will now get `412` instead. `If-Match` is also now optionally honored
   on named write actions (previously not checked there at all). `readVersion` now walks
   superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
+
+- **Java 17 baseline for the shipped library (Phase 3 item 16).** `app`/`processor`/`cerbos`/
+  `spring-boot-restless-test` now build down to Java 17 (`example`, never shipped, stays on 25).
+  One real Java-21-only construct turned up along the way and was rewritten: `CerbosAttributeValues`
+  used a `switch` with type patterns (JEP 441, finalized in 21) - replaced with a plain
+  `instanceof`-pattern chain, identical behavior. CI now builds a `[17, 21, 25]` matrix; the 17/21
+  legs build only the library modules (`example`'s own sources target `--release 25`, which a
+  JDK 17/21 `javac` can't do regardless of the library's own compatibility).
 
 - **Generated mapper codegen (Phase 3 item 15).** The default generated `{Entity}Mapper` (when
   no hand-written one exists) no longer uses reflective `BeanUtils.copyProperties` - it now emits

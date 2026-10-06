@@ -20,18 +20,31 @@ final class CerbosAttributeValues {
     private CerbosAttributeValues() {
     }
 
+    // Ground rules Phase 3 item 16: type patterns in a switch (JEP 441) need Java 21 - this
+    // module builds down to Java 17, so a plain instanceof chain stands in for what would
+    // otherwise have been a switch over value's type, same case order/behavior either way.
     static AttributeValue from(Object value) {
-        return switch (value) {
-            case String s -> AttributeValue.stringValue(s);
-            case Boolean b -> AttributeValue.boolValue(b);
-            case Number n -> AttributeValue.doubleValue(n.doubleValue());
-            case Enum<?> e -> AttributeValue.stringValue(e.name());
-            case TemporalAccessor t -> AttributeValue.stringValue(Instant.from(t).toString());
-            case Collection<?> collection -> AttributeValue.listValue(collection.stream()
+        if (value instanceof String s) {
+            return AttributeValue.stringValue(s);
+        }
+        if (value instanceof Boolean b) {
+            return AttributeValue.boolValue(b);
+        }
+        if (value instanceof Number n) {
+            return AttributeValue.doubleValue(n.doubleValue());
+        }
+        if (value instanceof Enum<?> e) {
+            return AttributeValue.stringValue(e.name());
+        }
+        if (value instanceof TemporalAccessor t) {
+            return AttributeValue.stringValue(Instant.from(t).toString());
+        }
+        if (value instanceof Collection<?> collection) {
+            return AttributeValue.listValue(collection.stream()
                     .map(CerbosAttributeValues::from)
                     .filter(Objects::nonNull)
                     .toList());
-            case null, default -> null;
-        };
+        }
+        return null;
     }
 }
