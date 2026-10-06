@@ -23,9 +23,19 @@ exactly (`?ageGte=30`, not `?age_gte=30`):
 | `Lte` | `<=` | `ageLte` | `?ageLte=65` |
 | `Gt` | `>` | `salaryGt` | `?salaryGt=50000` |
 | `Lt` | `<` | `salaryLt` | `?salaryLt=200000` |
-| `Like` | contains-match | `nameLike` | `?nameLike=smith` |
+| `Like` | contains-match (`%value%`) | `nameLike` | `?nameLike=smith` |
+| `ILike` | case-insensitive contains-match | `nameILike` | `?nameILike=Smith` |
+| `StartsWith` | prefix-match (`value%`, no leading wildcard — index-friendly, unlike `Like`/`ILike`) | `nameStartsWith` | `?nameStartsWith=Sm` |
 | `Ne` | not-equal | `statusNe` | `?statusNe=CLOSED` |
 | `In` | membership (repeatable param, binds to `List`/`Collection`) | `statusIn` | `?statusIn=OPEN&statusIn=PENDING` |
+
+A literal `%`/`_`/`\` in a `Like`/`ILike`/`StartsWith` search term is escaped automatically before
+building the pattern — a client filtering for a name containing a literal `%` gets that literal
+character matched, not a SQL wildcard.
+
+`ILike` ends with `Like` (`nameILike`) and is checked first (longest-suffix-first) so it doesn't
+get mistaken for plain `Like` on a base property named `nameI` — every other suffix pair here is
+non-overlapping, so match order never matters for them.
 
 Two distinct failure modes for a misdeclared suffixed field: a base property that doesn't exist
 on the entity at all is **silently ignored** (a `SearchDto`-author mistake, not client input); one
@@ -38,7 +48,7 @@ every request, not a 400).
 `?sort=lastName,asc&sort=firstName,asc`. An unresolvable direction or a property that isn't an
 actual entity field both become a clean 400 before any query runs.
 
-## Beyond the seven operators
+## Beyond the nine operators
 
 Override `getSpecification(SearchDto)` directly for joins, boolean `OR`, cross-field logic, or
 anything else the suffix convention can't express. `RestlessSpecifications` is a small fluent

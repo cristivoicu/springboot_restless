@@ -7,9 +7,10 @@ when_to_use: Triggers on "add an entity/resource", "REST CRUD for <Entity>", "@R
 # spring-boot-restless
 
 Annotation-driven REST CRUD for Spring Boot. An entity + four hand-written DTOs is normally the
-entire surface area; a compile-time annotation processor generates the repository, a reflective
-mapper, and the HTTP resource. Authorization and response shape are the two things this framework
-deliberately never generates — they stay hand-written on purpose. Full reference:
+entire surface area; a compile-time annotation processor generates the repository, a mapper (one
+explicit `dto.setX(source.getX())` per matched field, not reflection), and the HTTP resource.
+Authorization and response shape are the two things this framework deliberately never generates —
+they stay hand-written on purpose. Full reference:
 [`docs/DEEP_DIVE.md`](../../../docs/DEEP_DIVE.md) at the repo root if present, otherwise the
 project's own `README.md`.
 
@@ -100,8 +101,8 @@ resource on the manual tier (see reference/customization.md):
 | Want | Do this |
 |---|---|
 | Partial update (`PATCH`) | `patchDataSource = DefaultPatchDataSource.class` (or hand-written) |
-| Optimistic concurrency | Add `@jakarta.persistence.Version` to the entity |
-| Soft delete | Implement `SoftDeletable`; `deleteDataSource = DefaultSoftDeleteDataSource.class` |
+| Optimistic concurrency + conditional requests | Add `@jakarta.persistence.Version` to the entity — single-item responses emit a strong `ETag`, `GET` honors `If-None-Match` (304), writes honor `If-Match` (412, `*`/comma-list, strong comparison) |
+| Soft delete | Implement `SoftDeletable`; `deleteDataSource = DefaultSoftDeleteDataSource.class` — flags instead of removes; a write on an already-flagged row 404s; `findOne`/a named view still return it unless `restless.soft-delete.include-in-single-read=false` |
 | Auditing (`createdDate`/`lastModifiedDate`) | Extend `AbstractAuditableEntity` + `@EnableJpaAuditing` on the app |
 | API versioning | `version = "1"` on `@RestlessEntity`/`@RestlessResource` |
 | Restrict which routes exist | `operations = {...}` (generated tier) / override `getEnabledOperations()` (manual) |
@@ -116,8 +117,8 @@ resource on the manual tier (see reference/customization.md):
   gives `DELETE` no defined body semantics and proxies/`fetch()` are known to drop it.
 - **`Mapper<Entity, Dto>` and `AuthorizationGuard<E>` are never generated, on any tier.** If asked
   to "auto-generate the DTO from the entity," don't — hand-write the DTO shape; the processor can
-  still generate the `Mapper` *implementation* once the DTO exists (reflective field-by-field
-  copy).
+  still generate the `Mapper` *implementation* once the DTO exists (an explicit setter call per
+  matched field, not reflection).
 - **A `Class<?>` attribute on `@RestlessEntity` (`authorizationGuard`, `patchDataSource`, ...)
   names one concrete class, not a parameterized type.** A generic guard meant to back more than
   one entity (e.g. `CerbosAuthorizationGuard<E>`) needs a small named `@Component` per entity that
@@ -128,12 +129,13 @@ resource on the manual tier (see reference/customization.md):
 
 ## Deeper reference (load on demand)
 
-- [reference/authorization.md](reference/authorization.md) — `AuthorizationGuard`'s three hook
-  points, wiring one in, Cerbos-backed policy-as-code, `@CerbosHiddenField` field masking.
+- [reference/authorization.md](reference/authorization.md) — `AuthorizationGuard`'s hook points
+  (`preCheck`/`scope`/`canAccess` plus the post-image/batched/response-shaping ones), wiring one
+  in, Cerbos-backed policy-as-code, `@CerbosHiddenField` field masking.
 - [reference/bulk-and-write-commands.md](reference/bulk-and-write-commands.md) — the three
   unconditional bulk routes, and `WriteAction`/`getCustomWriteActions()` for domain transitions a
   full-replace `PUT` can't guard.
-- [reference/filter-dsl.md](reference/filter-dsl.md) — the seven operator suffixes, multi-field
+- [reference/filter-dsl.md](reference/filter-dsl.md) — the nine operator suffixes, multi-field
   sort, and the `RestlessSpecifications` escape hatch.
 - [reference/customization.md](reference/customization.md) — the generated-tier override
   attributes in full, and the fully-manual tier's shape.

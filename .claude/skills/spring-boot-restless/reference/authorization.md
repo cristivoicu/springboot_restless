@@ -4,8 +4,8 @@
 
 Framework-native hook, no Spring Security dependency in the base library — implementations read
 whatever `HttpServletRequest` attribute/header/`SecurityContext` your own auth stack already
-populated. Opt-in per resource (`RestlessResourceHandler.getAuthorizationGuard()`), three hook
-points at different points in the control flow:
+populated. Opt-in per resource (`RestlessResourceHandler.getAuthorizationGuard()`). The three hook
+points most guards actually override:
 
 ```java
 public interface AuthorizationGuard<E> {
@@ -21,6 +21,23 @@ public interface AuthorizationGuard<E> {
     default boolean canAccess(Action action, HttpServletRequest request, E entity);
 }
 ```
+
+Three more, each defaulting to delegating to one of the above (every existing guard keeps working
+unchanged unless it opts in by overriding one):
+
+- `canAccessAfterWrite(action, customActionName, request, after)` — post-image check on
+  `update`/`patch`, run *after* the write, inside the same transaction. Catches a transition the
+  pre-image `canAccess` alone can't (a client reassigning a row they legitimately own to someone
+  else's account). Defaults to `canAccess(action, customActionName, request, after)`.
+- `canAccessAll(action, request, entities)` — batched pre-image check for `updateBulk`/
+  `deleteAll`, called once against every fetched target instead of looping `canAccess`. Defaults
+  to looping `canAccess` (same end result); override to batch against a real policy engine in one
+  round trip (`CerbosAuthorizationGuard` does, via one `batch()` RPC).
+- `postProcessResponse(action, customActionName, request, entity, dto)` — runs right after
+  `Mapper.map(...)` on every single-entity response (`create`/`findOne`/`namedView`/`update`/
+  `patch`). Defaults to returning `dto` unchanged. The seam `CerbosAuthorizationGuard` uses to
+  auto-mask `@CerbosHiddenField` fields (see below) — a guard for a non-Cerbos auth stack can use
+  it for the same kind of field-level response shaping.
 
 **A resource with no override at all refuses to start up** — `RestlessRegistrar` throws
 `IllegalStateException` naming the resource, unless `allowAll = true` on `@RestlessEntity`/
@@ -57,9 +74,12 @@ public class ThingAuthorizationGuardBean implements AuthorizationGuard<Thing> {
 authorization rules live as policy-as-code (YAML), not Java `if`s.
 
 - `preCheck`/`canAccess` -> `CerbosBlockingClient.check(...)`.
+- `canAccessAll` -> one batched `CerbosBlockingClient.batch(...)` RPC instead of N `check()` calls.
 - `scope` -> `CerbosBlockingClient.plan(...)`, translated from Cerbos's query-plan AST into a JPA
-  `Specification` by `CerbosQueryPlanTranslator` (fails loud on an unsupported shape, never
-  silently under-restricts).
+  `Specification` by `CerbosQueryPlanTranslator`. An operator/shape the translator doesn't
+  recognize is never silently under-restricted: the translator itself always throws on it, and
+  `scope()` catches that and fails closed (an always-deny `Specification`, logged at WARN) rather
+  than surfacing a 500.
 
 Dependency: `ro.cristivoicu:spring-boot-restless-cerbos` (or import the
 `spring-boot-restless-dependencies` BOM and drop versions).
@@ -117,9 +137,8 @@ unreachable makes `preCheck`/`canAccess` return `false` and `scope` return an al
 
 Row-level access answers "can this principal see this row at all." `@CerbosHiddenField` +
 `CerbosFieldMasker` answer "which *fields* of an already-visible row should this principal not
-see." Deliberately opt-in and hand-called from inside a `Mapper` — never automatic.
-
-Uses Cerbos's **output** feature — a CEL expression on a rule computes which field keys to hide:
+see." Uses Cerbos's **output** feature — a CEL expression on a rule computes which field keys to
+hide:
 
 ```yaml
     - actions: ["view"]
@@ -138,10 +157,19 @@ public class ThingDto implements EntityDto {
 }
 ```
 
+**Single-entity responses are masked automatically** — `CerbosAuthorizationGuard` overrides
+`postProcessResponse` (see `AuthorizationGuard`'s hook points above) to call `CerbosFieldMasker.mask`
+after `Mapper.map(...)` on `create`/`findOne`/`namedView`/`update`/`patch`, on its own. No
+hand-written `Mapper` needs to call it itself — masking is idempotent, so one that already does
+keeps working unaffected. Skips the Cerbos `check()` RPC entirely when the DTO type carries no
+`@CerbosHiddenField` field at all; falls back to masking *every* `@CerbosHiddenField` field (fail
+closed) if the PDP can't be reached, rather than none.
+
+**List/page responses still need a manual call** — `postProcessResponse` only runs on a
+single-entity path. For `findList`/`findPage*`/a custom read action, call `CerbosFieldMasker.maskAll`
+from inside that `Mapper`/response path — one batched RPC instead of one per row:
+
 ```java
-// Single entity:
-CerbosFieldMasker.mask(cerbosClient, principal, resource, "view", dto);
-// A list - one batched RPC instead of N:
 CerbosFieldMasker.maskAll(cerbosClient, principal, "thing", "view", dtos,
         ThingDto::getId, CerbosResourceAttributesMapper.none());
 ```

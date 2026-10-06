@@ -9,7 +9,7 @@ class, never a parameterized type):
 | Attribute | Points at | Default when unset |
 |---|---|---|
 | `createModel` / `updateModel` / `searchDto` / `dto` | A DTO class that doesn't follow the naming convention | `{Entity}{Suffix}` by convention |
-| `mapper` | A hand-written `Mapper<Entity, ?>` `@Component` | Reflective `BeanUtils.copyProperties` mapper, generated |
+| `mapper` | A hand-written `Mapper<Entity, ?>` `@Component` | Generated, one explicit `dto.setX(source.getX())` per matched field (not reflection) |
 | `createDataSource` / `readDataSource` / `updateDataSource` / `deleteDataSource` | A hand-written `@Component` for that one verb's entity-specific logic (computed fields, related lookups, ...) | `Default*DataSource` |
 | `authorizationGuard` | A hand-written `AuthorizationGuard<Entity>` `@Component` | None — resource refuses to start unless `allowAll = true` |
 | `patchDataSource` | A hand-written `PatchDataSource<Entity, Id, ?>` `@Component` to add `PATCH` | No `PATCH` route at all (opt-in, unlike the four CUD verbs) |
@@ -78,11 +78,16 @@ needs a second hand-written `@RestController` or base path.
 ## Other opt-in mechanics (any tier)
 
 - **Optimistic concurrency**: `@jakarta.persistence.Version private Long version;` on the entity
-  — a stale concurrent write gets `409` automatically. Add `If-Match: <version>` on a client
-  request to a single-item `PUT`/`PATCH`/`DELETE` for a `412` precondition check.
+  — a stale concurrent write gets `409` automatically. Single-item responses (`findOne`/
+  `namedView`/`create`/`update`/`patch`) emit a strong `ETag` from it; `GET` honors
+  `If-None-Match` (`304`); add `If-Match: <version>` (or a comma-list, or `*`) on a client request
+  to a single-item `PUT`/`PATCH`/`DELETE`/write action for a `412` precondition check (strong
+  comparison — a weak `W/"..."` validator never satisfies it).
 - **Soft delete**: `implements SoftDeletable`; point `deleteDataSource` at
   `DefaultSoftDeleteDataSource` — flags a `deleted` column, automatically excluded from
-  `findList`/`findPage*`/custom-read results, still fetchable directly by id.
+  `findList`/`findPage*`/custom-read results. A write (`update`/`patch`/`deleteById`/a write
+  action) on an already-flagged row 404s unconditionally. `findOne`/a named view still return it
+  by default — set `restless.soft-delete.include-in-single-read=false` to 404 it there too.
 - **Auditing**: `extends AbstractAuditableEntity` + `@EnableJpaAuditing` on the
   `@SpringBootApplication` class — populates `createdDate`/`lastModifiedDate`.
 - **`@RestlessEmbed`** on a DTO field: `GET {basePath}/{id}?expand=name` populates it through

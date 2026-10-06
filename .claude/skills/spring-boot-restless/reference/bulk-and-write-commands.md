@@ -16,10 +16,12 @@ The only way to remove them is excluding `CREATE`/`UPDATE`/`DELETE_ALL` from `op
 independently gate-able.
 
 **All-or-nothing, not best-effort.** Every bulk write is one real transaction. Bulk update/delete
-additionally load and `canAccess`-check **every** target before writing anything — a batch never
-partially applies because item #7 of 10 was denied. Bulk create is the one exception with no
-pre-write guard loop (`preCheck(CREATE, ...)` only, once — none of the rows exist yet for a
-per-instance check).
+additionally load **every** target in one `findAllById` query and `canAccess`-check all of them in
+one `canAccessAll` call before writing anything — a batch never partially applies because item #7
+of 10 was denied. (`AuthorizationGuard.canAccessAll` defaults to looping `canAccess` one row at a
+time; `CerbosAuthorizationGuard` overrides it with a single batched PDP RPC instead of N.) Bulk
+create is the one exception with no pre-write guard loop (`preCheck(CREATE, ...)` only, once —
+none of the rows exist yet for a per-instance check).
 
 Override `CreateDataSource#createAll`/`UpdateDataSource#updateAll` directly (they default to a
 plain loop over the single-item verb) only for a genuinely different bulk strategy (a single
@@ -77,9 +79,11 @@ public Map<String, WriteAction<Thing, ?, ?>> getCustomWriteActions() {
 ```
 
 Request flow: `preCheck(WRITE_ACTION, "activate")` -> read+validate request body -> open
-transaction -> load entity -> `canAccess(WRITE_ACTION, "activate", entity)` -> `execute(...)` ->
-commit -> `200 OK`. A guard denial or a `ResponseStatusException` thrown from `execute` rolls the
-whole transaction back — illegal-transition prevention needs no other machinery.
+transaction -> load entity -> `canAccess(WRITE_ACTION, "activate", entity)` -> optional `If-Match`
+precondition check (same `*`/comma-list/strong-comparison semantics as a single-item `PUT`/`PATCH`/
+`DELETE`, honored if the client sent one) -> `execute(...)` -> commit -> `200 OK`. A guard denial,
+a failed `If-Match`, or a `ResponseStatusException` thrown from `execute` rolls the whole
+transaction back — illegal-transition prevention needs no other machinery.
 
 `execute` skips `Mapper` entirely, both directions — `Req`/`Resp` are whatever shape the action
 author decides. Nothing stops `execute` from calling the resource's own `Mapper` internally to
