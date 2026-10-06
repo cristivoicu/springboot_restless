@@ -687,10 +687,15 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             if (id != null) {
                 java.net.URI location = org.springframework.web.servlet.support.ServletUriComponentsBuilder
                         .fromRequest(request).path("/{id}").buildAndExpand(id).toUri();
-                return ResponseEntity.created(location).body(getEntityMapper().map(created));
+                return withETag(ResponseEntity.created(location), created).body(getEntityMapper().map(created));
             }
-            return ResponseEntity.ok(getEntityMapper().map(created));
+            return withETag(ResponseEntity.ok(), created).body(getEntityMapper().map(created));
         });
+    }
+
+    /** Sets the {@code ETag} header from {@code entity}'s {@code @Version} (Ground rules Phase 2 item 9) - a no-op builder pass-through when the entity has none. */
+    private ResponseEntity.BodyBuilder withETag(ResponseEntity.BodyBuilder builder, E entity) {
+        return PreconditionSupport.eTagOf(entity).map(builder::eTag).orElse(builder);
     }
 
     /**
@@ -761,9 +766,19 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         });
     }
 
+    /**
+     * Conditional GET (Ground rules Phase 2 item 9): emits a strong {@code ETag} from {@code
+     * @Version} on the {@code 200}, and - if the client sent {@code If-None-Match} and it
+     * matches (weak comparison, per RFC 9110 §13.1.2 for a {@code GET}) - short-circuits to
+     * {@code 304} with that same {@code ETag} and no body, after the row is loaded and
+     * guard-checked (so a {@code 304} still correctly 404s/403s for a missing/forbidden row
+     * rather than leaking "this exists" to a caller who can't otherwise see it) but before
+     * mapping/embed-resolving a body that's about to be thrown away anyway.
+     */
     public final ResponseEntity<?> findOne(HttpServletRequest request) throws Exception {
         checkPreCheck(AuthorizationGuard.Action.READ_ONE, null, request);
         K id = extractId(request);
+        String ifNoneMatch = request.getHeader(HttpHeaders.IF_NONE_MATCH);
         // inReadOnlyTransaction: getEntityMapper().map(...) and embedResolver.resolve(...) both
         // run inside it - see that method's own javadoc for why a lazy association needs this.
         return transactionSupport.inReadOnlyTransaction(() -> {
@@ -772,11 +787,15 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 return ResponseEntity.notFound().build();
             }
             checkCanAccess(AuthorizationGuard.Action.READ_ONE, request, found);
+            Optional<String> etag = PreconditionSupport.eTagOf(found);
+            if (etag.isPresent() && PreconditionSupport.matchesIfNoneMatch(ifNoneMatch, etag.get())) {
+                return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag.get()).build();
+            }
             Object dto = getEntityMapper().map(found);
             // Opt-in (?expand=name,...), see RestlessEmbed - a no-op for a request that doesn't
             // ask for anything, and for a resource whose DTO declares no @RestlessEmbed field.
             embedResolver.resolve(dto, found, request);
-            return ResponseEntity.ok(dto);
+            return withETag(ResponseEntity.ok(), found).body(dto);
         });
     }
 
@@ -871,7 +890,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             }
             Object dto = mapper.map(found);
             embedResolver.resolve(dto, found, request);
-            return ResponseEntity.ok(dto);
+            return withETag(ResponseEntity.ok(), found).body(dto);
         });
     }
 
@@ -916,6 +935,11 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         }
 
         K id = extractId(request);
+        // Ground rules Phase 2 item 9: If-Match is now optionally honored on a named write
+        // action too - previously never checked here at all, regardless of whether the client
+        // sent one. "Optional" means unchanged no-op-when-absent semantics, same as every other
+        // single-item write.
+        String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
         // Typed as WriteActionRequest, not Object: rawAction.execute(...) below is a raw-type
         // call, and raw-type erasure keeps a bounded type parameter's own upper bound in the
         // erased signature (Req extends WriteActionRequest erases to WriteActionRequest, not
@@ -934,6 +958,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 return ResponseEntity.notFound().build();
             }
             checkCanAccess(AuthorizationGuard.Action.WRITE_ACTION, actionName, request, found);
+            PreconditionSupport.checkIfMatch(ifMatch, found);
             @SuppressWarnings("unchecked")
             Object response = rawAction.execute(found, body);
             return ResponseEntity.ok(response);
@@ -988,7 +1013,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             E updated = (E) rawDataSource.update(id, (UpdateModel) body);
             checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, updated);
             rawDataSource.flush();
-            return ResponseEntity.ok(getEntityMapper().map(updated));
+            return withETag(ResponseEntity.ok(), updated).body(getEntityMapper().map(updated));
         });
     }
 
@@ -1023,7 +1048,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             E patched = (E) rawDataSource.patch(id, (PatchModel) body);
             checkCanAccessAfterWrite(AuthorizationGuard.Action.PATCH, request, patched);
             rawDataSource.flush();
-            return ResponseEntity.ok(getEntityMapper().map(patched));
+            return withETag(ResponseEntity.ok(), patched).body(getEntityMapper().map(patched));
         });
     }
 

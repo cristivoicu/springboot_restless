@@ -465,9 +465,13 @@ Flags a `deleted` column instead of removing the row; automatically excluded fro
 private Long version;
 ```
 
-That's the entire change — a stale concurrent write already gets a `409` automatically. Add an
-`If-Match: <version>` header to a single-item `PUT`/`PATCH`/`DELETE` to opt further into a
-precondition check (`412` on a stale value, checked before any write is attempted).
+That's the entire change — a stale concurrent write already gets a `409` automatically. Every
+single-resource response (`GET`/`POST`/`PUT`/`PATCH`) carries a strong `ETag` derived from it;
+send that value back as `If-Match: "<version>"` (or `*`, or a comma-separated list of
+candidates) on a single-item `PUT`/`PATCH`/`DELETE`/write action to opt further into a
+precondition check (`412` on a stale value, checked before any write is attempted - strong
+comparison, so a weak `W/"..."` validator never satisfies it). `GET` with a matching
+`If-None-Match` short-circuits to `304` with no body.
 
 ### Auditing
 
@@ -923,6 +927,17 @@ above for what stability guarantees actually apply before 1.0.
 ### [Unreleased]
 
 **Added**
+
+- **Conditional requests (Phase 2 item 9).** `findOne`/`namedView`/`create`/`update`/`patch` now
+  emit a strong `ETag` from `@Version` on single-resource responses. `GET` with `If-None-Match`
+  short-circuits to `304` (weak comparison, per RFC 9110). `If-Match` now supports `*` and a
+  comma-separated candidate list, under *strong* comparison - a weak (`W/"..."`) candidate is
+  excluded entirely rather than stripped-and-compared, since a weak validator can never satisfy
+  strong comparison; **this is a behavior tightening**, not purely additive - a client that was
+  relying on a weak `If-Match` validator being accepted (today's lenient, technically
+  RFC-incorrect behavior) will now get `412` instead. `If-Match` is also now optionally honored
+  on named write actions (previously not checked there at all). `readVersion` now walks
+  superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
 
 - **Internals cleanup (Phase 2 item 14).** `getAuthorizationGuard()` is now resolved once, in
   `init()`, and cached - every internal check (`checkPreCheck`/`checkCanAccess`/`scope()`/...)

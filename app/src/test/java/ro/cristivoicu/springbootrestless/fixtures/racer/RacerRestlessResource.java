@@ -13,6 +13,9 @@ import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultReadDataSour
 import ro.cristivoicu.springbootrestless.datasource.defaults.DefaultUpdateDataSource;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.resource.RestlessResourceHandler;
+import ro.cristivoicu.springbootrestless.resource.WriteAction;
+
+import java.util.Map;
 
 @Component
 @RestlessResource(basePath = "/racers")
@@ -71,5 +74,27 @@ public class RacerRestlessResource extends RestlessResourceHandler<Racer, Long> 
     @Override
     protected AuthorizationGuard<Racer> getAuthorizationGuard() {
         return authorizationGuard;
+    }
+
+    /** {@code "rename"} - see {@code WriteActionIfMatchTest} (Ground rules Phase 2 item 9: If-Match is now optionally honored here too). */
+    @Override
+    public Map<String, WriteAction<Racer, ?, ?>> getCustomWriteActions() {
+        return Map.of("rename", new WriteAction<Racer, RacerRenameRequest, RacerDto>() {
+            @Override
+            public Class<RacerRenameRequest> getRequestType() {
+                return RacerRenameRequest.class;
+            }
+
+            @Override
+            public Class<RacerDto> getResponseType() {
+                return RacerDto.class;
+            }
+
+            @Override
+            public RacerDto execute(Racer entity, RacerRenameRequest request) {
+                entity.setName(request.getNewName());
+                return mapper.map(entity);
+            }
+        });
     }
 }

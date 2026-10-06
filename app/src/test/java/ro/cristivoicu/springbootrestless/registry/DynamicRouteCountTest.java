@@ -35,7 +35,7 @@ class DynamicRouteCountTest {
     private static final int READ_ONLY_ROUTE_COUNT = 3; // Cog: READ_ONE, READ_LIST, READ_PAGE only
     private static final int CREATE_AND_LIST_ROUTE_COUNT = 3; // Bolt: create, createBulk, findList only
     private static final int CUSTOM_READ_ACTION_COUNT = 1; // Gadget's "byEmailDomain"
-    private static final int CUSTOM_WRITE_ACTION_COUNT = 1; // Gadget's "rename"
+    private static final int CUSTOM_WRITE_ACTION_COUNT = 2; // Gadget's "rename", Racer's "rename"
     private static final int NAMED_VIEW_COUNT = 1; // Gadget's "summary"
     private static final int OPT_IN_PATCH_ROUTE_COUNT = 1; // Doohickey's
     private static final int NUGGET_ROUTE_COUNT = 7; // create, createBulk, findOne, findList, findPage, findPageOverview, findPageSelect (see NuggetRestlessResource#getEnabledOperations)
