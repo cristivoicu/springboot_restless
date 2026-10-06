@@ -3,6 +3,8 @@ package ro.cristivoicu.springbootrestless.authorization;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.data.jpa.domain.Specification;
 
+import java.util.List;
+
 /**
  * Framework-native, pluggable per-action authorization hook — deliberately no Spring Security
  * dependency, since the app has none today and the guard should be wireable to whatever auth
@@ -87,6 +89,24 @@ public interface AuthorizationGuard<E> {
      */
     default boolean canAccessAfterWrite(Action action, String customActionName, HttpServletRequest request, E after) {
         return canAccess(action, customActionName, request, after);
+    }
+
+    /**
+     * Batched pre-image check for a bulk write (Ground rules Phase 2 item 10) -
+     * {@code updateBulk}/{@code deleteAll} call this once against every fetched target instead
+     * of looping {@link #canAccess} themselves. Default loops {@link #canAccess} one row at a
+     * time (today's existing behavior, unchanged for every guard that doesn't override this), so
+     * every existing implementation keeps working identically; override only to batch the
+     * underlying check against a real policy engine (see {@code CerbosAuthorizationGuard}, one
+     * {@code batch()} RPC instead of N individual ones).
+     */
+    default boolean canAccessAll(Action action, HttpServletRequest request, List<E> entities) {
+        for (E entity : entities) {
+            if (!canAccess(action, request, entity)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

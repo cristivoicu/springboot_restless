@@ -49,6 +49,12 @@ public class DefaultReadDataSource<E, K, R extends SearchDto>
         return specificationRepository.findById(id).orElse(null);
     }
 
+    /** One {@code findAllById} query instead of {@link ReadDataSource}'s own default (N {@link #findOne} calls) - see that method's javadoc (Ground rules Phase 2 item 10). */
+    @Override
+    public List<E> findAllById(java.util.Collection<K> ids) {
+        return specificationRepository.findAllById(ids);
+    }
+
     @Override
     public Class<R> getDtoType() {
         return dtoType;

@@ -1078,13 +1078,11 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         @SuppressWarnings({"unchecked", "rawtypes"})
         UpdateDataSource rawDataSource = getUpdateDataSource();
         return transactionSupport.inTransaction(() -> {
+            // Ground rules Phase 2 item 10: one findAllById query instead of N findOne calls,
+            // and one canAccessAll check instead of looping checkCanAccess - see both methods'
+            // own javadoc (CerbosAuthorizationGuard overrides canAccessAll with one batch() RPC).
             if (hasGuard()) {
-                for (K id : byId.keySet()) {
-                    E existing = getReadDataSource().findOne(id);
-                    if (existing != null) {
-                        checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
-                    }
-                }
+                checkCanAccessAll(AuthorizationGuard.Action.UPDATE, request, getReadDataSource().findAllById(byId.keySet()));
             }
             @SuppressWarnings("unchecked")
             List<E> updated = rawDataSource.updateAll(byId);
@@ -1138,17 +1136,15 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         DeleteDataSource rawDataSource = getDeleteDataSource();
         // Fail-fast, before deleting anything: check every targeted entity up front so a bulk
         // delete never partially completes before hitting a denied id. Skipped entirely (the
-        // whole loop, not just the check) when no guard is configured. Both the check loop and
-        // the actual delete run inside the same transaction (see #inTransaction) - a row can't
-        // change between being checked and being deleted either.
+        // whole check, not just part of it) when no guard is configured. Both the check and the
+        // actual delete run inside the same transaction (see #inTransaction) - a row can't
+        // change between being checked and being deleted either. Ground rules Phase 2 item 10:
+        // one findAllById query instead of N findOne calls, one canAccessAll check instead of
+        // looping checkCanAccess - see both methods' own javadoc.
         transactionSupport.<Void>inTransaction(() -> {
             if (hasGuard()) {
-                for (String rawId : deleteModel.getIds()) {
-                    E existing = getReadDataSource().findOne(convertId(rawId));
-                    if (existing != null) {
-                        checkCanAccess(AuthorizationGuard.Action.DELETE_ALL, request, existing);
-                    }
-                }
+                List<K> ids = deleteModel.getIds().stream().map(this::convertId).toList();
+                checkCanAccessAll(AuthorizationGuard.Action.DELETE_ALL, request, getReadDataSource().findAllById(ids));
             }
             rawDataSource.deleteAll(deleteModel);
             return null;
@@ -1508,6 +1504,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         if (!cachedGuard.canAccessAfterWrite(action, null, request, after)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccessAfterWrite");
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to leave this " + metadata.entityType().getSimpleName() + " in its new state");
+        }
+    }
+
+    /** Batched counterpart to {@link #checkCanAccess} (Ground rules Phase 2 item 10) - see {@link AuthorizationGuard#canAccessAll}'s own javadoc. */
+    private void checkCanAccessAll(AuthorizationGuard.Action action, HttpServletRequest request, List<E> entities) {
+        if (!cachedGuard.canAccessAll(action, request, entities)) {
+            metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccessAll");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access one or more of these " + metadata.entityType().getSimpleName());
         }
     }
 

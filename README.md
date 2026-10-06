@@ -939,6 +939,21 @@ above for what stability guarantees actually apply before 1.0.
   on named write actions (previously not checked there at all). `readVersion` now walks
   superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
 
+- **Bulk performance (Phase 2 item 10).** `updateBulk`/`deleteAll` now resolve their whole
+  pre-image/pre-check batch with one `findAllById` + one `canAccessAll` call, instead of looping
+  `findOne`/`canAccess` per id - one query and one authorization decision per bulk request
+  instead of N of each. `ReadDataSource` gained a concrete `findAllById(Collection<K>)` (default:
+  loops `findOne`, so any existing subclass keeps working unchanged); `DefaultReadDataSource`
+  overrides it with a single `specificationRepository.findAllById(...)` call.
+  `AuthorizationGuard` gained a `default canAccessAll(Action, HttpServletRequest, List<E>)`
+  (default: loops `canAccess`, same end result as before - override it for a guard that can check
+  a whole batch in one round trip, e.g. a single batched policy-engine call instead of N).
+  `DefaultDeleteDataSource`/`DefaultSoftDeleteDataSource` also gained a 3-arg constructor
+  (`repository, idType, conversionService`) alongside the existing 2-arg one - bulk-delete id
+  conversion previously always went through a standalone `DefaultConversionService`, silently
+  bypassing any custom `Converter` bean a consumer had registered on the app's own
+  `ConversionService`; processor-generated resources now pass the real one through.
+
 - **Internals cleanup (Phase 2 item 14).** `getAuthorizationGuard()` is now resolved once, in
   `init()`, and cached - every internal check (`checkPreCheck`/`checkCanAccess`/`scope()`/...)
   reads that cached instance instead of calling the (overridable, possibly expensive-to-construct)

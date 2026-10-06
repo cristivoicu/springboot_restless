@@ -497,8 +497,14 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                 ? verbInit(updateDataSource, extraParams, "updateDataSource",
                         "new DefaultUpdateDataSource<>(repository, %s.class)".formatted(updateModel))
                 : null;
+        // Ground rules Phase 2 item 10: threads the app's real, DI-scoped ConversionService
+        // into the default delete data source (a custom Converter bean the consumer registered
+        // would otherwise be silently never consulted during bulk delete - see
+        // DefaultDeleteDataSource's own javadoc) - this generated resource's own constructor
+        // gets it as a fixed parameter (same as repository/mapper) below, Spring resolving it
+        // like any other bean dependency.
         String deleteInit = verbInit(deleteDataSource, extraParams, "deleteDataSource",
-                "new DefaultDeleteDataSource<>(repository, %s.class)".formatted(idType));
+                "new DefaultDeleteDataSource<>(repository, %s.class, conversionService)".formatted(idType));
 
         String createFieldDecl = "";
         String createAssignment = "";
@@ -628,7 +634,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                         private final DeleteDataSource<%2$s, %5$s, ?> deleteDataSource;
                         private final %9$s mapper;
                     %16$s
-                        public %4$s(%10$s repository, %9$s mapper%11$s) {
+                        public %4$s(%10$s repository, %9$s mapper, org.springframework.core.convert.ConversionService conversionService%11$s) {
                     %21$s
                             this.readDataSource = %13$s;
                     %22$s
