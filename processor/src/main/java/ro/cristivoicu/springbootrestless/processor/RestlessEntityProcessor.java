@@ -15,10 +15,13 @@ import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
@@ -28,7 +31,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Generates a {@code {Entity}RestlessResource} class (the same shape a human would hand-write —
@@ -37,6 +39,14 @@ import java.util.stream.Collectors;
  * {Entity}CreateModel} etc. in the entity's own package) unless overridden via the annotation's
  * attributes; a missing {@code {Entity}Repository} is generated too. Registered via
  * {@code META-INF/services/javax.annotation.processing.Processor}.
+ * <p>
+ * Declared {@code isolating} (Ground rules Phase 3 item 15), not {@code aggregating}, in {@code
+ * META-INF/gradle/incremental.annotation.processors}: {@link #generate} only ever reads the one
+ * {@code @RestlessEntity}-annotated class it was invoked for (plus whichever sibling DTO/{@code
+ * Mapper}/{@code *DataSource} types its own attributes name) and writes only that one entity's
+ * generated sources - one entity's annotation never affects another's output, the exact
+ * precondition {@code isolating} requires. A Gradle incremental build can therefore safely
+ * reprocess only the entities whose own source files actually changed.
  */
 @SupportedAnnotationTypes("ro.cristivoicu.springbootrestless.annotation.RestlessEntity")
 public class RestlessEntityProcessor extends AbstractProcessor {
@@ -61,6 +71,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
     private Elements elements;
     private Messager messager;
     private Filer filer;
+    private Types types;
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
@@ -68,6 +79,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         this.elements = processingEnv.getElementUtils();
         this.messager = processingEnv.getMessager();
         this.filer = processingEnv.getFiler();
+        this.types = processingEnv.getTypeUtils();
     }
 
     @Override
@@ -190,6 +202,33 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         return generateDefaultMapper(packageName, entityName, dtoType, entityType);
     }
 
+    /** One field this processor can see on both sides of a generated mapper - name plus the declared Java type, for matching by name and checking assignability. */
+    private record MapperField(String name, TypeMirror type) {
+    }
+
+    /**
+     * Every non-static field on {@code type}'s own class hierarchy (up to, not including {@code
+     * Object}) - same walk-the-superclasses idiom {@link #reservedEntityFieldNames} already uses,
+     * since either side of a generated mapper (entity or DTO) can carry a field on a shared
+     * {@code @MappedSuperclass} rather than its own concrete class.
+     */
+    private List<MapperField> declaredFieldsOf(TypeElement type) {
+        List<MapperField> fields = new ArrayList<>();
+        for (TypeElement current = type; current != null && !current.getQualifiedName().contentEquals("java.lang.Object");
+             current = asTypeElement(current.getSuperclass())) {
+            for (Element enclosed : current.getEnclosedElements()) {
+                if (enclosed.getKind() == ElementKind.FIELD && !enclosed.getModifiers().contains(Modifier.STATIC)) {
+                    fields.add(new MapperField(enclosed.getSimpleName().toString(), enclosed.asType()));
+                }
+            }
+        }
+        return fields;
+    }
+
+    private static String capitalize(String name) {
+        return Character.toUpperCase(name.charAt(0)) + name.substring(1);
+    }
+
     /**
      * Every field {@link RestlessMapperExclude} marks on {@code dtoQualifiedName} - resolved by
      * inspecting the DTO's own declared fields, the same {@code getEnclosedElements()} technique
@@ -217,33 +256,54 @@ public class RestlessEntityProcessor extends AbstractProcessor {
     }
 
     /**
-     * Generates a {@code {Entity}Mapper implements Mapper<Entity, Dto>} whose {@code map(...)}
-     * is one {@code BeanUtils.copyProperties} call - reflective, matching source/target fields by
-     * name, exactly the technique {@code DefaultCreateDataSource}/{@code DefaultUpdateDataSource}
-     * already use for their own verbs. {@code dtoType} is always fully qualified (whatever {@link
-     * #resolveDtoType} returned), so it's safe to use directly in the generated source with no
-     * import needed, same as every other DTO type name this processor already writes out.
+     * Generates a {@code {Entity}Mapper implements Mapper<Entity, Dto>} whose {@code map(...)} is
+     * one explicit {@code dto.setX(source.getX())} call per matched field pair (Ground rules
+     * Phase 3 item 15) - compile-time type-checked, no reflection, a step toward GraalVM
+     * native-image support (reflective {@code BeanUtils.copyProperties} needs runtime hints
+     * native-image can't infer on its own). A DTO field matches when {@code entityType} declares
+     * a same-named field whose type is assignable to it (same leniency {@code
+     * BeanUtils.copyProperties} already had via its own {@code PropertyDescriptor} type check -
+     * silently skip, don't fail the build, on a name collision between two unrelated types) and
+     * it isn't {@literal @}RestlessMapperExclude-annotated. A DTO field present on one side but
+     * not the other keeps today's behavior: silently not copied.
      */
-    private String generateDefaultMapper(String packageName, String entityName, String dtoType, Element origin) throws IOException {
+    private String generateDefaultMapper(String packageName, String entityName, String dtoType, TypeElement entityType) throws IOException {
         String simpleName = entityName + "Mapper";
         String qualifiedName = packageName + "." + simpleName;
 
         List<String> excluded = resolveExcludedMapperFields(dtoType);
-        String ignoreArgs = excluded.stream().map(field -> ", \"" + field + "\"").collect(Collectors.joining());
+        TypeElement dtoElement = elements.getTypeElement(dtoType);
+        List<MapperField> entityFields = declaredFieldsOf(entityType);
 
-        JavaFileObject file = filer.createSourceFile(qualifiedName, origin);
+        StringBuilder assignments = new StringBuilder();
+        if (dtoElement != null) {
+            for (MapperField dtoField : declaredFieldsOf(dtoElement)) {
+                if (excluded.contains(dtoField.name())) {
+                    continue;
+                }
+                MapperField entityField = entityFields.stream()
+                        .filter(f -> f.name().equals(dtoField.name())).findFirst().orElse(null);
+                if (entityField == null || !types.isAssignable(entityField.type(), dtoField.type())) {
+                    continue;
+                }
+                String capitalized = capitalize(dtoField.name());
+                String getter = entityField.type().getKind() == TypeKind.BOOLEAN ? "is" + capitalized : "get" + capitalized;
+                assignments.append("        dto.set").append(capitalized).append("(source.").append(getter).append("());\n");
+            }
+        }
+
+        JavaFileObject file = filer.createSourceFile(qualifiedName, entityType);
         try (Writer writer = file.openWriter()) {
             writer.write("""
                     package %1$s;
 
-                    import org.springframework.beans.BeanUtils;
                     import org.springframework.stereotype.Component;
                     import ro.cristivoicu.springbootrestless.mapper.Mapper;
 
                     /**
                      * Generated by RestlessEntityProcessor: no hand-written %2$s existed, so every
                      * %4$s field not annotated {@literal @}RestlessMapperExclude is copied from the
-                     * matching %3$s field by name via BeanUtils.copyProperties. Do not edit -
+                     * matching %3$s field by name via an explicit setter call. Do not edit -
                      * regenerated on every build; write %2$s by hand instead the moment this
                      * default stops being enough.
                      */
@@ -252,11 +312,10 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                         @Override
                         public %4$s map(%3$s source) {
                             %4$s dto = new %4$s();
-                            BeanUtils.copyProperties(source, dto%5$s);
-                            return dto;
+                    %5$s        return dto;
                         }
                     }
-                    """.formatted(packageName, simpleName, entityName, dtoType, ignoreArgs));
+                    """.formatted(packageName, simpleName, entityName, dtoType, assignments));
         }
         return qualifiedName;
     }

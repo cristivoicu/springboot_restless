@@ -942,6 +942,13 @@ above for what stability guarantees actually apply before 1.0.
   on named write actions (previously not checked there at all). `readVersion` now walks
   superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
 
+- **Generated mapper codegen (Phase 3 item 15).** The default generated `{Entity}Mapper` (when
+  no hand-written one exists) no longer uses reflective `BeanUtils.copyProperties` - it now emits
+  one explicit `dto.setX(source.getX())` call per matched, non-`@RestlessMapperExclude` field
+  pair, compile-time type-checked, a step toward GraalVM native-image support. Also declared
+  `isolating` in `META-INF/gradle/incremental.annotation.processors`, so a Gradle incremental
+  build only reprocesses the `@RestlessEntity` classes whose own source actually changed.
+
 - **Soft-delete write/read consistency (Phase 2 item 13).** A write (`update`/`patch`/
   `deleteById`/a named write action) on an already-soft-deleted row now 404s unconditionally -
   previously the write path had no soft-delete awareness at all and happily proceeded as if the
