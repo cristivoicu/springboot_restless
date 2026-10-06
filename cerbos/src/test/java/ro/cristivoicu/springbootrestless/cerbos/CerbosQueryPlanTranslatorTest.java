@@ -8,10 +8,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.data.jpa.domain.Specification;
+import ro.cristivoicu.springbootrestless.cerbos.fixtures.Sensor;
+import ro.cristivoicu.springbootrestless.cerbos.fixtures.SensorRepository;
 import ro.cristivoicu.springbootrestless.cerbos.fixtures.Widget;
 import ro.cristivoicu.springbootrestless.cerbos.fixtures.WidgetRepository;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -28,6 +32,9 @@ class CerbosQueryPlanTranslatorTest {
 
     @Autowired
     private WidgetRepository repository;
+
+    @Autowired
+    private SensorRepository sensorRepository;
 
     @Test
     void eqFiltersOnAStringAttribute() {
@@ -48,6 +55,29 @@ class CerbosQueryPlanTranslatorTest {
     }
 
     @Test
+    void eqAgainstANullLiteralTranslatesToIsNull() {
+        seed();
+        repository.save(new Widget(null, "delta", 4L, null));
+
+        Specification<Widget> spec = CerbosQueryPlanTranslator.translate(
+                expression("eq", variable("department"), nullValue()));
+
+        assertThat(repository.findAll(spec)).extracting(Widget::getName).containsExactly("delta");
+    }
+
+    @Test
+    void neAgainstANullLiteralTranslatesToIsNotNull() {
+        seed();
+        repository.save(new Widget(null, "delta", 4L, null));
+
+        Specification<Widget> spec = CerbosQueryPlanTranslator.translate(
+                expression("ne", variable("department"), nullValue()));
+
+        assertThat(repository.findAll(spec)).extracting(Widget::getName)
+                .containsExactlyInAnyOrder("alpha", "beta", "gamma");
+    }
+
+    @Test
     void numericComparisonCoercesTheDoubleLiteralToTheAttributesActualType() {
         seed();
         // ownerId is a Long column; Cerbos's Value only ever carries a double for numbers - this
@@ -56,6 +86,42 @@ class CerbosQueryPlanTranslatorTest {
                 expression("gt", variable("ownerId"), numberValue(1)));
 
         assertThat(repository.findAll(spec)).extracting(Widget::getName).containsExactlyInAnyOrder("beta", "gamma");
+    }
+
+    @Test
+    void stringLiteralCoercesToAnEnumConstant() {
+        sensorRepository.save(new Sensor(null, "sensor-a", Sensor.Status.ACTIVE, UUID.randomUUID(), Instant.now()));
+        sensorRepository.save(new Sensor(null, "sensor-b", Sensor.Status.INACTIVE, UUID.randomUUID(), Instant.now()));
+
+        Specification<Sensor> spec = CerbosQueryPlanTranslator.translate(
+                expression("eq", rawVariable("request.resource.attr.status"), stringValue("ACTIVE")));
+
+        assertThat(sensorRepository.findAll(spec)).extracting(Sensor::getName).containsExactly("sensor-a");
+    }
+
+    @Test
+    void stringLiteralCoercesToAUuid() {
+        UUID target = UUID.randomUUID();
+        sensorRepository.save(new Sensor(null, "sensor-a", Sensor.Status.ACTIVE, target, Instant.now()));
+        sensorRepository.save(new Sensor(null, "sensor-b", Sensor.Status.ACTIVE, UUID.randomUUID(), Instant.now()));
+
+        Specification<Sensor> spec = CerbosQueryPlanTranslator.translate(
+                expression("eq", rawVariable("request.resource.attr.externalId"), stringValue(target.toString())));
+
+        assertThat(sensorRepository.findAll(spec)).extracting(Sensor::getName).containsExactly("sensor-a");
+    }
+
+    @Test
+    void stringLiteralCoercesToAnInstant() {
+        Instant target = Instant.parse("2025-01-01T00:00:00Z");
+        sensorRepository.save(new Sensor(null, "sensor-a", Sensor.Status.ACTIVE, UUID.randomUUID(), target));
+        sensorRepository.save(new Sensor(null, "sensor-b", Sensor.Status.ACTIVE, UUID.randomUUID(),
+                Instant.parse("2025-06-01T00:00:00Z")));
+
+        Specification<Sensor> spec = CerbosQueryPlanTranslator.translate(
+                expression("eq", rawVariable("request.resource.attr.installedAt"), stringValue(target.toString())));
+
+        assertThat(sensorRepository.findAll(spec)).extracting(Sensor::getName).containsExactly("sensor-a");
     }
 
     @Test
@@ -143,6 +209,12 @@ class CerbosQueryPlanTranslatorTest {
 
     private static Operand numberValue(double value) {
         return Operand.newBuilder().setValue(Value.newBuilder().setNumberValue(value)).build();
+    }
+
+    private static Operand nullValue() {
+        return Operand.newBuilder()
+                .setValue(Value.newBuilder().setNullValue(com.google.protobuf.NullValue.NULL_VALUE))
+                .build();
     }
 
     private static Operand listValue(String... values) {

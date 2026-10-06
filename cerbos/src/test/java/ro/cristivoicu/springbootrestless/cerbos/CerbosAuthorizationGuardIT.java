@@ -25,6 +25,7 @@ import ro.cristivoicu.springbootrestless.cerbos.fixtures.WidgetRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -122,6 +123,35 @@ class CerbosAuthorizationGuardIT {
 
         assertThat(guard.canAccess(Action.READ_ONE, request(), engineering)).isTrue();
         assertThat(guard.canAccess(Action.READ_ONE, request(), sales)).isFalse();
+    }
+
+    /**
+     * Ground rules Phase 2 item 11 ("Cerbos plan translator"): {@code principalAttributesExtender}
+     * is documented to potentially be a real lookup (a database round trip), not just a cheap map
+     * read - so resolving it once per {@link HttpServletRequest}, not once per hook call, matters.
+     * All three hooks are called against the exact same request instance here (unlike every other
+     * test in this class, which calls {@code request()} fresh per hook) specifically so the
+     * extender's call count is a meaningful assertion.
+     */
+    @Test
+    void principalAttributesExtenderIsConsultedOnceNoMatterHowManyHooksRunAgainstTheSameRequest() {
+        List<Widget> widgets = seed();
+        Widget own = widgets.get(0);
+        AtomicInteger extenderCalls = new AtomicInteger();
+        CerbosAuthorizationGuard<Widget> guard = new CerbosAuthorizationGuard<>(client, "widget", Widget::getId,
+                CerbosResourceAttributesMapper.reflective(Widget.class), CerbosActionNaming.DEFAULT,
+                request -> {
+                    extenderCalls.incrementAndGet();
+                    return Map.of();
+                });
+        authenticateAs("owner-user", "owner", Map.of("userId", own.getOwnerId()));
+        MockHttpServletRequest sameRequest = request();
+
+        guard.preCheck(Action.CREATE, null, sameRequest);
+        guard.canAccess(Action.READ_ONE, sameRequest, own);
+        guard.scope(Action.READ_LIST, null, sameRequest);
+
+        assertThat(extenderCalls.get()).isEqualTo(1);
     }
 
     private CerbosAuthorizationGuard<Widget> widgetGuard() {

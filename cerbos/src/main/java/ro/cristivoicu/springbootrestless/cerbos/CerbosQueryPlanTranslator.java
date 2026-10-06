@@ -31,7 +31,17 @@ import java.util.List;
  * recognize, a variable outside {@code request.resource.attr.*}, a literal kind with no JPA
  * equivalent - throws {@link IllegalStateException} rather than silently dropping a condition.
  * An authorization filter that quietly under-restricts on an unsupported case is a much worse
- * failure mode than a hard error surfaced at development time.
+ * failure mode than a hard error surfaced at development time. {@link CerbosAuthorizationGuard#scope}
+ * is what turns that thrown exception into an actual fail-closed (deny-all) outcome once the
+ * translated {@link Specification} is evaluated - this class itself always throws, never denies.
+ * <p>
+ * {@code eq}/{@code ne} against a {@code null} literal translate to {@code IS NULL}/{@code IS NOT
+ * NULL} ({@link CriteriaBuilder#equal}/{@link CriteriaBuilder#notEqual} against a literal {@code
+ * null} is not the same thing to Hibernate). {@link #coerce} also widens a {@code String} literal
+ * to an {@code enum} constant, a {@link java.util.UUID}, or a {@code java.time} value
+ * ({@code Instant}/{@code LocalDate}/{@code LocalDateTime}/{@code OffsetDateTime}) when the
+ * target attribute's Java type calls for one - Cerbos's own {@link Value} has no representation
+ * for any of those, so the policy condition always carries them as a plain string.
  */
 final class CerbosQueryPlanTranslator {
 
@@ -61,8 +71,19 @@ final class CerbosQueryPlanTranslator {
             case "or" -> cb.or(operands.stream().map(o -> toPredicate(o, root, cb)).toArray(Predicate[]::new));
             case "not" -> cb.not(toPredicate(requireSingle(operands, "not"), root, cb));
 
-            case "eq" -> cb.equal(pathOf(operands, 0, root), literalFor(operands, 1, pathOf(operands, 0, root)));
-            case "ne" -> cb.notEqual(pathOf(operands, 0, root), literalFor(operands, 1, pathOf(operands, 0, root)));
+            // Hibernate does not treat cb.equal(path, null)/cb.notEqual(path, null) as IS
+            // NULL/IS NOT NULL - a null-valued eq/ne literal (Cerbos's own NULL_VALUE kind, see
+            // literalOf) needs the dedicated predicate instead.
+            case "eq" -> {
+                Path path = pathOf(operands, 0, root);
+                Object literal = literalFor(operands, 1, path);
+                yield literal == null ? cb.isNull(path) : cb.equal(path, literal);
+            }
+            case "ne" -> {
+                Path path = pathOf(operands, 0, root);
+                Object literal = literalFor(operands, 1, path);
+                yield literal == null ? cb.isNotNull(path) : cb.notEqual(path, literal);
+            }
 
             // Raw-type escape hatch: the JPA-attribute-typed Path<Y> these need can't be named
             // here since the field (and its Java type) are only known at runtime, via the
@@ -157,7 +178,29 @@ final class CerbosQueryPlanTranslator {
         };
     }
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private static Object coerce(Object literal, Class<?> targetType) {
+        if (literal instanceof String text) {
+            if (targetType.isEnum()) {
+                return Enum.valueOf((Class<Enum>) targetType, text);
+            }
+            if (targetType == java.util.UUID.class) {
+                return java.util.UUID.fromString(text);
+            }
+            if (targetType == java.time.Instant.class) {
+                return java.time.Instant.parse(text);
+            }
+            if (targetType == java.time.LocalDate.class) {
+                return java.time.LocalDate.parse(text);
+            }
+            if (targetType == java.time.LocalDateTime.class) {
+                return java.time.LocalDateTime.parse(text);
+            }
+            if (targetType == java.time.OffsetDateTime.class) {
+                return java.time.OffsetDateTime.parse(text);
+            }
+            return literal;
+        }
         if (!(literal instanceof Double number)) {
             return literal;
         }

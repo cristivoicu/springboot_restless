@@ -939,6 +939,19 @@ above for what stability guarantees actually apply before 1.0.
   on named write actions (previously not checked there at all). `readVersion` now walks
   superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
 
+- **Cerbos query plan translator hardening (Phase 2 item 11).** `eq`/`ne` against a `null`
+  literal now translate to `IS NULL`/`IS NOT NULL` instead of `cb.equal(path, null)` (which
+  Hibernate does not treat as a null check, so a condition like `request.resource.attr.ownerId ==
+  null` previously silently matched nothing at all). `coerce()` now also widens a `String` literal
+  to an `enum` constant, a `UUID`, or a `java.time` value (`Instant`/`LocalDate`/
+  `LocalDateTime`/`OffsetDateTime`) when the target attribute's Java type calls for one - Cerbos's
+  own `Value` has no representation for any of those, so a policy condition comparing one of these
+  columns always carries it as a plain string. `CerbosAuthorizationGuard.scope()` now fails closed
+  (denies) instead of surfacing an unhandled `500` when the translator hits a query-plan shape it
+  doesn't support. `principalAttributesExtender` - documented as potentially a real database
+  lookup - is now resolved at most once per request (cached on the `HttpServletRequest` itself)
+  instead of once per `preCheck`/`canAccess`/`scope` call.
+
 - **Bulk performance (Phase 2 item 10).** `updateBulk`/`deleteAll` now resolve their whole
   pre-image/pre-check batch with one `findAllById` + one `canAccessAll` call, instead of looping
   `findOne`/`canAccess` per id - one query and one authorization decision per bulk request

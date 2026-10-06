@@ -14,6 +14,7 @@ import org.springframework.data.jpa.domain.Specification;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -215,7 +216,34 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
         Operand condition = plan.getCondition().orElseThrow(() -> new IllegalStateException(
                 "Cerbos plan for action '" + cerbosAction + "' on resource kind '" + resourceKind
                         + "' is CONDITIONAL but carries no condition"));
-        return CerbosQueryPlanTranslator.translate(condition);
+        return failClosedOnUnsupportedShape(CerbosQueryPlanTranslator.translate(condition), cerbosAction);
+    }
+
+    /**
+     * {@link CerbosQueryPlanTranslator} always throws {@link IllegalStateException} on a shape it
+     * can't translate (see its own javadoc) - but since the {@link Specification} it returns is a
+     * lazy lambda, that throw happens whenever Spring Data JPA actually evaluates it to build a
+     * query, deep inside a repository call this class has no visibility into. Wrapping it here, at
+     * the one point this class controls, turns "an unsupported query plan operator crashes
+     * whatever list/page request triggered it with a 500" into the same fail-closed (deny-all)
+     * outcome a PDP-unreachable {@link CerbosException} already gets.
+     * <p>
+     * Package-private (not {@code private}) so {@code CerbosAuthorizationGuardUnsupportedQueryPlanTest}
+     * can drive it directly with a hand-built, always-throwing {@link Specification} - reproducing
+     * a real PDP returning a plan this translator can't handle, through an actual Cerbos
+     * container, is both slow and not fully within this project's control (it depends on exactly
+     * which CEL shapes the planner leaves unresolved).
+     */
+    Specification<E> failClosedOnUnsupportedShape(Specification<E> translated, String cerbosAction) {
+        return (root, query, cb) -> {
+            try {
+                return translated.toPredicate(root, query, cb);
+            } catch (IllegalStateException e) {
+                log.warn("Unsupported Cerbos query plan shape for action '{}' on resource kind '{}' - "
+                                + "failing closed (denied): {}", cerbosAction, resourceKind, e.getMessage());
+                return cb.disjunction();
+            }
+        };
     }
 
     private void logFailedClosed(String hook, String cerbosAction, CerbosException e) {
@@ -224,7 +252,32 @@ public class CerbosAuthorizationGuard<E> implements AuthorizationGuard<E> {
                 hook, cerbosAction, resourceKind, e.getStatusCode(), e);
     }
 
+    private static final String PRINCIPAL_CACHE_ATTRIBUTE = CerbosAuthorizationGuard.class.getName() + ".principalCache";
+
+    /**
+     * {@code preCheck}/{@code canAccess}/{@code scope} can all run against the same request (a
+     * single list response alone calls {@code canAccess} once per row, on top of whichever of the
+     * other two preceded it), and {@code principalAttributesExtender} is documented (see this
+     * class's own javadoc) to potentially be a real lookup - a database round trip, say - not just
+     * a cheap map read. Resolving it once per request instead of once per hook call avoids
+     * repeating that lookup needlessly. Cached on the {@link HttpServletRequest} itself (a request
+     * attribute, keyed additionally by {@code this} guard instance, since more than one {@code
+     * CerbosAuthorizationGuard} - different resource kinds, different extenders - can legitimately
+     * run against the same request, e.g. via {@code @RestlessEmbed}) rather than in a field on this
+     * guard, which is typically a long-lived singleton bean shared across unrelated requests.
+     */
+    @SuppressWarnings("unchecked")
     private Principal principalOf(HttpServletRequest request) {
+        Map<CerbosAuthorizationGuard<?>, Principal> cache =
+                (Map<CerbosAuthorizationGuard<?>, Principal>) request.getAttribute(PRINCIPAL_CACHE_ATTRIBUTE);
+        if (cache == null) {
+            cache = new HashMap<>();
+            request.setAttribute(PRINCIPAL_CACHE_ATTRIBUTE, cache);
+        }
+        return cache.computeIfAbsent(this, ignored -> resolvePrincipal(request));
+    }
+
+    private Principal resolvePrincipal(HttpServletRequest request) {
         Principal principal = CerbosPrincipalResolver.resolve(request);
         Map<String, AttributeValue> extra = principalAttributesExtender.apply(request);
         return extra.isEmpty() ? principal : principal.withAttributes(extra);
