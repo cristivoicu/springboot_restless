@@ -91,7 +91,7 @@ class GuardCachingTest {
         resource.init(new RestlessInitContext(resource.resolveMetadata("/things"),
                 new tools.jackson.databind.ObjectMapper(), DefaultConversionService.getSharedInstance(),
                 noOpValidator(), RestlessEmbedResolver.NONE, null, RestlessAuthorizationMetrics.NONE,
-                10_000, 2_000, 1_000));
+                10_000, 2_000, 1_000, true));
 
         // init() itself already resolves the guard once - confirm, then prove further requests
         // don't resolve it again.

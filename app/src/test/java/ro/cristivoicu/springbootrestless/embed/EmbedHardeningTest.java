@@ -94,7 +94,7 @@ class EmbedHardeningTest {
         resource.init(new ro.cristivoicu.springbootrestless.resource.RestlessInitContext(
                 resource.resolveMetadata("/gizmos-embed-test"), objectMapper, conversionService, validator,
                 RestlessEmbedResolver.NONE, transactionManager, ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics.NONE,
-                10_000, 2_000, 1_000));
+                10_000, 2_000, 1_000, true));
         return resource;
     }
 
@@ -103,7 +103,7 @@ class EmbedHardeningTest {
         resource.init(new ro.cristivoicu.springbootrestless.resource.RestlessInitContext(
                 resource.resolveMetadata("/widgets-embed-test"), objectMapper, conversionService, validator,
                 RestlessEmbedResolver.NONE, transactionManager, ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics.NONE,
-                10_000, 2_000, 1_000));
+                10_000, 2_000, 1_000, true));
         return resource;
     }
 

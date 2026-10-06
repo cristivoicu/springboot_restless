@@ -81,7 +81,7 @@ class FilterBindingFailFastTest {
     private static void init(ThingResource resource) {
         resource.init(new RestlessInitContext(resource.resolveMetadata("/things"), new tools.jackson.databind.ObjectMapper(),
                 DefaultConversionService.getSharedInstance(), noOpValidator(), RestlessEmbedResolver.NONE, null,
-                RestlessAuthorizationMetrics.NONE, 10_000, 2_000, 1_000));
+                RestlessAuthorizationMetrics.NONE, 10_000, 2_000, 1_000, true));
     }
 
     private static Validator noOpValidator() {
@@ -210,7 +210,7 @@ class FilterBindingFailFastTest {
         };
         resource.init(new RestlessInitContext(resource.resolveMetadata("/things-with-tags-in"), new tools.jackson.databind.ObjectMapper(),
                 DefaultConversionService.getSharedInstance(), noOpValidator(), RestlessEmbedResolver.NONE, null,
-                RestlessAuthorizationMetrics.NONE, 10_000, 2_000, 1_000));
+                RestlessAuthorizationMetrics.NONE, 10_000, 2_000, 1_000, true));
         // No exception: "tagsIn" (the full SearchDto field name) matches ThingWithTagsIn's own
         // "tagsIn" property directly, so it's bound as equality - never evaluated as the "In"
         // suffix against a non-existent, non-Collection "tags" base property.

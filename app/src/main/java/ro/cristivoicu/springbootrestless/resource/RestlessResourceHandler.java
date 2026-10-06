@@ -133,6 +133,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     private int maxListSize = DEFAULT_MAX_LIST_SIZE;
     private int maxPageSize = DEFAULT_MAX_PAGE_SIZE;
     private int maxBulkSize = DEFAULT_MAX_BULK_SIZE;
+    private boolean includeSoftDeletedInSingleRead = true;
     private String idPropertyName;
 
     /** {@link #getAuthorizationGuard()}, resolved once in {@link #init} - see that method's own javadoc for why. */
@@ -201,6 +202,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         this.maxListSize = context.maxListSize() > 0 ? context.maxListSize() : DEFAULT_MAX_LIST_SIZE;
         this.maxPageSize = context.maxPageSize() > 0 ? context.maxPageSize() : DEFAULT_MAX_PAGE_SIZE;
         this.maxBulkSize = context.maxBulkSize() > 0 ? context.maxBulkSize() : DEFAULT_MAX_BULK_SIZE;
+        this.includeSoftDeletedInSingleRead = context.includeSoftDeletedInSingleRead();
         this.idPropertyName = resolveIdPropertyName(metadata.entityType());
         this.cachedGuard = getAuthorizationGuard();
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
@@ -784,7 +786,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         // run inside it - see that method's own javadoc for why a lazy association needs this.
         return transactionSupport.inReadOnlyTransaction(() -> {
             E found = getReadDataSource().findOne(id);
-            if (found == null) {
+            if (found == null || (isSoftDeleted(found) && !includeSoftDeletedInSingleRead)) {
                 return ResponseEntity.notFound().build();
             }
             checkCanAccess(AuthorizationGuard.Action.READ_ONE, request, found);
@@ -881,7 +883,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         // see that method's own javadoc for why a lazy association needs this.
         return transactionSupport.inReadOnlyTransaction(() -> {
             E found = getReadDataSource().findOne(id);
-            if (found == null) {
+            if (found == null || (isSoftDeleted(found) && !includeSoftDeletedInSingleRead)) {
                 return ResponseEntity.notFound().build();
             }
             checkCanAccess(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found);
@@ -955,7 +957,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
 
         return transactionSupport.inTransaction(() -> {
             E found = getReadDataSource().findOne(id);
-            if (found == null) {
+            if (found == null || isSoftDeleted(found)) {
                 return ResponseEntity.notFound().build();
             }
             checkCanAccess(AuthorizationGuard.Action.WRITE_ACTION, actionName, request, found);
@@ -1001,11 +1003,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
 
         return transactionSupport.inTransaction(() -> {
             E existing = getReadDataSource().findOne(id);
-            if (existing == null) {
+            if (existing == null || isSoftDeleted(existing)) {
                 // Same ResponseStatusException/ProblemDetail shape DefaultUpdateDataSource's own
                 // not-found used to throw (now redundant there, but every hand-written
                 // UpdateDataSource is still free to also throw it for the same id) - not a bare
                 // 404, to keep this byte-for-byte compatible with before this pipeline existed.
+                // A soft-deleted row 404s here unconditionally (Ground rules Phase 2 item 13) -
+                // see isSoftDeleted's own javadoc for why a write never consults
+                // includeSoftDeletedInSingleRead the way findOne/namedView do.
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
             }
             checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
@@ -1041,7 +1046,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
 
         return transactionSupport.inTransaction(() -> {
             E existing = getReadDataSource().findOne(id);
-            if (existing == null) {
+            if (existing == null || isSoftDeleted(existing)) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
             }
             checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
@@ -1119,7 +1124,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
 
         return transactionSupport.inTransaction(() -> {
             E existing = getReadDataSource().findOne(id);
-            if (existing == null) {
+            if (existing == null || isSoftDeleted(existing)) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
             }
             checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
@@ -1550,15 +1555,28 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * filter (see the three {@code getSpecification(...)}/{@code buildSpecification(...)} call
      * sites above), the same {@code .and(...)} composition idiom {@link #withScope} already uses
      * for authorization scoping. Deliberately <b>not</b> applied to {@link #findOne}/{@link
-     * #update}/{@link #patch} (all of which load by id via {@link #getReadDataSource()} directly,
-     * bypassing {@code Specification} filtering entirely) - a soft-deleted row stays fetchable and
-     * restorable by id on purpose, only excluded from listing/searching.
+     * #namedView}/{@link #update}/{@link #patch} (all of which load by id via {@link
+     * #getReadDataSource()} directly, bypassing {@code Specification} filtering entirely) - see
+     * {@link #isSoftDeleted} for how each of those instead handles a soft-deleted row it loads.
      */
     private Specification<E> excludeSoftDeleted(Specification<E> spec) {
         if (!SoftDeletable.class.isAssignableFrom(metadata.entityType())) {
             return spec;
         }
         return spec.and((root, query, cb) -> cb.equal(root.get("deleted"), false));
+    }
+
+    /**
+     * Ground rules Phase 2 item 13 ("Soft delete"): a write ({@link #update}/{@link #patch}/
+     * {@link #deleteById}/{@link #writeAction}) on an already-soft-deleted row always 404s - as
+     * far as a write is concerned, a soft-deleted row is gone, the same way a hard-deleted one
+     * already is. {@link #findOne}/{@link #namedView} instead consult {@code
+     * includeSoftDeletedInSingleRead} ({@code restless.soft-delete.include-in-single-read},
+     * default {@code true} = today's pre-item-13 behavior: a soft-deleted row is still readable
+     * by id) before deciding whether to 404 too.
+     */
+    private boolean isSoftDeleted(E entity) {
+        return entity instanceof SoftDeletable softDeletable && softDeletable.isDeleted();
     }
 
     // ---- explicit transaction demarcation for the three bulk-write routes - see TransactionSupport ----

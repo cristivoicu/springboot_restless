@@ -20,6 +20,13 @@ import tools.jackson.databind.ObjectMapper;
  * fallback); every other field is expected non-null, with {@code embedResolver}/{@code metrics}
  * each having their own shared no-op singleton ({@link RestlessEmbedResolver#NONE}/{@link
  * RestlessAuthorizationMetrics#NONE}) for a caller with nothing real to supply.
+ * <p>
+ * {@code includeSoftDeletedInSingleRead} (Ground rules Phase 2 item 13, {@code
+ * restless.soft-delete.include-in-single-read}) - {@code true} (today's existing behavior, see
+ * {@code SoftDeletable}'s own javadoc) returns a soft-deleted row from {@code findOne}/{@code
+ * namedView} same as any other; {@code false} 404s instead, same as a row that was never there at
+ * all. Writes/write actions on a soft-deleted row always 404, unconditionally - this flag only
+ * ever affects a plain read.
  */
 public record RestlessInitContext(
         ResourceMetadata metadata,
@@ -31,6 +38,7 @@ public record RestlessInitContext(
         RestlessAuthorizationMetrics metrics,
         int maxListSize,
         int maxPageSize,
-        int maxBulkSize
+        int maxBulkSize,
+        boolean includeSoftDeletedInSingleRead
 ) {
 }

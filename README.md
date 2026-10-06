@@ -456,7 +456,10 @@ public class Task implements SoftDeletable { /* ... */ }
 ```
 
 Flags a `deleted` column instead of removing the row; automatically excluded from
-`findList`/`findPage*`/custom-read results, but still fetchable directly by id.
+`findList`/`findPage*`/custom-read results. Still fetchable directly by id (`findOne`/a named
+view) unless `restless.soft-delete.include-in-single-read=false`, in which case it 404s there
+too. A write (`update`/`patch`/`deleteById`/a named write action) on an already-soft-deleted row
+always 404s, regardless of that setting.
 
 ### Optimistic concurrency
 
@@ -938,6 +941,14 @@ above for what stability guarantees actually apply before 1.0.
   RFC-incorrect behavior) will now get `412` instead. `If-Match` is also now optionally honored
   on named write actions (previously not checked there at all). `readVersion` now walks
   superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
+
+- **Soft-delete write/read consistency (Phase 2 item 13).** A write (`update`/`patch`/
+  `deleteById`/a named write action) on an already-soft-deleted row now 404s unconditionally -
+  previously the write path had no soft-delete awareness at all and happily proceeded as if the
+  row were any other. New `restless.soft-delete.include-in-single-read` property (default `true`
+  - today's pre-item-13 behavior: `findOne`/a named view still returns a soft-deleted row);
+  set to `false` to 404 it there too, same as a row that never existed. Threaded through the new
+  `RestlessInitContext.includeSoftDeletedInSingleRead` field.
 
 - **Fail-closed field masking (Phase 2 item 12).** New `AuthorizationGuard.postProcessResponse(action,
   customActionName, request, entity, dto)` default hook (returns `dto` unchanged) -

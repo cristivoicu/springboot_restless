@@ -12,9 +12,12 @@ package ro.cristivoicu.springbootrestless.datasource;
  * ro.cristivoicu.springbootrestless.datasource.defaults.DefaultDeleteDataSource}'s row removal.
  * <p>
  * Once an entity implements this, {@code RestlessResourceHandler} automatically excludes
- * soft-deleted rows from {@code findList}/{@code findPage*}/custom-read results - see {@code
- * excludeSoftDeleted}'s own javadoc for why fetch-by-id ({@code findOne}/{@code update}/{@code
- * patch}) deliberately still returns them.
+ * soft-deleted rows from {@code findList}/{@code findPage*}/custom-read results. A write
+ * ({@code update}/{@code patch}/{@code deleteById}/a named write action) on an already-soft-
+ * deleted row always 404s (Ground rules Phase 2 item 13) - a plain fetch-by-id ({@code findOne}/
+ * a named view) instead honors {@code restless.soft-delete.include-in-single-read} (default
+ * {@code true}: still returns it) - see {@code RestlessResourceHandler#isSoftDeleted}'s own
+ * javadoc.
  */
 public interface SoftDeletable {
 

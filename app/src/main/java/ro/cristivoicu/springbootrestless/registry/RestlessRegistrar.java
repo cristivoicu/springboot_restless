@@ -98,7 +98,7 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         ResourceMetadata metadata = resource.resolveMetadata(basePath, version);
         resource.init(new RestlessInitContext(metadata, objectMapper, conversionService, validator, embedResolver,
                 transactionManager, metrics, properties.getList().getMaxSize(), properties.getPage().getMaxSize(),
-                properties.getBulk().getMaxSize()));
+                properties.getBulk().getMaxSize(), properties.getSoftDelete().isIncludeInSingleRead()));
 
         // Fail-fast, not fail-open: a resource with no real AuthorizationGuard (still the
         // default-permissive AuthorizationGuard.allowAll()) never gets registered at all unless

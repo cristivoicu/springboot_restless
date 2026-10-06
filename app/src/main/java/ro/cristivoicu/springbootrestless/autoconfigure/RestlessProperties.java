@@ -27,6 +27,9 @@ public class RestlessProperties {
     @NestedConfigurationProperty
     private final Bulk bulk = new Bulk();
 
+    @NestedConfigurationProperty
+    private final SoftDelete softDelete = new SoftDelete();
+
     public List getList() {
         return list;
     }
@@ -37,6 +40,10 @@ public class RestlessProperties {
 
     public Bulk getBulk() {
         return bulk;
+    }
+
+    public SoftDelete getSoftDelete() {
+        return softDelete;
     }
 
     /** {@code restless.list.*} - see {@link RestlessResourceHandler#DEFAULT_MAX_LIST_SIZE}'s own javadoc for why this cap exists at all. */
@@ -94,6 +101,26 @@ public class RestlessProperties {
 
         public void setMaxSize(int maxSize) {
             this.maxSize = maxSize;
+        }
+    }
+
+    /**
+     * {@code restless.soft-delete.*} (Ground rules Phase 2 item 13) - {@code includeInSingleRead}
+     * controls whether {@code findOne}/a named view returns an already-soft-deleted row ({@code
+     * true}, the default - today's pre-item-13 behavior) or 404s it like a row that never existed
+     * ({@code false}). A write on a soft-deleted row always 404s regardless of this setting - see
+     * {@code SoftDeletable}'s own javadoc.
+     */
+    public static class SoftDelete {
+
+        private boolean includeInSingleRead = true;
+
+        public boolean isIncludeInSingleRead() {
+            return includeInSingleRead;
+        }
+
+        public void setIncludeInSingleRead(boolean includeInSingleRead) {
+            this.includeInSingleRead = includeInSingleRead;
         }
     }
 }

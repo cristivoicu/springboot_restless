@@ -117,6 +117,29 @@ class WidgetLifecycleTest {
                 .andExpect(jsonPath("$.body[?(@.id == " + keptId + ")]").exists());
     }
 
+    /**
+     * Ground rules Phase 2 item 13 ("Soft delete"): a write on an already-soft-deleted row now
+     * 404s unconditionally - previously {@code update}/{@code deleteById} loaded it via {@code
+     * findOne} exactly like any other row (no soft-delete awareness at all in the write path) and
+     * happily proceeded.
+     */
+    @Test
+    void writesOnAnAlreadySoftDeletedWidgetAreRejectedWith404() throws Exception {
+        long id = createWidget("Delete me");
+        mockMvc.perform(delete("/widgets/{id}", id)).andExpect(status().isNoContent());
+
+        WidgetUpdateModel update = new WidgetUpdateModel();
+        update.setName("Resurrected?");
+        mockMvc.perform(put("/widgets/{id}", id)
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(update)))
+                .andExpect(status().isNotFound());
+
+        // Deleting it again is also a 404, not a silent no-op repeat success.
+        mockMvc.perform(delete("/widgets/{id}", id))
+                .andExpect(status().isNotFound());
+    }
+
     private long createWidget(String name) throws Exception {
         WidgetCreateModel create = new WidgetCreateModel();
         create.setName(name);
