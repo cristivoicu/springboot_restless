@@ -61,6 +61,21 @@ class OpenApiDiscoveryTest {
     }
 
     @Test
+    void nestedResourcePathParameterIsDocumented() throws Exception {
+        // Feature B item 9: Task ("/projects/{projectId}/tasks") documents projectId (schema type
+        // Long, from ResourceMetadata#parentIdType()) on every one of its routes, alongside id on
+        // the by-id ones.
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paths['/projects/{projectId}/tasks'].post.parameters[*].name")
+                        .value(org.hamcrest.Matchers.hasItem("projectId")))
+                .andExpect(jsonPath("$.paths['/projects/{projectId}/tasks/{id}'].get.parameters[*].name")
+                        .value(org.hamcrest.Matchers.hasItems("projectId", "id")))
+                .andExpect(jsonPath("$.paths['/projects/{projectId}/tasks/{id}'].get.parameters[?(@.name=='projectId')].schema.type")
+                        .value(org.hamcrest.Matchers.hasItem("integer")));
+    }
+
+    @Test
     void disabledOperationsAreNotDocumented() throws Exception {
         // ProjectAssignmentRestlessResource excludes UPDATE (see getEnabledOperations()) - the
         // OpenAPI document has to reflect exactly what RestlessRegistrar actually registered,
