@@ -89,7 +89,10 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
 
         RestlessResource annotation = AnnotationUtils.findAnnotation(bean.getClass(), RestlessResource.class);
         String basePath = annotation.basePath();
-        if (!seenBasePaths.add(basePath)) {
+        // Normalized so a nested resource's own {variable} name never hides a genuine collision -
+        // "/events/{eventId}/guests" and "/events/{id}/guests" are the same route template to
+        // Spring MVC regardless of what either resource happens to call its own path variable.
+        if (!seenBasePaths.add(normalizedBasePath(basePath))) {
             throw new IllegalStateException("Duplicate @RestlessResource basePath '" + basePath
                     + "' - each resource must be mounted at a distinct base path");
         }
@@ -145,6 +148,11 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         if (resource.getPatchDataSource().isPresent()) {
             registerRoute(resource, basePath + "/{id}", RequestMethod.PATCH, "patch", version);
         }
+    }
+
+    /** Every {@code {anything}} template segment collapsed to a fixed placeholder, so two basePaths differing only in their own path variable's name are detected as the same route template. */
+    private static String normalizedBasePath(String basePath) {
+        return basePath.replaceAll("\\{[^}]+\\}", "{}");
     }
 
     private void registerRoute(RestlessResourceHandler<?, ?> resource, String path, RequestMethod httpMethod,

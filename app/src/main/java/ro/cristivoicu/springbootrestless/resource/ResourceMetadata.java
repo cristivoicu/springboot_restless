@@ -36,6 +36,8 @@ public record ResourceMetadata(
         Class<?> responseDtoType,
         Class<?> overviewResponseDtoType,
         Class<?> selectResponseDtoType,
-        String version
+        String version,
+        String parentPathVariable,
+        Class<?> parentIdType
 ) {
 }

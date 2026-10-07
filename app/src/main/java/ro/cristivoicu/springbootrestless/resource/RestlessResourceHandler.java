@@ -222,6 +222,16 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             throw new IllegalStateException(getClass().getSimpleName() + ": @RestlessParent variable '"
                     + this.parentDescriptor.pathVariable() + "' does not appear in basePath '" + metadata.basePath() + "'");
         }
+        // Not known yet when resolveMetadata() first built this.metadata (parent() is only read
+        // here, in init()) - replaced with an enriched copy purely so RestlessOpenApiCustomizer
+        // can document the parent path parameter on every nested route.
+        if (this.parentDescriptor != null) {
+            this.metadata = new ResourceMetadata(metadata.basePath(), metadata.entityType(), metadata.idType(),
+                    metadata.createModelType(), metadata.updateModelType(), metadata.deleteModelType(),
+                    metadata.searchDtoType(), metadata.responseDtoType(), metadata.overviewResponseDtoType(),
+                    metadata.selectResponseDtoType(), metadata.version(),
+                    this.parentDescriptor.pathVariable(), this.parentDescriptor.leafIdType());
+        }
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
         resolveFilterBindings();
 
@@ -309,7 +319,12 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 resolveDtoTypeFromMapper(getEntityMapper()),
                 resolveDtoTypeFromMapper(getOverviewMapper()),
                 resolveDtoTypeFromMapper(getSelectMapper()),
-                version == null ? "" : version);
+                version == null ? "" : version,
+                // Not known yet at this point (resolveMetadata runs before init(), the only place
+                // @RestlessResource(parent = ...) is actually read) - init() replaces this.metadata
+                // with an enriched copy once parentDescriptor is resolved, purely so
+                // RestlessOpenApiCustomizer has something to read later.
+                null, null);
     }
 
     /**

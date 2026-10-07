@@ -130,6 +130,7 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
                 .addTagsItem(tag)
                 .operationId(operationId(route.handlerMethodName(), metadata))
                 .summary(summary(route.handlerMethodName(), tag));
+        addParentParameterIfNested(operation, openApi, metadata);
 
         switch (route.handlerMethodName()) {
             case "create" -> {
@@ -203,6 +204,7 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
                 .addTagsItem(tag)
                 .operationId(operationId("action_" + actionName, metadata))
                 .summary("Custom read action \"" + actionName + "\" on " + tag);
+        addParentParameterIfNested(operation, openApi, metadata);
         addSearchParameters(operation, openApi, action.getSearchDtoType());
         addPagingParameters(operation, openApi);
         operation.responses(new ApiResponses().addApiResponse("200",
@@ -217,6 +219,7 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
                 .addTagsItem(tag)
                 .operationId(operationId("view_" + viewName, metadata))
                 .summary("Named view \"" + viewName + "\" of " + tag + " by id");
+        addParentParameterIfNested(operation, openApi, metadata);
         operation.addParametersItem(idParameter(openApi, metadata.idType()));
         operation.responses(new ApiResponses()
                 .addApiResponse("200", jsonResponse(refSchema(openApi, viewResponseType(mapper))))
@@ -251,6 +254,7 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
                 .addTagsItem(tag)
                 .operationId(operationId("writeAction_" + actionName, metadata))
                 .summary("Write action \"" + actionName + "\" on " + tag + " by id");
+        addParentParameterIfNested(operation, openApi, metadata);
         operation.addParametersItem(idParameter(openApi, metadata.idType()));
         operation.requestBody(jsonBody(refSchema(openApi, action.getRequestType()), true));
         operation.responses(new ApiResponses()
@@ -266,6 +270,7 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
                 .addTagsItem(tag)
                 .operationId(operationId("patch", metadata))
                 .summary("Partially update " + tag + " by id");
+        addParentParameterIfNested(operation, openApi, metadata);
         operation.addParametersItem(idParameter(openApi, metadata.idType()));
         operation.requestBody(jsonBody(refSchema(openApi, resource.getPatchModelType()), true));
         operation.responses(new ApiResponses().addApiResponse("200",
@@ -342,6 +347,20 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
 
     private Parameter idParameter(OpenAPI openApi, Class<?> idType) {
         return new Parameter().name("id").in("path").required(true).schema(refSchema(openApi, idType));
+    }
+
+    /**
+     * Feature B item 9 (nested resources): documents the parent path parameter - with the right
+     * schema type, from {@link ResourceMetadata#parentIdType()} - on every route of a nested
+     * resource. A no-op for a flat resource ({@link ResourceMetadata#parentPathVariable()} is
+     * {@code null} - see {@code RestlessResourceHandler#init}'s own javadoc for when it's set).
+     */
+    private void addParentParameterIfNested(Operation operation, OpenAPI openApi, ResourceMetadata metadata) {
+        if (metadata.parentPathVariable() == null) {
+            return;
+        }
+        operation.addParametersItem(new Parameter().name(metadata.parentPathVariable()).in("path").required(true)
+                .schema(refSchema(openApi, metadata.parentIdType())));
     }
 
     /**
