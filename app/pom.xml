@@ -103,6 +103,17 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- optional=true, same reasoning as springdoc/actuator above: compiled against so
+             RestlessContext can carry a typed Authentication (see OptionalSpringSecurity), but
+             never forced onto a consumer with no Spring Security on their classpath -
+             OptionalSpringSecurity's own ClassUtils.isPresent check is what makes that a no-op
+             (RestlessContext.authentication() just comes back null), not an error. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-core</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- optional=true, same reasoning as springdoc above: compiled against so
              ro.cristivoicu.springbootrestless.metrics can record an authorization-denial counter
              via Micrometer's MeterRegistry (riding in transitively with this), but never forced

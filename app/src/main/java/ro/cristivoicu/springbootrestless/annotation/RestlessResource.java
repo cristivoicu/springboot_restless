@@ -61,4 +61,11 @@ public @interface RestlessResource {
      * instead of leaving it indistinguishable from "nobody got around to it yet".
      */
     boolean allowAll() default false;
+
+    /**
+     * Declares this resource nested under a parent path variable - see {@link RestlessParent}'s
+     * own javadoc for the full shape and semantics. Unset (the default, an empty {@code
+     * variable}/{@code field}) means a flat, non-nested resource - today's behavior, unchanged.
+     */
+    RestlessParent parent() default @RestlessParent;
 }

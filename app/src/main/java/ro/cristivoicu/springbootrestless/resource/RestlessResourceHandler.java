@@ -34,6 +34,7 @@ import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.filter.FilterOperator;
 import ro.cristivoicu.springbootrestless.mapper.Mapper;
 import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
+import ro.cristivoicu.springbootrestless.models.AbstractSearchDto;
 import ro.cristivoicu.springbootrestless.models.CreateModel;
 import ro.cristivoicu.springbootrestless.models.DeleteModel;
 import ro.cristivoicu.springbootrestless.models.PageableResponse;
@@ -139,6 +140,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     /** {@link #getAuthorizationGuard()}, resolved once in {@link #init} - see that method's own javadoc for why. */
     private AuthorizationGuard<E> cachedGuard;
 
+    /**
+     * Resolved once in {@link #init} from this resource's {@code @RestlessResource(parent = ...)}
+     * - {@code null} for a flat (non-nested) resource, the overwhelmingly common case, which
+     * leaves every nested-resource code path below a no-op. See {@link ParentFieldSupport}'s own
+     * javadoc for what this actually describes and how it's used.
+     */
+    private ParentFieldSupport.ParentDescriptor parentDescriptor;
+
     private TransactionSupport transactionSupport;
 
     /**
@@ -205,6 +214,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         this.includeSoftDeletedInSingleRead = context.includeSoftDeletedInSingleRead();
         this.idPropertyName = resolveIdPropertyName(metadata.entityType());
         this.cachedGuard = getAuthorizationGuard();
+        this.parentDescriptor = ParentFieldSupport.resolve(metadata.entityType(), context.parentPathVariable(), context.parentField());
+        // Fail closed (Ground rules for this feature): a parent variable that doesn't actually
+        // appear as a {variable} path segment in this resource's own basePath is a startup error,
+        // never a silently unscoped route.
+        if (this.parentDescriptor != null && !metadata.basePath().contains("{" + this.parentDescriptor.pathVariable() + "}")) {
+            throw new IllegalStateException(getClass().getSimpleName() + ": @RestlessParent variable '"
+                    + this.parentDescriptor.pathVariable() + "' does not appear in basePath '" + metadata.basePath() + "'");
+        }
         this.searchDtoConstructor = resolveNoArgConstructor(metadata.searchDtoType(), "search DTO");
         resolveFilterBindings();
 
@@ -665,34 +682,41 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * insert back - the row never actually exists from any other transaction's point of view.
      */
     public final ResponseEntity<?> create(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
-        Object body = readBody(request, metadata.createModelType());
-        validate(body);
-        // Raw-type escape hatch: C's bound (CreateModel) can't be named here since the actual
-        // type is only known at runtime via metadata.createModelType(). Safe because `body` was
-        // just deserialized as exactly that class.
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        CreateDataSource rawDataSource = getCreateDataSource();
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.CREATE, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
+            Object body = readBody(request, metadata.createModelType());
+            validate(body);
+            // Raw-type escape hatch: C's bound (CreateModel) can't be named here since the actual
+            // type is only known at runtime via metadata.createModelType(). Safe because `body` was
+            // just deserialized as exactly that class.
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            CreateDataSource rawDataSource = getCreateDataSource();
 
-        return transactionSupport.inTransaction(() -> {
-            @SuppressWarnings("unchecked")
-            E created = (E) rawDataSource.create((CreateModel) body);
-            checkCanAccess(AuthorizationGuard.Action.CREATE, request, created);
-            rawDataSource.flush();
-            // 201 + Location, not 200: RFC 9110 §15.3.2 - a successful POST that creates a
-            // resource should report 201 and point at where the new resource can be fetched.
-            // idOf(created) can come back null for an entity with no @Id field reachable via
-            // reflection walk-up (shouldn't happen for a real JPA entity, but a hand-rolled test
-            // double might skip it) - falls back to plain 200 with no Location rather than
-            // building a broken URI in that case.
-            Object dto = postProcessResponse(AuthorizationGuard.Action.CREATE, null, request, created, getEntityMapper().map(created));
-            Object id = idOf(created);
-            if (id != null) {
-                java.net.URI location = org.springframework.web.servlet.support.ServletUriComponentsBuilder
-                        .fromRequest(request).path("/{id}").buildAndExpand(id).toUri();
-                return withETag(ResponseEntity.created(location), created).body(dto);
-            }
-            return withETag(ResponseEntity.ok(), created).body(dto);
+            return transactionSupport.inTransaction(() -> {
+                @SuppressWarnings("unchecked")
+                E created = (E) rawDataSource.create((CreateModel) body, ctx);
+                // Nested resources (Feature B): the parent id in the path is written AFTER the
+                // create model is applied - a body-supplied value for the same field is always
+                // overwritten, never honored. See ParentFieldSupport's own javadoc.
+                writeParentFieldIfNested(created, ctx);
+                checkCanAccess(AuthorizationGuard.Action.CREATE, request, created);
+                rawDataSource.flush();
+                // 201 + Location, not 200: RFC 9110 §15.3.2 - a successful POST that creates a
+                // resource should report 201 and point at where the new resource can be fetched.
+                // idOf(created) can come back null for an entity with no @Id field reachable via
+                // reflection walk-up (shouldn't happen for a real JPA entity, but a hand-rolled test
+                // double might skip it) - falls back to plain 200 with no Location rather than
+                // building a broken URI in that case.
+                Object dto = postProcessResponse(AuthorizationGuard.Action.CREATE, null, request, created, getEntityMapper().map(created));
+                Object id = idOf(created);
+                if (id != null) {
+                    java.net.URI location = org.springframework.web.servlet.support.ServletUriComponentsBuilder
+                            .fromRequest(request).path("/{id}").buildAndExpand(id).toUri();
+                    return withETag(ResponseEntity.created(location), created).body(dto);
+                }
+                return withETag(ResponseEntity.ok(), created).body(dto);
+            });
         });
     }
 
@@ -746,26 +770,30 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * same guarantee.
      */
     public final ResponseEntity<?> createBulk(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
-        List<Object> bodies = readBodyList(request, metadata.createModelType());
-        checkBulkSize(bodies.size());
-        for (Object body : bodies) {
-            validate(body);
-        }
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        CreateDataSource rawDataSource = getCreateDataSource();
-        // Row-level authorization on writes (Ground rules item 2) extends to bulk create too -
-        // otherwise this route would be a direct bypass of the same check single create() now
-        // runs. Every created item is checked (fail-fast, before the response goes out) inside
-        // the same transaction the write itself ran in, so a denial rolls back the whole batch.
-        return transactionSupport.inTransaction(() -> {
-            @SuppressWarnings("unchecked")
-            List<E> created = rawDataSource.createAll(bodies);
-            for (E entity : created) {
-                checkCanAccess(AuthorizationGuard.Action.CREATE, request, entity);
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.CREATE, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
+            List<Object> bodies = readBodyList(request, metadata.createModelType());
+            checkBulkSize(bodies.size());
+            for (Object body : bodies) {
+                validate(body);
             }
-            rawDataSource.flush();
-            return ResponseEntity.ok(getEntityMapper().map(created));
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            CreateDataSource rawDataSource = getCreateDataSource();
+            // Row-level authorization on writes (Ground rules item 2) extends to bulk create too -
+            // otherwise this route would be a direct bypass of the same check single create() now
+            // runs. Every created item is checked (fail-fast, before the response goes out) inside
+            // the same transaction the write itself ran in, so a denial rolls back the whole batch.
+            return transactionSupport.inTransaction(() -> {
+                @SuppressWarnings("unchecked")
+                List<E> created = rawDataSource.createAll(bodies, ctx);
+                for (E entity : created) {
+                    writeParentFieldIfNested(entity, ctx);
+                    checkCanAccess(AuthorizationGuard.Action.CREATE, request, entity);
+                }
+                rawDataSource.flush();
+                return ResponseEntity.ok(getEntityMapper().map(created));
+            });
         });
     }
 
@@ -779,64 +807,80 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * mapping/embed-resolving a body that's about to be thrown away anyway.
      */
     public final ResponseEntity<?> findOne(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.READ_ONE, null, request);
-        K id = extractId(request);
-        String ifNoneMatch = request.getHeader(HttpHeaders.IF_NONE_MATCH);
-        // inReadOnlyTransaction: getEntityMapper().map(...) and embedResolver.resolve(...) both
-        // run inside it - see that method's own javadoc for why a lazy association needs this.
-        return transactionSupport.inReadOnlyTransaction(() -> {
-            E found = getReadDataSource().findOne(id);
-            if (found == null || (isSoftDeleted(found) && !includeSoftDeletedInSingleRead)) {
-                return ResponseEntity.notFound().build();
-            }
-            checkCanAccess(AuthorizationGuard.Action.READ_ONE, request, found);
-            Optional<String> etag = PreconditionSupport.eTagOf(found);
-            if (etag.isPresent() && PreconditionSupport.matchesIfNoneMatch(ifNoneMatch, etag.get())) {
-                return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag.get()).build();
-            }
-            Object dto = postProcessResponse(AuthorizationGuard.Action.READ_ONE, null, request, found, getEntityMapper().map(found));
-            // Opt-in (?expand=name,...), see RestlessEmbed - a no-op for a request that doesn't
-            // ask for anything, and for a resource whose DTO declares no @RestlessEmbed field.
-            embedResolver.resolve(dto, found, request);
-            return withETag(ResponseEntity.ok(), found).body(dto);
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.READ_ONE, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.READ_ONE, null, request);
+            K id = extractId(request);
+            String ifNoneMatch = request.getHeader(HttpHeaders.IF_NONE_MATCH);
+            // inReadOnlyTransaction: getEntityMapper().map(...) and embedResolver.resolve(...) both
+            // run inside it - see that method's own javadoc for why a lazy association needs this.
+            return transactionSupport.inReadOnlyTransaction(() -> {
+                E found = getReadDataSource().findOne(id, ctx);
+                if (found == null || (isSoftDeleted(found) && !includeSoftDeletedInSingleRead) || parentMismatch(found, ctx)) {
+                    return ResponseEntity.notFound().build();
+                }
+                checkCanAccess(AuthorizationGuard.Action.READ_ONE, request, found);
+                Optional<String> etag = PreconditionSupport.eTagOf(found);
+                if (etag.isPresent() && PreconditionSupport.matchesIfNoneMatch(ifNoneMatch, etag.get())) {
+                    return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag.get()).build();
+                }
+                Object dto = postProcessResponse(AuthorizationGuard.Action.READ_ONE, null, request, found, getEntityMapper().map(found));
+                // Opt-in (?expand=name,...), see RestlessEmbed - a no-op for a request that doesn't
+                // ask for anything, and for a resource whose DTO declares no @RestlessEmbed field.
+                embedResolver.resolve(dto, found, request);
+                return withETag(ResponseEntity.ok(), found).body(dto);
+            });
         });
     }
 
     public final ResponseEntity<List<?>> findList(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.READ_LIST, null, request);
-        SearchDto searchDto = bindSearchDto(searchDtoConstructor, request);
-        Specification<E> spec = withScope(excludeSoftDeleted(getSpecification(searchDto)), AuthorizationGuard.Action.READ_LIST, null, request);
-        // Capped, not a plain findAll(spec): see maxListSize's own javadoc for why an unpaginated
-        // route needs a hard limit at all. One extra row requested (maxListSize + 1) so "hit the
-        // cap" can be told apart from "exactly maxListSize rows existed" without a second COUNT
-        // query - the (maxListSize + 1)-th row itself is trimmed back off before mapping.
-        Sort sort = pageableOf(searchDto).getSort();
-        // inReadOnlyTransaction: getOverviewMapper().map(...) runs inside it too - see that
-        // method's own javadoc for why a lazy association needs this.
-        return transactionSupport.inReadOnlyTransaction(() -> {
-            List<E> data = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, maxListSize + 1, sort)).getContent();
-            boolean truncated = data.size() > maxListSize;
-            List<E> page = truncated ? data.subList(0, maxListSize) : data;
-            ResponseEntity.BodyBuilder response = truncated
-                    ? ResponseEntity.ok().header("X-Restless-List-Truncated", "true")
-                    : ResponseEntity.ok();
-            return response.body(getOverviewMapper().map(page));
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.READ_LIST, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.READ_LIST, null, request);
+            SearchDto searchDto = bindSearchDto(searchDtoConstructor, request);
+            Specification<E> spec = withScope(withParentFilter(excludeSoftDeleted(getSpecification(searchDto)), ctx),
+                    AuthorizationGuard.Action.READ_LIST, null, request);
+            // Capped, not a plain findAll(spec): see maxListSize's own javadoc for why an unpaginated
+            // route needs a hard limit at all. One extra row requested (maxListSize + 1) so "hit the
+            // cap" can be told apart from "exactly maxListSize rows existed" without a second COUNT
+            // query - the (maxListSize + 1)-th row itself is trimmed back off before mapping.
+            Sort sort = pageableOf(searchDto).getSort();
+            // inReadOnlyTransaction: getOverviewMapper().map(...) runs inside it too - see that
+            // method's own javadoc for why a lazy association needs this.
+            return transactionSupport.inReadOnlyTransaction(() -> {
+                List<E> data = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, maxListSize + 1, sort), ctx).getContent();
+                boolean truncated = data.size() > maxListSize;
+                List<E> page = truncated ? data.subList(0, maxListSize) : data;
+                ResponseEntity.BodyBuilder response = truncated
+                        ? ResponseEntity.ok().header("X-Restless-List-Truncated", "true")
+                        : ResponseEntity.ok();
+                return response.body(getOverviewMapper().map(page));
+            });
         });
     }
 
     public final ResponseEntity<PageableResponse<List<?>>> findPage(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.READ_PAGE, null, request);
-        return ResponseEntity.ok(paginate(request, getEntityMapper(), AuthorizationGuard.Action.READ_PAGE));
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.READ_PAGE, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.READ_PAGE, null, request);
+            return ResponseEntity.ok(paginate(request, getEntityMapper(), AuthorizationGuard.Action.READ_PAGE, ctx));
+        });
     }
 
     public final ResponseEntity<PageableResponse<List<?>>> findPageOverview(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.READ_PAGE_OVERVIEW, null, request);
-        return ResponseEntity.ok(paginate(request, getOverviewMapper(), AuthorizationGuard.Action.READ_PAGE_OVERVIEW));
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.READ_PAGE_OVERVIEW, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.READ_PAGE_OVERVIEW, null, request);
+            return ResponseEntity.ok(paginate(request, getOverviewMapper(), AuthorizationGuard.Action.READ_PAGE_OVERVIEW, ctx));
+        });
     }
 
     public final ResponseEntity<PageableResponse<List<?>>> findPageSelect(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.READ_PAGE_SELECT, null, request);
-        return ResponseEntity.ok(paginate(request, getSelectMapper(), AuthorizationGuard.Action.READ_PAGE_SELECT));
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.READ_PAGE_SELECT, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.READ_PAGE_SELECT, null, request);
+            return ResponseEntity.ok(paginate(request, getSelectMapper(), AuthorizationGuard.Action.READ_PAGE_SELECT, ctx));
+        });
     }
 
     /**
@@ -848,22 +892,25 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      */
     public final ResponseEntity<PageableResponse<List<?>>> customRead(HttpServletRequest request) throws Exception {
         String actionName = resolveActionName(request);
-        checkPreCheck(AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
-        ReadAction<E, ?> action = getCustomReadActions().get(actionName);
-        if (action == null) {
-            return ResponseEntity.notFound().build();
-        }
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.CUSTOM_READ, actionName);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
+            ReadAction<E, ?> action = getCustomReadActions().get(actionName);
+            if (action == null) {
+                return ResponseEntity.notFound().build();
+            }
 
-        SearchDto searchDto = bindSearchDto(customActionSearchDtoConstructors.get(actionName), request);
-        // Raw-type escape hatch, same reasoning as create()/update(): R's bound (SearchDto) can't
-        // be named here since it's only known at runtime via the action's own getSearchDtoType().
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        ReadAction rawAction = action;
-        @SuppressWarnings("unchecked")
-        Specification<E> spec = (Specification<E>) rawAction.buildSpecification(searchDto);
-        spec = withScope(excludeSoftDeleted(spec), AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
+            SearchDto searchDto = bindSearchDto(customActionSearchDtoConstructors.get(actionName), request);
+            // Raw-type escape hatch, same reasoning as create()/update(): R's bound (SearchDto) can't
+            // be named here since it's only known at runtime via the action's own getSearchDtoType().
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            ReadAction rawAction = action;
+            @SuppressWarnings("unchecked")
+            Specification<E> spec = (Specification<E>) rawAction.buildSpecification(searchDto);
+            spec = withScope(withParentFilter(excludeSoftDeleted(spec), ctx), AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
 
-        return ResponseEntity.ok(paginate(getOverviewMapper(), spec, pageableOf(searchDto)));
+            return ResponseEntity.ok(paginate(getOverviewMapper(), spec, pageableOf(searchDto), ctx));
+        });
     }
 
     /**
@@ -877,23 +924,26 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      */
     public final ResponseEntity<?> namedView(HttpServletRequest request) throws Exception {
         String viewName = resolveActionName(request);
-        checkPreCheck(AuthorizationGuard.Action.NAMED_VIEW, viewName, request);
-        K id = extractId(request);
-        // inReadOnlyTransaction: mapper.map(...)/embedResolver.resolve(...) run inside it too -
-        // see that method's own javadoc for why a lazy association needs this.
-        return transactionSupport.inReadOnlyTransaction(() -> {
-            E found = getReadDataSource().findOne(id);
-            if (found == null || (isSoftDeleted(found) && !includeSoftDeletedInSingleRead)) {
-                return ResponseEntity.notFound().build();
-            }
-            checkCanAccess(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found);
-            Mapper<E, ?> mapper = getNamedViews().get(viewName);
-            if (mapper == null) {
-                return ResponseEntity.notFound().build();
-            }
-            Object dto = postProcessResponse(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found, mapper.map(found));
-            embedResolver.resolve(dto, found, request);
-            return withETag(ResponseEntity.ok(), found).body(dto);
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.NAMED_VIEW, viewName);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.NAMED_VIEW, viewName, request);
+            K id = extractId(request);
+            // inReadOnlyTransaction: mapper.map(...)/embedResolver.resolve(...) run inside it too -
+            // see that method's own javadoc for why a lazy association needs this.
+            return transactionSupport.inReadOnlyTransaction(() -> {
+                E found = getReadDataSource().findOne(id, ctx);
+                if (found == null || (isSoftDeleted(found) && !includeSoftDeletedInSingleRead) || parentMismatch(found, ctx)) {
+                    return ResponseEntity.notFound().build();
+                }
+                checkCanAccess(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found);
+                Mapper<E, ?> mapper = getNamedViews().get(viewName);
+                if (mapper == null) {
+                    return ResponseEntity.notFound().build();
+                }
+                Object dto = postProcessResponse(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found, mapper.map(found));
+                embedResolver.resolve(dto, found, request);
+                return withETag(ResponseEntity.ok(), found).body(dto);
+            });
         });
     }
 
@@ -931,40 +981,43 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      */
     public final ResponseEntity<?> writeAction(HttpServletRequest request) throws Exception {
         String actionName = resolveActionName(request);
-        checkPreCheck(AuthorizationGuard.Action.WRITE_ACTION, actionName, request);
-        WriteAction<E, ?, ?> action = getCustomWriteActions().get(actionName);
-        if (action == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        K id = extractId(request);
-        // Ground rules Phase 2 item 9: If-Match is now optionally honored on a named write
-        // action too - previously never checked here at all, regardless of whether the client
-        // sent one. "Optional" means unchanged no-op-when-absent semantics, same as every other
-        // single-item write.
-        String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
-        // Typed as WriteActionRequest, not Object: rawAction.execute(...) below is a raw-type
-        // call, and raw-type erasure keeps a bounded type parameter's own upper bound in the
-        // erased signature (Req extends WriteActionRequest erases to WriteActionRequest, not
-        // Object) - same reason customRead()'s own searchDto local is typed SearchDto, not Object.
-        WriteActionRequest body = (WriteActionRequest) readBody(request, action.getRequestType());
-        validate(body);
-
-        // Raw-type escape hatch, same reasoning as customRead()/create()/update(): Req/Resp can't
-        // be named here since they're only known at runtime via the action's own getRequestType().
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        WriteAction rawAction = action;
-
-        return transactionSupport.inTransaction(() -> {
-            E found = getReadDataSource().findOne(id);
-            if (found == null || isSoftDeleted(found)) {
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.WRITE_ACTION, actionName);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.WRITE_ACTION, actionName, request);
+            WriteAction<E, ?, ?> action = getCustomWriteActions().get(actionName);
+            if (action == null) {
                 return ResponseEntity.notFound().build();
             }
-            checkCanAccess(AuthorizationGuard.Action.WRITE_ACTION, actionName, request, found);
-            PreconditionSupport.checkIfMatch(ifMatch, found);
-            @SuppressWarnings("unchecked")
-            Object response = rawAction.execute(found, body);
-            return ResponseEntity.ok(response);
+
+            K id = extractId(request);
+            // Ground rules Phase 2 item 9: If-Match is now optionally honored on a named write
+            // action too - previously never checked here at all, regardless of whether the client
+            // sent one. "Optional" means unchanged no-op-when-absent semantics, same as every other
+            // single-item write.
+            String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
+            // Typed as WriteActionRequest, not Object: rawAction.execute(...) below is a raw-type
+            // call, and raw-type erasure keeps a bounded type parameter's own upper bound in the
+            // erased signature (Req extends WriteActionRequest erases to WriteActionRequest, not
+            // Object) - same reason customRead()'s own searchDto local is typed SearchDto, not Object.
+            WriteActionRequest body = (WriteActionRequest) readBody(request, action.getRequestType());
+            validate(body);
+
+            // Raw-type escape hatch, same reasoning as customRead()/create()/update(): Req/Resp can't
+            // be named here since they're only known at runtime via the action's own getRequestType().
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            WriteAction rawAction = action;
+
+            return transactionSupport.inTransaction(() -> {
+                E found = getReadDataSource().findOne(id, ctx);
+                if (found == null || isSoftDeleted(found) || parentMismatch(found, ctx)) {
+                    return ResponseEntity.notFound().build();
+                }
+                checkCanAccess(AuthorizationGuard.Action.WRITE_ACTION, actionName, request, found);
+                PreconditionSupport.checkIfMatch(ifMatch, found);
+                @SuppressWarnings("unchecked")
+                Object response = rawAction.execute(found, body);
+                return ResponseEntity.ok(response);
+            });
         });
     }
 
@@ -993,34 +1046,43 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * back.
      */
     public final ResponseEntity<?> update(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
-        K id = extractId(request);
-        String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
-        Object body = readBody(request, metadata.updateModelType());
-        validate(body);
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        UpdateDataSource rawDataSource = getUpdateDataSource();
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.UPDATE, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
+            K id = extractId(request);
+            String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
+            Object body = readBody(request, metadata.updateModelType());
+            validate(body);
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            UpdateDataSource rawDataSource = getUpdateDataSource();
 
-        return transactionSupport.inTransaction(() -> {
-            E existing = getReadDataSource().findOne(id);
-            if (existing == null || isSoftDeleted(existing)) {
-                // Same ResponseStatusException/ProblemDetail shape DefaultUpdateDataSource's own
-                // not-found used to throw (now redundant there, but every hand-written
-                // UpdateDataSource is still free to also throw it for the same id) - not a bare
-                // 404, to keep this byte-for-byte compatible with before this pipeline existed.
-                // A soft-deleted row 404s here unconditionally (Ground rules Phase 2 item 13) -
-                // see isSoftDeleted's own javadoc for why a write never consults
-                // includeSoftDeletedInSingleRead the way findOne/namedView do.
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
-            }
-            checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
-            PreconditionSupport.checkIfMatch(ifMatch, existing);
-            @SuppressWarnings("unchecked")
-            E updated = (E) rawDataSource.update(id, (UpdateModel) body);
-            checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, updated);
-            rawDataSource.flush();
-            Object dto = postProcessResponse(AuthorizationGuard.Action.UPDATE, null, request, updated, getEntityMapper().map(updated));
-            return withETag(ResponseEntity.ok(), updated).body(dto);
+            return transactionSupport.inTransaction(() -> {
+                E existing = getReadDataSource().findOne(id, ctx);
+                if (existing == null || isSoftDeleted(existing) || parentMismatch(existing, ctx)) {
+                    // Same ResponseStatusException/ProblemDetail shape DefaultUpdateDataSource's own
+                    // not-found used to throw (now redundant there, but every hand-written
+                    // UpdateDataSource is still free to also throw it for the same id) - not a bare
+                    // 404, to keep this byte-for-byte compatible with before this pipeline existed.
+                    // A soft-deleted row 404s here unconditionally (Ground rules Phase 2 item 13) -
+                    // see isSoftDeleted's own javadoc for why a write never consults
+                    // includeSoftDeletedInSingleRead the way findOne/namedView do. A foreign-parent
+                    // row 404s the same way (Feature B item 4) - from the caller's point of view a
+                    // row scoped to someone else's parent is exactly as absent as one that was
+                    // never there.
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
+                }
+                checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
+                PreconditionSupport.checkIfMatch(ifMatch, existing);
+                @SuppressWarnings("unchecked")
+                E updated = (E) rawDataSource.update(id, (UpdateModel) body, ctx);
+                // The parent field can never change via update (Feature B item 5 - "protected
+                // like @Id") - forcibly reset regardless of what the data source did with it.
+                writeParentFieldIfNested(updated, ctx);
+                checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, updated);
+                rawDataSource.flush();
+                Object dto = postProcessResponse(AuthorizationGuard.Action.UPDATE, null, request, updated, getEntityMapper().map(updated));
+                return withETag(ResponseEntity.ok(), updated).body(dto);
+            });
         });
     }
 
@@ -1035,28 +1097,33 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      */
     /** Same atomic-write-pipeline/post-image-check shape as {@link #update} - see its own javadoc for the full reasoning. */
     public final ResponseEntity<?> patch(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.PATCH, null, request);
-        K id = extractId(request);
-        String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
-        Object body = readBody(request, patchModelType);
-        validate(body);
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        PatchDataSource rawDataSource = getPatchDataSource().orElseThrow(
-                () -> new IllegalStateException("PATCH route registered but getPatchDataSource() is now empty"));
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.PATCH, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.PATCH, null, request);
+            K id = extractId(request);
+            String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
+            Object body = readBody(request, patchModelType);
+            validate(body);
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            PatchDataSource rawDataSource = getPatchDataSource().orElseThrow(
+                    () -> new IllegalStateException("PATCH route registered but getPatchDataSource() is now empty"));
 
-        return transactionSupport.inTransaction(() -> {
-            E existing = getReadDataSource().findOne(id);
-            if (existing == null || isSoftDeleted(existing)) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
-            }
-            checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
-            PreconditionSupport.checkIfMatch(ifMatch, existing);
-            @SuppressWarnings("unchecked")
-            E patched = (E) rawDataSource.patch(id, (PatchModel) body);
-            checkCanAccessAfterWrite(AuthorizationGuard.Action.PATCH, request, patched);
-            rawDataSource.flush();
-            Object dto = postProcessResponse(AuthorizationGuard.Action.PATCH, null, request, patched, getEntityMapper().map(patched));
-            return withETag(ResponseEntity.ok(), patched).body(dto);
+            return transactionSupport.inTransaction(() -> {
+                E existing = getReadDataSource().findOne(id, ctx);
+                if (existing == null || isSoftDeleted(existing) || parentMismatch(existing, ctx)) {
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
+                }
+                checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
+                PreconditionSupport.checkIfMatch(ifMatch, existing);
+                @SuppressWarnings("unchecked")
+                E patched = (E) rawDataSource.patch(id, (PatchModel) body, ctx);
+                // Protected like @Id, same as update() - see Feature B item 5.
+                writeParentFieldIfNested(patched, ctx);
+                checkCanAccessAfterWrite(AuthorizationGuard.Action.PATCH, request, patched);
+                rawDataSource.flush();
+                Object dto = postProcessResponse(AuthorizationGuard.Action.PATCH, null, request, patched, getEntityMapper().map(patched));
+                return withETag(ResponseEntity.ok(), patched).body(dto);
+            });
         });
     }
 
@@ -1074,34 +1141,45 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * checked and being written either.
      */
     public final ResponseEntity<?> updateBulk(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
-        Map<String, Object> rawBodies = readBodyMap(request, metadata.updateModelType());
-        checkBulkSize(rawBodies.size());
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.UPDATE, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.UPDATE, null, request);
+            Map<String, Object> rawBodies = readBodyMap(request, metadata.updateModelType());
+            checkBulkSize(rawBodies.size());
 
-        Map<K, Object> byId = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> entry : rawBodies.entrySet()) {
-            validate(entry.getValue());
-            byId.put(convertId(entry.getKey()), entry.getValue());
-        }
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        UpdateDataSource rawDataSource = getUpdateDataSource();
-        return transactionSupport.inTransaction(() -> {
-            // Ground rules Phase 2 item 10: one findAllById query instead of N findOne calls,
-            // and one canAccessAll check instead of looping checkCanAccess - see both methods'
-            // own javadoc (CerbosAuthorizationGuard overrides canAccessAll with one batch() RPC).
-            if (hasGuard()) {
-                checkCanAccessAll(AuthorizationGuard.Action.UPDATE, request, getReadDataSource().findAllById(byId.keySet()));
+            Map<K, Object> byId = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : rawBodies.entrySet()) {
+                validate(entry.getValue());
+                byId.put(convertId(entry.getKey()), entry.getValue());
             }
-            @SuppressWarnings("unchecked")
-            List<E> updated = rawDataSource.updateAll(byId);
-            // Row-level authorization on writes (Ground rules item 2), same post-image check
-            // single update() now runs, extended to every item in the batch - otherwise this
-            // route would be a direct bypass of it.
-            for (E entity : updated) {
-                checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, entity);
-            }
-            rawDataSource.flush();
-            return ResponseEntity.ok(getEntityMapper().map(updated));
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            UpdateDataSource rawDataSource = getUpdateDataSource();
+            return transactionSupport.inTransaction(() -> {
+                // Ground rules Phase 2 item 10: one findAllById query instead of N findOne calls,
+                // and one canAccessAll check instead of looping checkCanAccess - see both methods'
+                // own javadoc (CerbosAuthorizationGuard overrides canAccessAll with one batch() RPC).
+                // Also runs (even with no guard configured) when this is a nested resource -
+                // Feature B item 4: any target missing/foreign-parent is 404 for the whole batch,
+                // nothing written, checked here, before any write.
+                if (hasGuard() || isNested()) {
+                    List<E> loaded = getReadDataSource().findAllById(byId.keySet(), ctx);
+                    checkAllFoundAndParentMatchedOrFail(byId.keySet(), loaded, ctx);
+                    if (hasGuard()) {
+                        checkCanAccessAll(AuthorizationGuard.Action.UPDATE, request, loaded);
+                    }
+                }
+                @SuppressWarnings("unchecked")
+                List<E> updated = rawDataSource.updateAll(byId, ctx);
+                // Row-level authorization on writes (Ground rules item 2), same post-image check
+                // single update() now runs, extended to every item in the batch - otherwise this
+                // route would be a direct bypass of it.
+                for (E entity : updated) {
+                    writeParentFieldIfNested(entity, ctx);
+                    checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, entity);
+                }
+                rawDataSource.flush();
+                return ResponseEntity.ok(getEntityMapper().map(updated));
+            });
         });
     }
 
@@ -1117,55 +1195,67 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * EmptyResultDataAccessException} - a {@code 500} - rather than this clean {@code 404}).
      */
     public final ResponseEntity<?> deleteById(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.DELETE_ONE, null, request);
-        K id = extractId(request);
-        String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
-        DeleteDataSource<E, K, ?> dataSource = getDeleteDataSource();
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.DELETE_ONE, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.DELETE_ONE, null, request);
+            K id = extractId(request);
+            String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
+            DeleteDataSource<E, K, ?> dataSource = getDeleteDataSource();
 
-        return transactionSupport.inTransaction(() -> {
-            E existing = getReadDataSource().findOne(id);
-            if (existing == null || isSoftDeleted(existing)) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
-            }
-            checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
-            PreconditionSupport.checkIfMatch(ifMatch, existing);
-            dataSource.deleteById(id);
-            dataSource.flush();
-            return ResponseEntity.noContent().build();
+            return transactionSupport.inTransaction(() -> {
+                E existing = getReadDataSource().findOne(id, ctx);
+                if (existing == null || isSoftDeleted(existing) || parentMismatch(existing, ctx)) {
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + id + " not found");
+                }
+                checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
+                PreconditionSupport.checkIfMatch(ifMatch, existing);
+                dataSource.deleteById(id, ctx);
+                dataSource.flush();
+                return ResponseEntity.noContent().build();
+            });
         });
     }
 
     public final ResponseEntity<?> deleteAll(HttpServletRequest request) throws Exception {
-        checkPreCheck(AuthorizationGuard.Action.DELETE_ALL, null, request);
-        Object body = readBody(request, metadata.deleteModelType());
-        DeleteModel deleteModel = (DeleteModel) body;
-        checkBulkSize(deleteModel.getIds().size());
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        DeleteDataSource rawDataSource = getDeleteDataSource();
-        // Fail-fast, before deleting anything: check every targeted entity up front so a bulk
-        // delete never partially completes before hitting a denied id. Skipped entirely (the
-        // whole check, not just part of it) when no guard is configured. Both the check and the
-        // actual delete run inside the same transaction (see #inTransaction) - a row can't
-        // change between being checked and being deleted either. Ground rules Phase 2 item 10:
-        // one findAllById query instead of N findOne calls, one canAccessAll check instead of
-        // looping checkCanAccess - see both methods' own javadoc.
-        transactionSupport.<Void>inTransaction(() -> {
-            if (hasGuard()) {
-                List<K> ids = deleteModel.getIds().stream().map(this::convertId).toList();
-                checkCanAccessAll(AuthorizationGuard.Action.DELETE_ALL, request, getReadDataSource().findAllById(ids));
-            }
-            rawDataSource.deleteAll(deleteModel);
-            return null;
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.DELETE_ALL, null);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.DELETE_ALL, null, request);
+            Object body = readBody(request, metadata.deleteModelType());
+            DeleteModel deleteModel = (DeleteModel) body;
+            checkBulkSize(deleteModel.getIds().size());
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            DeleteDataSource rawDataSource = getDeleteDataSource();
+            // Fail-fast, before deleting anything: check every targeted entity up front so a bulk
+            // delete never partially completes before hitting a denied id. Skipped entirely (the
+            // whole check, not just part of it) when no guard is configured and this isn't a
+            // nested resource. Both the check and the actual delete run inside the same
+            // transaction (see #inTransaction) - a row can't change between being checked and
+            // being deleted either. Ground rules Phase 2 item 10: one findAllById query instead of
+            // N findOne calls, one canAccessAll check instead of looping checkCanAccess. Feature B
+            // item 4: any target missing/foreign-parent is 404 for the whole batch, nothing
+            // deleted.
+            transactionSupport.<Void>inTransaction(() -> {
+                if (hasGuard() || isNested()) {
+                    List<K> ids = deleteModel.getIds().stream().map(this::convertId).toList();
+                    List<E> loaded = getReadDataSource().findAllById(ids, ctx);
+                    checkAllFoundAndParentMatchedOrFail(ids, loaded, ctx);
+                    if (hasGuard()) {
+                        checkCanAccessAll(AuthorizationGuard.Action.DELETE_ALL, request, loaded);
+                    }
+                }
+                rawDataSource.deleteAll(deleteModel, ctx);
+                return null;
+            });
+            return ResponseEntity.noContent().build();
         });
-        return ResponseEntity.noContent().build();
     }
 
     // ---- shared per-request parsing, reusing Spring's own infra rather than hand-rolling it ----
 
-    private PageableResponse<List<?>> paginate(HttpServletRequest request, Mapper<E, ?> mapper, AuthorizationGuard.Action action) throws Exception {
+    private PageableResponse<List<?>> paginate(HttpServletRequest request, Mapper<E, ?> mapper, AuthorizationGuard.Action action, RestlessContext ctx) throws Exception {
         SearchDto searchDto = bindSearchDto(searchDtoConstructor, request);
-        Specification<E> spec = withScope(excludeSoftDeleted(getSpecification(searchDto)), action, null, request);
-        return paginate(mapper, spec, pageableOf(searchDto));
+        Specification<E> spec = withScope(withParentFilter(excludeSoftDeleted(getSpecification(searchDto)), ctx), action, null, request);
+        return paginate(mapper, spec, pageableOf(searchDto), ctx);
     }
 
     /**
@@ -1174,12 +1264,12 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      * (using a {@link ReadAction}'s own specification) — pagination/response-shaping logic is
      * identical either way, only the filter source and mapper differ.
      */
-    private PageableResponse<List<?>> paginate(Mapper<E, ?> mapper, Specification<E> spec, Pageable pageable) throws Exception {
+    private PageableResponse<List<?>> paginate(Mapper<E, ?> mapper, Specification<E> spec, Pageable pageable, RestlessContext ctx) throws Exception {
         // inReadOnlyTransaction: mapper.map(...) runs inside it too - see that method's own
         // javadoc for why a lazy association needs this. Shared by findPage/findPageOverview/
         // findPageSelect/customRead (via the two callers below), so this one wrap covers all four.
         return transactionSupport.inReadOnlyTransaction(() -> {
-            Page<E> page = getReadDataSource().findAll(spec, pageable);
+            Page<E> page = getReadDataSource().findAll(spec, pageable, ctx);
 
             PageableResponse<List<?>> response = new PageableResponse<>();
             response.setPageSize(page.getSize());
@@ -1414,8 +1504,40 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         ServletRequestDataBinder binder = new ServletRequestDataBinder(searchDto);
         binder.setConversionService(conversionService);
         binder.bind(request);
+        bindSortDirectly(searchDto, request);
         validate(searchDto);
         return searchDto;
+    }
+
+    /**
+     * Ground rules (backend-nunti integration) item 1: {@code ServletRequestDataBinder} hands a
+     * single-occurrence {@code sort} query parameter to the conversion service as a plain {@code
+     * String}, not a one-element array - converting that onto {@code AbstractSearchDto#sort}'s
+     * {@code List<String>} then goes through {@code DefaultConversionService}'s {@code
+     * StringToCollectionConverter}, which splits on <em>every</em> comma in the whole string. A
+     * single {@code ?sort=lastName,asc} (the exact form {@code AbstractSearchDto}'s own javadoc
+     * documents - and the one Spring Data's own {@code Pageable} resolver accepts) came out as
+     * two list elements, {@code "lastName"} and {@code "asc"}, each parsed as its own property
+     * with no direction, so {@code "asc"} failed "unknown sort property" before the direction
+     * was ever read. A repeated {@code sort} param never hit this - Spring binds a multi-value
+     * request parameter as a real array, one list element per occurrence, no comma-splitting
+     * involved - which is why only the single-value form was broken.
+     * <p>
+     * Reads {@code request.getParameterValues("sort")} directly instead and overwrites whatever
+     * {@link ServletRequestDataBinder} already (mis)bound - every value the client actually sent,
+     * verbatim, whether there was one occurrence or many, with no comma-splitting ever applied to
+     * it. {@code instanceof}, not an interface method: {@code sort} is {@link AbstractSearchDto}'s
+     * own field, not part of the bare {@link SearchDto} contract, so a hand-rolled {@code
+     * SearchDto} that doesn't extend it is unaffected.
+     */
+    private void bindSortDirectly(SearchDto searchDto, HttpServletRequest request) {
+        if (!(searchDto instanceof AbstractSearchDto abstractSearchDto)) {
+            return;
+        }
+        String[] rawSortValues = request.getParameterValues("sort");
+        if (rawSortValues != null) {
+            abstractSearchDto.setSort(new ArrayList<>(List.of(rawSortValues)));
+        }
     }
 
     /**
@@ -1464,6 +1586,83 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         validator.validate(target, errors);
         if (errors.hasErrors()) {
             throw new MethodArgumentNotValidException(new MethodParameter(VALIDATION_TARGET_METHOD, 0), errors);
+        }
+    }
+
+    // ---- RestlessContext construction (Feature A) / nested-resource parent scoping (Feature B) ----
+
+    /**
+     * Builds this request's {@link RestlessContext} - every handler method calls this first,
+     * before {@link #checkPreCheck} (so a guard's own {@code preCheck} can read it too via {@link
+     * RestlessContext#current()}), then wraps its entire body in {@link RestlessContext#runWith}.
+     */
+    private RestlessContext buildContext(HttpServletRequest request, AuthorizationGuard.Action action, String customActionName) {
+        @SuppressWarnings("unchecked")
+        Map<String, String> pathVariables = (Map<String, String>) request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
+        return RestlessContext.build(pathVariables == null ? Map.of() : pathVariables, request, action, customActionName, conversionService);
+    }
+
+    private boolean isNested() {
+        return parentDescriptor != null;
+    }
+
+    /** {@code null} for a flat resource - the converted path value every nested-resource check below compares against. */
+    private Object convertedParentValue(RestlessContext ctx) {
+        return parentDescriptor == null ? null : ctx.pathVariable(parentDescriptor.pathVariable(), parentDescriptor.leafIdType());
+    }
+
+    /**
+     * Feature B item 4: {@code true} whenever {@code entity}'s own parent value doesn't match the
+     * path's - callers treat this exactly like "row doesn't exist" (a 404), never a distinct
+     * status, so a caller scoped to the wrong parent can't tell "wrong parent" apart from "never
+     * existed". Always {@code false} for a flat (non-nested) resource.
+     */
+    private boolean parentMismatch(E entity, RestlessContext ctx) {
+        if (parentDescriptor == null || entity == null) {
+            return false;
+        }
+        return !java.util.Objects.equals(ParentFieldSupport.readLeafValue(entity, parentDescriptor), convertedParentValue(ctx));
+    }
+
+    /**
+     * Feature B item 2/5: forces {@code entity}'s own parent field to the path's value - called
+     * right after create (so a body-supplied value for the same field is always overwritten,
+     * never honored) and right after update/patch (so the parent field can never be moved by a
+     * write - "protected like @Id"). A no-op for a flat resource.
+     */
+    private void writeParentFieldIfNested(E entity, RestlessContext ctx) {
+        if (parentDescriptor == null) {
+            return;
+        }
+        ParentFieldSupport.writeLeafValue(entity, parentDescriptor, convertedParentValue(ctx));
+    }
+
+    /** Feature B item 3: ANDs the parent-match predicate onto {@code spec} - a no-op for a flat resource. */
+    private Specification<E> withParentFilter(Specification<E> spec, RestlessContext ctx) {
+        if (parentDescriptor == null) {
+            return spec;
+        }
+        return spec.and(ParentFieldSupport.<E>matches(parentDescriptor, convertedParentValue(ctx)));
+    }
+
+    /**
+     * Feature B item 4 (bulk): any id missing from {@code found} (never existed, or exists under
+     * a different parent) or present but failing {@link #parentMismatch} fails the <em>whole</em>
+     * batch with a 404, before anything is written - called from inside the same transaction as
+     * the write itself, same fail-fast-before-any-write spirit {@link #checkBulkSize} already
+     * applies at the HTTP-shape level. A no-op for a flat resource.
+     */
+    private void checkAllFoundAndParentMatchedOrFail(Collection<K> requestedIds, List<E> found, RestlessContext ctx) {
+        if (parentDescriptor == null) {
+            return;
+        }
+        if (found.size() != requestedIds.size()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "One or more entities not found");
+        }
+        for (E entity : found) {
+            if (parentMismatch(entity, ctx)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "One or more entities not found");
+            }
         }
     }
 
@@ -1600,16 +1799,30 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         if (!getEnabledOperations().contains(AuthorizationGuard.Action.READ_LIST)) {
             return List.of();
         }
-        if (!cachedGuard.preCheck(AuthorizationGuard.Action.READ_LIST, null, request)) {
-            return List.of();
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.READ_LIST, null);
+        try {
+            return RestlessContext.runWith(ctx, () -> {
+                if (!cachedGuard.preCheck(AuthorizationGuard.Action.READ_LIST, null, request)) {
+                    return List.of();
+                }
+                Specification<E> spec = withScope(withParentFilter(excludeSoftDeleted(joinFilter), ctx),
+                        AuthorizationGuard.Action.READ_LIST, null, request);
+                // Capped by maxListSize, same reasoning as findList's own cap: an embedded relation is
+                // otherwise exactly as unbounded as GET .../list was before that cap existed, just with
+                // no X-Restless-List-Truncated header to signal it (there's nowhere to put one on a field
+                // nested inside another resource's response).
+                List<E> capped = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, maxListSize), ctx).getContent();
+                return getEntityMapper().map(capped);
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            // Callable#call() declares `throws Exception`, but nothing reachable from this
+            // particular body actually throws a checked one - this method's own signature can't
+            // grow a `throws Exception` of its own without breaking RestlessEmbedResolver's call
+            // site, a different package entirely.
+            throw new IllegalStateException("Unexpected checked exception resolving an embedded list", e);
         }
-        Specification<E> spec = withScope(excludeSoftDeleted(joinFilter), AuthorizationGuard.Action.READ_LIST, null, request);
-        // Capped by maxListSize, same reasoning as findList's own cap: an embedded relation is
-        // otherwise exactly as unbounded as GET .../list was before that cap existed, just with
-        // no X-Restless-List-Truncated header to signal it (there's nowhere to put one on a field
-        // nested inside another resource's response).
-        List<E> capped = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, maxListSize)).getContent();
-        return getEntityMapper().map(capped);
     }
 
     /**
@@ -1629,22 +1842,34 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         if (!getEnabledOperations().contains(AuthorizationGuard.Action.READ_ONE)) {
             return null;
         }
-        if (!cachedGuard.preCheck(AuthorizationGuard.Action.READ_ONE, null, request)) {
-            return null;
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.READ_ONE, null);
+        try {
+            return RestlessContext.runWith(ctx, () -> {
+                if (!cachedGuard.preCheck(AuthorizationGuard.Action.READ_ONE, null, request)) {
+                    return null;
+                }
+                Specification<E> spec = withScope(withParentFilter(excludeSoftDeleted(joinFilter), ctx),
+                        AuthorizationGuard.Action.READ_ONE, null, request);
+                List<E> matches = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, 2), ctx).getContent();
+                if (matches.isEmpty()) {
+                    return null;
+                }
+                if (matches.size() > 1) {
+                    throw new IllegalStateException("@RestlessEmbed join matched more than one "
+                            + metadata.entityType().getSimpleName() + " row - sourceField/targetField don't form a natural key");
+                }
+                E found = matches.get(0);
+                if (!cachedGuard.canAccess(AuthorizationGuard.Action.READ_ONE, request, found)) {
+                    return null;
+                }
+                return getEntityMapper().map(found);
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            // Same reasoning as findEmbeddedList's own catch - nothing reachable here actually
+            // throws a checked exception, and this method's signature can't grow one either.
+            throw new IllegalStateException("Unexpected checked exception resolving an embedded value", e);
         }
-        Specification<E> spec = withScope(excludeSoftDeleted(joinFilter), AuthorizationGuard.Action.READ_ONE, null, request);
-        List<E> matches = getReadDataSource().findAll(spec, org.springframework.data.domain.PageRequest.of(0, 2)).getContent();
-        if (matches.isEmpty()) {
-            return null;
-        }
-        if (matches.size() > 1) {
-            throw new IllegalStateException("@RestlessEmbed join matched more than one "
-                    + metadata.entityType().getSimpleName() + " row - sourceField/targetField don't form a natural key");
-        }
-        E found = matches.get(0);
-        if (!cachedGuard.canAccess(AuthorizationGuard.Action.READ_ONE, request, found)) {
-            return null;
-        }
-        return getEntityMapper().map(found);
     }
 }

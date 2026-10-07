@@ -39,6 +39,8 @@ public record RestlessInitContext(
         int maxListSize,
         int maxPageSize,
         int maxBulkSize,
-        boolean includeSoftDeletedInSingleRead
+        boolean includeSoftDeletedInSingleRead,
+        String parentPathVariable,
+        String parentField
 ) {
 }

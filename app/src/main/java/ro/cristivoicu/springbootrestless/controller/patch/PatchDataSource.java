@@ -3,6 +3,7 @@ package ro.cristivoicu.springbootrestless.controller.patch;
 import ro.cristivoicu.springbootrestless.datasource.DataSource;
 import ro.cristivoicu.springbootrestless.models.PatchModel;
 import ro.cristivoicu.springbootrestless.repository.SpecificationRepository;
+import ro.cristivoicu.springbootrestless.resource.RestlessContext;
 
 /**
  * Partial update: unlike {@link ro.cristivoicu.springbootrestless.controller.update.UpdateDataSource}
@@ -26,4 +27,13 @@ public abstract class PatchDataSource<E, K, P extends PatchModel> extends DataSo
     // public, not protected: RestlessResourceHandler (resource package) invokes this by
     // composition, not inheritance, so protected (same-package-or-subtype) access won't reach it.
     public abstract E patch(K id, P patchDto) throws Exception;
+
+    /**
+     * Context-aware overload - the handler always calls this one, never {@link #patch(Object,
+     * PatchModel)} directly (see {@code CreateDataSource#create(Object, RestlessContext)}'s own
+     * javadoc for why that keeps every existing override unchanged).
+     */
+    public E patch(K id, P patchDto, RestlessContext context) throws Exception {
+        return patch(id, patchDto);
+    }
 }

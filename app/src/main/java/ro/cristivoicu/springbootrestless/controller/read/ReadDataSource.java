@@ -6,6 +6,7 @@ import org.springframework.data.jpa.domain.Specification;
 import ro.cristivoicu.springbootrestless.datasource.DataSource;
 import ro.cristivoicu.springbootrestless.models.SearchDto;
 import ro.cristivoicu.springbootrestless.repository.SpecificationRepository;
+import ro.cristivoicu.springbootrestless.resource.RestlessContext;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -41,5 +42,29 @@ public abstract class ReadDataSource<E,K,R extends SearchDto> extends DataSource
             }
         }
         return found;
+    }
+
+    // Context-aware overloads - the handler always calls these, never the bare ones above
+    // directly (see CreateDataSource#create(Object, RestlessContext)'s own javadoc for why that
+    // keeps every existing override unchanged).
+
+    public Page<E> findAll(Specification<E> specification, Pageable pageable, RestlessContext context) {
+        return findAll(specification, pageable);
+    }
+
+    public List<E> findAll(Specification<E> specification, RestlessContext context) {
+        return findAll(specification);
+    }
+
+    public E findOne(Specification<E> specification, K id, RestlessContext context) {
+        return findOne(specification, id);
+    }
+
+    public E findOne(K id, RestlessContext context) {
+        return findOne(id);
+    }
+
+    public List<E> findAllById(Collection<K> ids, RestlessContext context) {
+        return findAllById(ids);
     }
 }
