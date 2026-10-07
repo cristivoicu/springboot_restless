@@ -2,6 +2,7 @@ package ro.cristivoicu.springbootrestless.processor;
 
 import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
 import ro.cristivoicu.springbootrestless.annotation.RestlessOperation;
+import ro.cristivoicu.springbootrestless.annotation.RestlessParent;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
@@ -171,10 +172,103 @@ public class RestlessEntityProcessor extends AbstractProcessor {
             checkPatchModelHasNoPrimitiveFields(patchModelElement);
         }
 
+        validateParent(entityType, restlessEntity, entityName);
+
         writeResourceClass(packageName, entityName, idType, createModel, updateModel, searchDto, mapper,
                 repository, restlessEntity.basePath(), restlessEntity.version(), restlessEntity.operations(),
                 restlessEntity.allowAll(), createEnabled, updateEnabled, createDataSource, readDataSource,
-                updateDataSource, deleteDataSource, authorizationGuard, patchDataSource, entityType);
+                updateDataSource, deleteDataSource, authorizationGuard, patchDataSource,
+                restlessEntity.parent().variable(), restlessEntity.parent().field(), entityType);
+    }
+
+    /**
+     * Compile-time validation of {@code @RestlessEntity(parent = ...)} (Feature B - nested
+     * resources): both {@code variable}/{@code field} set together or neither (an "ambiguous
+     * parent" is a compile error here, the same fail-closed spirit {@code RestlessResourceHandler}
+     * separately enforces at startup for the manual tier, where there's no processor to catch
+     * it); {@code variable} actually appears in {@code basePath} as a {@code {variable}} segment;
+     * {@code field} (a flat property, or one dotted {@code association.idProperty} segment)
+     * exists; and its resolved type isn't something a path variable can never convert to (a
+     * {@code Collection}/{@code Map}/array - best-effort, not a real {@code ConversionService}
+     * call, which doesn't exist at compile time).
+     */
+    private void validateParent(TypeElement entityType, RestlessEntity restlessEntity, String entityName) {
+        String variable = restlessEntity.parent().variable();
+        String field = restlessEntity.parent().field();
+        boolean variableSet = !variable.isBlank();
+        boolean fieldSet = !field.isBlank();
+        if (!variableSet && !fieldSet) {
+            return; // not nested - the overwhelmingly common case
+        }
+        if (variableSet != fieldSet) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@RestlessEntity: parent() must set both variable and field together (or neither)", entityType);
+            return;
+        }
+        if (!restlessEntity.basePath().contains("{" + variable + "}")) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@RestlessEntity: parent variable '" + variable + "' does not appear in basePath '"
+                            + restlessEntity.basePath() + "'", entityType);
+            return;
+        }
+
+        String[] parts = field.split("\\.", 2);
+        Element firstField = findFieldElement(entityType, parts[0]);
+        if (firstField == null) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@RestlessEntity: parent field '" + field + "' names no property '" + parts[0]
+                            + "' on " + entityName, entityType);
+            return;
+        }
+
+        TypeMirror leafType;
+        if (parts.length == 1) {
+            leafType = firstField.asType();
+        } else {
+            TypeElement associationType = asTypeElement(firstField.asType());
+            if (associationType == null) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@RestlessEntity: parent field '" + field + "' - '" + parts[0]
+                                + "' isn't a type the second segment '" + parts[1] + "' can resolve against", entityType);
+                return;
+            }
+            Element secondField = findFieldElement(associationType, parts[1]);
+            if (secondField == null) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@RestlessEntity: parent field '" + field + "' names no property '" + parts[1]
+                                + "' on " + associationType.getSimpleName(), entityType);
+                return;
+            }
+            leafType = secondField.asType();
+        }
+
+        if (!isPathVariableConvertible(leafType)) {
+            messager.printMessage(Diagnostic.Kind.ERROR,
+                    "@RestlessEntity: parent field '" + field + "' has type " + leafType
+                            + ", which a path variable can never convert to", entityType);
+        }
+    }
+
+    private Element findFieldElement(TypeElement type, String name) {
+        for (TypeElement current = type; current != null && !current.getQualifiedName().contentEquals("java.lang.Object");
+             current = asTypeElement(current.getSuperclass())) {
+            for (Element enclosed : current.getEnclosedElements()) {
+                if (enclosed.getKind() == ElementKind.FIELD && enclosed.getSimpleName().contentEquals(name)) {
+                    return enclosed;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Best-effort - not a real {@code ConversionService} call, which doesn't exist at compile time. Rejects only what can never work: a {@code Collection}/{@code Map}/array. */
+    private boolean isPathVariableConvertible(TypeMirror type) {
+        if (type.getKind() == TypeKind.ARRAY) {
+            return false;
+        }
+        String typeName = type.toString();
+        return !typeName.startsWith("java.util.Collection") && !typeName.startsWith("java.util.List")
+                && !typeName.startsWith("java.util.Set") && !typeName.startsWith("java.util.Map");
     }
 
     /**
@@ -431,13 +525,21 @@ public class RestlessEntityProcessor extends AbstractProcessor {
     }
 
     private String resolveIdType(TypeElement entityType) {
-        for (Element enclosed : entityType.getEnclosedElements()) {
-            if (enclosed.getKind() != ElementKind.FIELD) {
-                continue;
-            }
-            for (AnnotationMirror mirror : enclosed.getAnnotationMirrors()) {
-                if (mirror.getAnnotationType().toString().equals(ID_ANNOTATION)) {
-                    return enclosed.asType().toString();
+        // Walks superclasses (same idiom as declaredFieldsOf): the @Id commonly lives on a shared
+        // @MappedSuperclass (a BaseEntity carrying id + audit columns), not on the concrete entity.
+        // asMemberOf, not enclosed.asType(): an id declared on a generic superclass
+        // (BaseEntity<K> { @Id K id; }) must resolve to the entity's actual type argument, not "K".
+        DeclaredType entityDeclaredType = (DeclaredType) entityType.asType();
+        for (TypeElement current = entityType; current != null && !current.getQualifiedName().contentEquals("java.lang.Object");
+             current = asTypeElement(current.getSuperclass())) {
+            for (Element enclosed : current.getEnclosedElements()) {
+                if (enclosed.getKind() != ElementKind.FIELD) {
+                    continue;
+                }
+                for (AnnotationMirror mirror : enclosed.getAnnotationMirrors()) {
+                    if (mirror.getAnnotationType().toString().equals(ID_ANNOTATION)) {
+                        return types.asMemberOf(entityDeclaredType, enclosed).toString();
+                    }
                 }
             }
         }
@@ -529,6 +631,7 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                                      VerbOverride createDataSource, VerbOverride readDataSource,
                                      VerbOverride updateDataSource, VerbOverride deleteDataSource,
                                      VerbOverride authorizationGuard, VerbOverride patchDataSource,
+                                     String parentVariable, String parentField,
                                      Element origin) throws IOException {
         String resourceName = entityName + "RestlessResource";
 
@@ -536,9 +639,18 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         // processor) is what actually acts on it, see RestlessEntity#version's javadoc for why.
         // String.isBlank() (JDK, not a hand-rolled check) rather than a Spring/Apache utility -
         // this module deliberately carries no dependencies at all (see its pom.xml).
-        String restlessResourceAttrs = !version.isBlank()
-                ? "basePath = \"%s\", version = \"%s\", allowAll = %s".formatted(basePath, version, allowAll)
-                : "basePath = \"%s\", allowAll = %s".formatted(basePath, allowAll);
+        StringBuilder restlessResourceAttrsBuilder = new StringBuilder()
+                .append("basePath = \"").append(basePath).append('"');
+        if (!version.isBlank()) {
+            restlessResourceAttrsBuilder.append(", version = \"").append(version).append('"');
+        }
+        restlessResourceAttrsBuilder.append(", allowAll = ").append(allowAll);
+        boolean nested = !parentVariable.isBlank();
+        if (nested) {
+            restlessResourceAttrsBuilder.append(", parent = @ro.cristivoicu.springbootrestless.annotation.RestlessParent(variable = \"")
+                    .append(parentVariable).append("\", field = \"").append(parentField).append("\")");
+        }
+        String restlessResourceAttrs = restlessResourceAttrsBuilder.toString();
 
         StringBuilder extraParams = new StringBuilder();
         // create/update only get a field/constructor-param/init at all when their verb is

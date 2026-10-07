@@ -121,4 +121,14 @@ public @interface RestlessEntity {
             RestlessOperation.READ_PAGE, RestlessOperation.READ_PAGE_OVERVIEW, RestlessOperation.READ_PAGE_SELECT,
             RestlessOperation.UPDATE, RestlessOperation.DELETE_ONE, RestlessOperation.DELETE_ALL
     };
+
+    /**
+     * Declares this entity's resource nested under a parent path variable - see {@link
+     * RestlessParent}'s own javadoc for the full shape/semantics. Unset (the default, an empty
+     * {@code variable}/{@code field}) means a flat, non-nested resource - today's behavior,
+     * unchanged. {@code RestlessEntityProcessor} validates {@code field} against this entity at
+     * compile time and forwards both attributes verbatim onto the generated resource's own
+     * {@code @RestlessResource(parent = ...)}.
+     */
+    RestlessParent parent() default @RestlessParent;
 }
