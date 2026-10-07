@@ -45,8 +45,11 @@ every request, not a 400).
 ## Multi-field sort
 
 `AbstractSearchDto#sort` is a repeatable query param, Spring Data's own convention:
-`?sort=lastName,asc&sort=firstName,asc`. An unresolvable direction or a property that isn't an
-actual entity field both become a clean 400 before any query runs.
+`?sort=lastName,asc&sort=firstName,asc` - and a single occurrence (`?sort=lastName,asc`) works
+identically (the framework reads the raw query parameter itself precisely so a single value
+never gets silently comma-split into two broken, direction-less entries). A leading `-` is also
+accepted as shorthand for descending: `?sort=-lastName`. An unresolvable direction or a property
+that isn't an actual entity field both become a clean 400 before any query runs.
 
 ## Beyond the nine operators
 

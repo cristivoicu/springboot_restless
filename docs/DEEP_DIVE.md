@@ -25,9 +25,10 @@ action: fine-grained authorization.
 
 - 🚀 **Zero-boilerplate CRUD, genuinely codeless** — an entity + four DTOs is the entire surface area; no hand-subclassed controllers, no repository interface, no mapper. See the [worked example](#worked-example-zero-hand-written-java-start-to-finish).
 - 🧩 **Three levels of control** — fully generated, hand-wired-but-default, or fully manual, chosen per entity, not globally.
-- 📦 **Bulk create/update/delete on every resource, unconditionally** — no opt-in, all-or-nothing per request. See [Tutorial: bulk operations](#tutorial-bulk-operations).
+- 📦 **Bulk create/update/delete on every resource, unconditionally** — no opt-in, all-or-nothing per request, every target loaded and guard-checked in one batched call before anything is written. See [Tutorial: bulk operations](#tutorial-bulk-operations).
 - 🧭 **Write commands for real transitions** — `promote`, `cancel`, `giveRaise`: named, intent-carrying mutations a full-replace `PUT` has no vocabulary to guard. See [Tutorial: write commands](#tutorial-write-commands-writeaction).
-- 🔒 **Authorization is a first-class seam**, not an afterthought — `AuthorizationGuard`'s three hook points (`preCheck`/`scope`/`canAccess`) sit on every route, framework-native and Spring-Security-agnostic.
+- 🔒 **Authorization is a first-class seam**, not an afterthought — `AuthorizationGuard`'s hook points (`preCheck`/`scope`/`canAccess`, plus a post-write check, a batched bulk check, and a response-shaping hook) sit on every route, framework-native and Spring-Security-agnostic.
+- ⏱️ **Conditional requests built in** — a strong `ETag` on every single-entity response, `If-None-Match`/`If-Match` honored on reads/writes (`*`, comma-lists, strong comparison). See [Tutorial: conditional requests](#tutorial-conditional-requests-and-optimistic-concurrency).
 - 🛡️ **Optional Cerbos backing** — policy-as-code (YAML) row-level scoping and field-level masking against a real PDP, demoed end-to-end with a real Keycloak IAM.
 - ✋ **Mapping is never generated** — `Mapper<Entity, Dto>` stays hand-written on purpose, because response shape is exactly what authorization needs to control.
 
@@ -45,6 +46,7 @@ action: fine-grained authorization.
 - [Tutorial: authorization with `AuthorizationGuard`](#tutorial-authorization-with-authorizationguard)
 - [Tutorial: Cerbos-backed authorization](#tutorial-cerbos-backed-authorization)
 - [Tutorial: hiding fields with `@CerbosHiddenField`](#tutorial-hiding-fields-with-cerboshiddenfield)
+- [Tutorial: conditional requests and optimistic concurrency](#tutorial-conditional-requests-and-optimistic-concurrency)
 - [Tutorial: bulk operations](#tutorial-bulk-operations)
 - [Tutorial: write commands (`WriteAction`)](#tutorial-write-commands-writeaction)
 - [Running the full demo: Docker Compose + Keycloak](#running-the-full-demo-docker-compose--keycloak)
@@ -63,17 +65,19 @@ actual business rules live:
 - **Response shape.** The DTO itself is always hand-written — a generated default would silently
   expose whatever fields an entity happens to have, which is the one surface fine-grained
   authorization needs to control. `Mapper<Entity, Dto>`'s *implementation* doesn't have to be:
-  `RestlessEntityProcessor` can generate a reflective one (`BeanUtils.copyProperties`) once the
-  DTO's shape is already decided, since copying an already-authored shape doesn't reintroduce the
-  risk a generated *shape* would — see [Tutorial: adding a new entity](#tutorial-adding-a-new-entity).
+  `RestlessEntityProcessor` can generate one (an explicit `dto.setX(source.getX())` per matched
+  field — not reflection) once the DTO's shape is already decided, since copying an
+  already-authored shape doesn't reintroduce the risk a generated *shape* would — see
+  [Tutorial: adding a new entity](#tutorial-adding-a-new-entity).
 - **Authorization.** Opt-in per resource, never mandatory boilerplate, and never tied to one
   auth stack — see [`AuthorizationGuard`](#tutorial-authorization-with-authorizationguard). The
   `cerbos` module is one concrete backing for it (policy-as-code via a real PDP), not the only
   one it's designed for.
 - **Anything the filter DSL, or a hand-written `Specification`, can't already express.**
-  Search filtering defaults to equality on whichever `SearchDto` fields are populated, plus seven
-  operator suffixes (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In` — see [API completeness](#api-completeness))
-  for ranges/partial-match/membership with zero extra code, and steps out of the way (override,
+  Search filtering defaults to equality on whichever `SearchDto` fields are populated, plus nine
+  operator suffixes (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`ILike`/`StartsWith`/`Ne`/`In` — see
+  [API completeness](#api-completeness)) for ranges/partial-match/membership with zero extra code,
+  and steps out of the way (override,
   or add a named custom read action) the moment even that's not enough — boolean OR/nesting,
   joins, cross-field logic.
 
@@ -91,7 +95,7 @@ hand-wired.
   handful of entities with real business rules — not into re-writing near-identical
   `@RestController` classes by hand for the ones that don't need any.
 - Internal tools, admin backends, and B2B/multi-tenant services where "who can see/change which
-  row, and which fields" is itself a first-class requirement — `AuthorizationGuard`'s three hook
+  row, and which fields" is itself a first-class requirement — `AuthorizationGuard`'s hook
   points and the optional Cerbos backing exist specifically for this (see
   [Tutorial: authorization](#tutorial-authorization-with-authorizationguard)).
 - A service that wants to grow incrementally: start every entity on the codeless tier (see
@@ -128,7 +132,10 @@ hand-wired.
 ## Prerequisites
 
 - **Java 25** and **Maven 3.9+** (a wrapper — `./mvnw` — is included, so a local Maven install
-  isn't strictly required).
+  isn't strictly required) — needed to build the full reactor, since `example` (what every
+  tutorial below walks through) targets `--release 25`. The shipped library itself
+  (`app`/`processor`/`cerbos`/`spring-boot-restless-test`) builds down to Java 17: `./mvnw -pl
+  processor,app,cerbos,spring-boot-restless-test -am verify` works with just a 17+ toolchain.
 - **Docker** and **Docker Compose**, only if you want to run the `example` module's Cerbos +
   Keycloak-backed demo (`/employees/**`) against real infrastructure instead of just the
   automated test suite. Nothing else in the reactor needs Docker — every module's own `mvn test`
@@ -140,7 +147,7 @@ hand-wired.
 
 | Concern | What's used |
 |---|---|
-| Language / build | Java 25, Maven (multi-module reactor) |
+| Language / build | Java 17+ for the shipped library, Java 25 to build the full reactor (`example` targets `--release 25`); Maven (multi-module reactor) |
 | Framework | Spring Boot 4.1.1 (Spring MVC, Spring Data JPA) |
 | Compile-time codegen | A hand-written `javax.annotation.processing.Processor` (`processor` module) |
 | Authorization backend (optional) | [Cerbos](https://www.cerbos.dev/) via `cerbos-sdk-java`, gRPC |
@@ -164,7 +171,7 @@ hand-wired.
   `Sprocket`/`Doohickey` under `app/src/test/.../fixtures/`) that never leave the test jar, so the
   framework stays independently verifiable without depending on `example` existing or staying in
   sync. `Doohickey` is the live proof of the compile-time-generated tier's newest capabilities —
-  a reflective default `Mapper`, an annotation-wired `AuthorizationGuard`, and API versioning
+  a generated default `Mapper`, an annotation-wired `AuthorizationGuard`, and API versioning
   (`version = "1"`, real `RequestMappingInfo`-level routing, not just a stored string) — all with
   nothing but the entity, its DTOs, and one small guard bean hand-written — see
   [Tutorial: adding a new entity](#tutorial-adding-a-new-entity).
@@ -251,7 +258,8 @@ sequenceDiagram
     H-->>C: 200 OK
 ```
 
-**Single-entity action — `canAccess()` checks the loaded row:**
+**Single-entity action — `canAccess()` checks the loaded row, conditional `GET` short-circuits
+once it's confirmed visible:**
 
 ```mermaid
 sequenceDiagram
@@ -262,7 +270,7 @@ sequenceDiagram
     participant D as ReadDataSource
     participant M as Mapper
 
-    C->>H: GET /employees/{id}
+    C->>H: GET /employees/{id}<br/>If-None-Match: "3"
     H->>G: preCheck(READ_ONE)
     G-->>H: allowed
     H->>D: findOne(id)
@@ -274,9 +282,15 @@ sequenceDiagram
         alt denied
             H-->>C: 403 Forbidden
         else allowed
-            H->>M: map(entity)
-            M-->>H: EmployeeDto
-            H-->>C: 200 OK
+            alt If-None-Match matches current @Version
+                H-->>C: 304 Not Modified (no body)
+            else
+                H->>M: map(entity)
+                M-->>H: EmployeeDto
+                H->>G: postProcessResponse(READ_ONE, entity, dto)
+                G-->>H: dto (CerbosAuthorizationGuard: masked here)
+                H-->>C: 200 OK + ETag
+            end
         end
     end
 ```
@@ -418,7 +432,7 @@ public class TaskDto implements EntityDto {
 ```
 
 Five files, same package, following the naming convention — nothing else to write. `./mvnw compile`
-runs `RestlessEntityProcessor`, which generates `TaskRepository`, a reflective `TaskMapper`, and
+runs `RestlessEntityProcessor`, which generates `TaskRepository`, a `TaskMapper`, and
 `TaskRestlessResource`; at application startup `RestlessRegistrar` finds it and registers every
 route below, live, against a real JPA repository:
 
@@ -535,7 +549,7 @@ wraps a `CerbosAuthorizationGuard<Project>` (row-scoped by department for non-ma
 ProjectAuthorizationGuardBean.class)` on `Project` itself wires both hand-written pieces in.
 Nothing else about `Project` is hand-written any more — no `ProjectRestlessResource`, no
 `ProjectRepository`, no `ProjectMapper` (its DTO's fields already matched the entity's own by
-name, so the generated reflective one needed no `@RestlessMapperExclude` either).
+name, so the generated one needed no `@RestlessMapperExclude` either).
 
 ### Manual — runtime defaults, no codegen (`Department`)
 
@@ -570,7 +584,7 @@ this framework exists to remove, business-specific CRUD logic included.
 Security dependency, since the base library has none: implementations are handed the raw
 `HttpServletRequest` and read whatever your own auth stack already populated (a
 `userPrincipal`, a header, a `SecurityContext`, ...). It's opt-in per resource
-(`RestlessResourceHandler.getAuthorizationGuard()`), with three hook points
+(`RestlessResourceHandler.getAuthorizationGuard()`), with hook points
 checked at different points in each action's control flow. **A resource that never overrides
 `getAuthorizationGuard()` at all won't start up** — `RestlessRegistrar` fails fast at startup with
 an `IllegalStateException` naming the resource, unless `@RestlessResource(allowAll = true)` (or
@@ -595,22 +609,47 @@ public interface AuthorizationGuard<E> {
 }
 ```
 
+Three more hooks exist, each defaulting to delegating to one of the above — every existing guard
+keeps working unchanged unless it opts in by overriding one:
+
+- **`canAccessAfterWrite(action, customActionName, request, after)`** — a post-image check on
+  `update`/`patch`, run *after* the write, inside the same transaction as the pre-image
+  `canAccess` check. Catches a transition the pre-image check alone can't see: a client who
+  legitimately owns a row reassigning it to someone else's account. Defaults to
+  `canAccess(action, customActionName, request, after)`.
+- **`canAccessAll(action, request, entities)`** — a batched pre-image check for `updateBulk`/
+  `deleteAll`, called once against every fetched target instead of looping `canAccess` per row.
+  Defaults to looping `canAccess` (same end result, just named/exposed); override to batch
+  against a real policy engine in one round trip instead of N — `CerbosAuthorizationGuard` does,
+  via one `client.batch(...)` RPC.
+- **`postProcessResponse(action, customActionName, request, entity, dto)`** — runs right after
+  `Mapper.map(...)` on every single-entity response (`create`/`findOne`/`namedView`/`update`/
+  `patch`). Defaults to returning `dto` unchanged. This is the seam `CerbosAuthorizationGuard`
+  uses to automatically mask `@CerbosHiddenField` fields (see
+  [Tutorial: hiding fields](#tutorial-hiding-fields-with-cerboshiddenfield) below) — a hand-rolled
+  guard for a non-Cerbos auth stack can use the same hook for its own field-level response
+  shaping, without `app` itself knowing anything about Cerbos.
+
 Wire one in by overriding `getAuthorizationGuard()` on a `RestlessResourceHandler` subclass and
 returning your own implementation — it can be as simple as a header check, or as involved as the
 Cerbos-backed one below. `AuthorizationGuard.allowAll()` (the default) is a shared, reference-
-comparable no-op — implement none of the three hooks and every action is unconditionally allowed.
+comparable no-op — implement none of the hooks and every action is unconditionally allowed.
 
 ## Tutorial: Cerbos-backed authorization
 
 The `cerbos` module's `CerbosAuthorizationGuard<E>` implements `AuthorizationGuard<E>` against a
 real [Cerbos](https://www.cerbos.dev/) PDP instead of hand-rolled guard logic, so authorization
 rules live as policy-as-code (YAML, hot-reloadable, testable independently of the app) rather
-than Java `if`s. It maps the three hook points onto Cerbos's own API:
+than Java `if`s. It maps the core hook points onto Cerbos's own API:
 
 - `preCheck` / `canAccess` → `CerbosBlockingClient.check(...)` (coarse and per-instance checks).
+- `canAccessAll` → one batched `CerbosBlockingClient.batch(...)` RPC instead of N individual
+  `check()` calls, for bulk update/delete.
 - `scope` → `CerbosBlockingClient.plan(...)`, translated from Cerbos's query-plan protobuf AST
-  into a JPA `Specification` by `CerbosQueryPlanTranslator` (fails loud on any unsupported
-  operator/shape, rather than silently under-restricting).
+  into a JPA `Specification` by `CerbosQueryPlanTranslator`. An operator/shape the translator
+  doesn't recognize is never silently under-restricted: the translator itself always throws on
+  it, and `scope()` catches that and fails **closed** (an always-deny `Specification`, logged at
+  WARN) rather than surfacing an unhandled 500.
 
 The full round trip for a `bob-manager` list request (see [Running the full demo](#running-the-full-demo-docker-compose--keycloak)
 below for the real curl-able version), combining row-level `scope` with field-level masking:
@@ -751,9 +790,22 @@ correctly sees nothing, rather than the check erroring).
 Row-level access (`preCheck`/`canAccess`/`scope`) answers "can this principal see/modify this row
 at all" — it's a yes/no per row. `@CerbosHiddenField` + `CerbosFieldMasker` answer a finer
 question on top of that: *which individual fields* of an already-visible row should this
-principal not see. Deliberately opt-in and hand-called (consistent with `Mapper` never being
-reflective) — it's a tool reached for explicitly inside a `Mapper`, not something that fires on
-its own.
+principal not see.
+
+**Automatic for every single-entity response.** `CerbosAuthorizationGuard` overrides
+`postProcessResponse` (see [Tutorial: authorization](#tutorial-authorization-with-authorizationguard)
+above) to call `CerbosFieldMasker.mask` right after `Mapper.map(...)` on `create`/`findOne`/
+`namedView`/`update`/`patch`, on its own — no hand-written `Mapper` needs to call it itself.
+Masking is idempotent, so a `Mapper` that already calls it by hand (`EmployeeMapper` below does,
+as a worked example of the lower-level mechanism) keeps working unaffected, just redundantly. It
+skips the Cerbos `check()` RPC entirely when the DTO type carries no `@CerbosHiddenField` field at
+all, and falls back to masking *every* `@CerbosHiddenField` field (fail closed), not none, if the
+PDP can't be reached.
+
+**Still a manual call for list/page responses** — `postProcessResponse` only runs on a
+single-entity path, so `findList`/`findPage*`/a custom read action still need to call
+`CerbosFieldMasker.maskAll` themselves (one batched RPC for the whole page, not one `check()` per
+row) — `EmployeeMapper#map(List)` below does exactly this.
 
 It uses Cerbos's **output** feature: a policy rule can attach an arbitrary CEL-computed value to
 its decision, evaluated only when that rule activates. Model "which fields to hide" as a CEL list
@@ -779,14 +831,16 @@ public class EmployeeDto implements EntityDto {
 }
 ```
 
-And call the masker from the `Mapper`, after building the DTO — once per entity, or batched for a
-list/page read (one Cerbos RPC for the whole page instead of one per row):
+The single-entity call below now happens automatically (see above) — shown here because
+`EmployeeMapper` still calls it explicitly too, which is harmless (idempotent) and doubles as a
+worked example of what `postProcessResponse` does under the hood. The list call is still required:
 
 ```java
-// Single entity:
+// Single entity — CerbosAuthorizationGuard.postProcessResponse already does this on its own;
+// calling it again here is redundant but harmless:
 CerbosFieldMasker.mask(cerbosClient, principal, resource, "view", dto);
 
-// A list — one batched RPC via client.batch(...) instead of N:
+// A list — one batched RPC via client.batch(...) instead of N - still a manual call, every time:
 CerbosFieldMasker.maskAll(cerbosClient, principal, "employee", "view", dtos,
         EmployeeDto::getId, CerbosResourceAttributesMapper.none());
 ```
@@ -797,6 +851,70 @@ it. Always pair a masking rule (`view` above) with every role/attribute combinat
 reach the mapper at all. See `EmployeeMapper`/`EmployeeDto`/`policies/employee.yaml` in `example`
 for the complete worked example (masks `salary` for managers without a `canViewSalary` claim,
 leaves it alone for admins and for managers who have it).
+
+## Tutorial: conditional requests and optimistic concurrency
+
+`@jakarta.persistence.Version` already gets an entity automatic `409`-on-stale-write protection
+(`RestlessExceptionHandler` maps JPA's `OptimisticLockException`). On top of that, every
+single-entity response and every single-item write honors HTTP's own conditional-request
+machinery (RFC 9110 §13) — a strong `ETag` derived straight from the `@Version` value, so a
+client never has to compute or guess one:
+
+```java
+public class Employee {
+    @Id
+    private Long id;
+
+    @Version
+    private Long version;
+    // ...
+}
+```
+
+Nothing else to write — `RestlessResourceHandler` emits the `ETag` and honors
+`If-None-Match`/`If-Match` the moment a `@Version` field exists. An entity with none simply never
+emits an `ETag` and silently skips every precondition check, so adding this to an existing entity
+is purely additive.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant H as RestlessResourceHandler
+
+    C->>H: GET /employees/1
+    H-->>C: 200 OK, ETag: "3"
+
+    C->>H: GET /employees/1<br/>If-None-Match: "3"
+    Note over H,C: Weak comparison (RFC 9110 §13.1.2) -<br/>row unchanged since the client's own copy
+    H-->>C: 304 Not Modified (no body)
+
+    C->>H: PUT /employees/1<br/>If-Match: "3"<br/>{"salary": 95000, ...}
+    Note over H,C: Strong comparison - a weak W/"..." validator<br/>never satisfies this, even with a matching value
+    H-->>C: 200 OK, ETag: "4"
+
+    C->>H: PUT /employees/1<br/>If-Match: "3" (stale - row is now at version 4)
+    H-->>C: 412 Precondition Failed - rejected before any write is attempted
+```
+
+- **`If-None-Match`** (`GET` only) accepts a single value, `*`, or a comma-separated list, under
+  *weak* comparison — a `W/"..."`-prefixed candidate is unwrapped and compared, not excluded,
+  since RFC 9110 requires weak comparison here.
+- **`If-Match`** (single-item `PUT`/`PATCH`/`DELETE`, and optionally a write action) accepts the
+  same shapes under *strong* comparison instead — a `W/"..."`-prefixed candidate is excluded from
+  the candidate set entirely, since a weak validator can never satisfy a strong-comparison
+  precondition. `*` always satisfies it (the row merely needs to exist). Checked *inside* the same
+  transaction as the write itself, before anything is written — a stale value is a clean `412`,
+  never a silent overwrite and never a write that partially lands before failing.
+- **A write action** (`WriteAction`, see [below](#tutorial-write-commands-writeaction)) honors
+  `If-Match` the same way, optionally — unchanged, no-op-when-absent behavior for an action that
+  never asks for one.
+- **A soft-deleted row** (see [below](#api-completeness)) is always a `404` to a write, regardless
+  of any `If-Match` header sent — there's no version to compare a precondition against for a row
+  that, from a write's point of view, no longer exists.
+
+See `PreconditionSupport` (`app` module) for the implementation, and `ConditionalRequestsTest`/
+`WriteActionIfMatchTest` (`app`'s own `Widget`/`Racer` fixtures) for the full behavioral proof.
 
 ## Tutorial: bulk operations
 
@@ -824,9 +942,12 @@ this moved.)
 Every bulk route wraps its actual database write in one real transaction
 (`RestlessResourceHandler#inTransaction`) — item 9,999 of a 10,000-row batch failing rolls the
 whole batch back, rather than leaving the first 9,998 committed. Bulk update and bulk delete
-additionally **fail fast before writing anything**: every targeted row is loaded and
-`canAccess`-checked up front, and only once every single one clears the guard does any write
-happen at all.
+additionally **fail fast before writing anything**: every targeted row is loaded in one
+`findAllById` query and `canAccess`-checked in one batched `canAccessAll` call, and only once that
+one call clears every row does any write happen at all —
+`AuthorizationGuard.canAccessAll` defaults to looping `canAccess` one row at a time (so every
+existing guard keeps working unchanged), but `CerbosAuthorizationGuard` overrides it with a
+single batched PDP RPC instead of N:
 
 ```mermaid
 sequenceDiagram
@@ -839,19 +960,18 @@ sequenceDiagram
     C->>H: PUT /employees/bulk<br/>{"1": {...}, "2": {...}, "3": {...}}
     H->>H: validate every entry
     H->>H: begin transaction
-    loop each id, in order
-        H->>D: findOne(id)
-        D-->>H: entity
-        H->>G: canAccess(UPDATE, entity)
-        alt denied
-            G-->>H: false
-            H-->>C: 403 - nothing written, transaction rolls back
-        end
+    H->>D: findAllById([1, 2, 3])
+    D-->>H: entities
+    H->>G: canAccessAll(UPDATE, entities)
+    alt any denied
+        G-->>H: false
+        H-->>C: 403 - nothing written, transaction rolls back
+    else all allowed
+        H->>D: updateAll(byId)
+        D-->>H: updated entities
+        H->>H: commit transaction
+        H-->>C: 200 OK, updated DTOs
     end
-    H->>D: updateAll(byId)
-    D-->>H: updated entities
-    H->>H: commit transaction
-    H-->>C: 200 OK, updated DTOs
 ```
 
 Bulk create is the one exception with no pre-write guard loop: `preCheck(CREATE, ...)` is checked
@@ -981,6 +1101,10 @@ sequenceDiagram
         G-->>H: false
         H-->>C: 403 - transaction rolls back
     else allowed
+        H->>H: checkIfMatch (optional - honored the same<br/>as a single-item PUT/PATCH/DELETE, if the client sent one)
+        alt stale If-Match
+            H-->>C: 412 - transaction rolls back
+        end
         H->>A: execute(entity, request)
         alt illegal transition
             A-->>H: throws ResponseStatusException(409)
@@ -1153,20 +1277,32 @@ principal, since this demo has no such role modeled.
   a `CreateDataSource`/`UpdateDataSource`). `createAll`/`updateAll` default methods loop the
   single-item verb, same spirit as `Mapper<E,D>.map(List<E>)`'s own default. Bulk update's body is
   a JSON object keyed by id (`{"1": {...}, "2": {...}}`); every entry is validated, and (with a
-  guard configured) every target loaded and `canAccess`-checked, before anything is written — the
-  same fail-fast-before-mutating pattern bulk delete already used. See
+  guard configured) every target loaded in one `findAllById` query and `canAccess`-checked in one
+  batched `canAccessAll` call, before anything is written — the same fail-fast-before-mutating
+  pattern bulk delete already used. See
   [Tutorial: bulk operations](#tutorial-bulk-operations) above for the full walkthrough.
 - **Multi-field sort** — `AbstractSearchDto`'s `sort` is a repeatable query param
-  (`?sort=lastName,asc&sort=firstName,asc`), Spring Data's own convention. An unresolvable
-  direction or a property that isn't an actual field on the entity both become a clean 400 (via
+  (`?sort=lastName,asc&sort=firstName,asc`), Spring Data's own convention; a single occurrence
+  (`?sort=lastName,asc`) works identically - `RestlessResourceHandler` reads `sort`'s raw request
+  parameter values itself (`bindSortDirectly`) rather than leaving it to the generic
+  `ServletRequestDataBinder`/`ConversionService` path, which otherwise silently comma-splits a
+  single occurrence into two broken, direction-less entries (see this method's own javadoc for
+  the full mechanism - a real bug the backend-nunti integration surfaced). A leading `-` is also
+  accepted as shorthand for descending (`?sort=-lastName`). An unresolvable direction or a
+  property that isn't an actual field on the entity both become a clean 400 (via
   `RestlessResourceHandler#pageableOf`) before any query runs, instead of Hibernate's own later
   and less clear failure.
 - **Filter DSL** — a `SearchDto` field whose name ends in a recognized operator suffix
-  (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In`) filters with that operator instead of plain equality —
-  `ageGte` filters `age >= value`, wire format camelCase (`?ageGte=30`), reflected over by the same
-  default `getSpecification()` an unsuffixed field already was, zero extra code. `Like` does a
-  contains-match; `In` binds a repeatable query param onto a `List`/`Collection`-typed field, the
-  same mechanism `sort` itself already uses. A suffixed field whose base property doesn't exist on
+  (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`ILike`/`StartsWith`/`Ne`/`In`) filters with that operator instead
+  of plain equality — `ageGte` filters `age >= value`, wire format camelCase (`?ageGte=30`),
+  reflected over by the same default `getSpecification()` an unsuffixed field already was, zero
+  extra code. `Like` does a contains-match (`%value%`); `ILike` the same, case-insensitively;
+  `StartsWith` a prefix-match (`value%`, no leading wildcard, so it can use a B-tree index -
+  checked first, longest-suffix-first, so `nameILike` isn't mistaken for plain `Like` on a base
+  property named `nameI`); all three escape a literal `%`/`_`/`\` in the search term before
+  building the pattern. `In` binds a repeatable query param onto a `List`/`Collection`-typed
+  field, the same mechanism `sort` itself already uses. A suffixed field whose base property
+  doesn't exist on
   the entity is silently ignored (a `SearchDto`-author mistake, not client input); one whose base
   property exists but doesn't support the operator's type throws `IllegalStateException` (wrong on
   every request, so it's not a 400). `RestlessSpecifications` is a small fluent builder for the
@@ -1218,16 +1354,22 @@ principal, since this demo has no such role modeled.
   operations carry an `x-api-version` extension plus a summary suffix — see
   `RestlessOpenApiCustomizer`'s own javadoc for the residual limit (still no native OpenAPI axis
   for header-based versioning).
-- **Optimistic concurrency.** Add `@jakarta.persistence.Version` to an entity and nothing else —
-  `RestlessExceptionHandler` maps a stale concurrent write to 409 automatically. Opt further into
-  an `If-Match` precondition on single-item `PUT`/`PATCH`/`DELETE` (412 on a stale value, silently
-  skipped for an entity with no `@Version` field or a request with no header) — see
-  `RestlessResourceHandler#checkIfMatch`.
+- **Conditional requests / optimistic concurrency.** Add `@jakarta.persistence.Version` to an
+  entity and nothing else — `RestlessExceptionHandler` maps a stale concurrent write to 409
+  automatically. Every single-entity response (`findOne`/a named view/`create`/`update`/`patch`)
+  now carries a strong `ETag` derived from it; `GET` with a matching `If-None-Match` short-circuits
+  to `304` with no body. Send the `ETag` value back as `If-Match` (a single value, `*`, or a
+  comma-separated list of candidates) on a single-item `PUT`/`PATCH`/`DELETE`/write action for a
+  `412` precondition check — strong comparison, so a weak `W/"..."` validator never satisfies it;
+  silently skipped for an entity with no `@Version` field or a request with no header. See
+  `PreconditionSupport`.
 - **Soft delete.** Implement `SoftDeletable` on an entity and point `deleteDataSource` at
   `DefaultSoftDeleteDataSource` instead of the hard-deleting default — flags a `deleted` column
   instead of removing the row, and `RestlessResourceHandler` automatically excludes flagged rows
-  from `findList`/`findPage*`/custom-read results (still fetchable by id, on purpose — see
-  `excludeSoftDeleted`'s own javadoc).
+  from `findList`/`findPage*`/custom-read results. A write (`update`/`patch`/`deleteById`/a write
+  action) on an already-flagged row always 404s. `findOne`/a named view still return it by id
+  (same as today's default) unless `restless.soft-delete.include-in-single-read=false`, which
+  404s it there too — see `RestlessResourceHandler#isSoftDeleted`'s own javadoc.
 - **Auditing.** Extend `AbstractAuditableEntity` (`app`) for automatic `createdDate`/`lastModifiedDate`
   via Spring Data JPA's own auditing — add `@EnableJpaAuditing` on your own application, same as
   any Spring Data JPA app. See `Project` in `example` for the worked example.
@@ -1252,27 +1394,28 @@ otherwise:
 | Add entity-specific create/update/delete/read logic | Point `createDataSource`/`readDataSource`/`updateDataSource`/`deleteDataSource` at a hand-written class, or hand-wire a full `RestlessResourceHandler` | [Tutorial: adding a new entity](#tutorial-adding-a-new-entity) |
 | Control who can do what | Override `getAuthorizationGuard()` / set `authorizationGuard` | [Tutorial: authorization](#tutorial-authorization-with-authorizationguard) |
 | Back authorization with policy-as-code | `CerbosAuthorizationGuard<E>` | [Tutorial: Cerbos-backed authorization](#tutorial-cerbos-backed-authorization) |
-| Hide individual fields per caller | `@CerbosHiddenField` + `CerbosFieldMasker`, called from your `Mapper` | [Tutorial: hiding fields](#tutorial-hiding-fields-with-cerboshiddenfield) |
+| Hide individual fields per caller | `@CerbosHiddenField` — masked automatically on single-entity responses; call `CerbosFieldMasker.maskAll` yourself for list/page responses | [Tutorial: hiding fields](#tutorial-hiding-fields-with-cerboshiddenfield) |
 | Restrict which routes exist at all | `operations = {...}` / override `getEnabledOperations()` | [Tutorial: adding a new entity](#tutorial-adding-a-new-entity) |
 | Add partial update | `patchDataSource = ...` / override `getPatchDataSource()` | [API completeness](#api-completeness) |
-| Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In`), or `RestlessSpecifications` in a hand-written `getSpecification()` override | [API completeness](#api-completeness), [README.md's Design Rationale](../README.md#design-rationale) |
+| Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`ILike`/`StartsWith`/`Ne`/`In`), or `RestlessSpecifications` in a hand-written `getSpecification()` override | [API completeness](#api-completeness), [README.md's Design Rationale](../README.md#design-rationale) |
 | Add a filtered read beyond what `SearchDto` can express | `getCustomReadActions()` *(hand-wired tier only)* | [How it works](#how-it-works) |
 | Add a domain-meaningful mutation ("promote", "cancel") | `getCustomWriteActions()` *(hand-wired tier only)* | [Tutorial: write commands](#tutorial-write-commands-writeaction) |
 | Expose a different response shape of the same entity | `getNamedViews()` *(hand-wired tier only)* | `EmployeeRestlessResource`'s `contact` view |
 | Create/update/delete many rows in one request | `POST`/`PUT {basePath}/bulk`, `POST {basePath}/bulk-delete` — unconditional, no opt-in | [Tutorial: bulk operations](#tutorial-bulk-operations) |
 | Sort by more than one field | Repeatable `?sort=field,direction` query param | [API completeness](#api-completeness) |
-| Add optimistic concurrency | `@jakarta.persistence.Version` on the entity | [API completeness](#api-completeness) |
+| Add optimistic concurrency + conditional requests | `@jakarta.persistence.Version` on the entity (`ETag`/`If-None-Match`/`If-Match` are automatic once added) | [Tutorial: conditional requests](#tutorial-conditional-requests-and-optimistic-concurrency) |
 | Soft-delete instead of hard-delete | Implement `SoftDeletable`, `deleteDataSource = DefaultSoftDeleteDataSource` | [API completeness](#api-completeness) |
+| Keep a soft-deleted row readable/unreadable by id | `restless.soft-delete.include-in-single-read` (default `true`) | [API completeness](#api-completeness) |
 | Add `createdDate`/`lastModifiedDate` | Extend `AbstractAuditableEntity` + `@EnableJpaAuditing` | [API completeness](#api-completeness) |
 | Version an API | `version = "..."` on `@RestlessEntity`/`@RestlessResource` | [Tutorial: adding a new entity](#tutorial-adding-a-new-entity) |
 | Expand a related resource inline | `@RestlessEmbed` on a DTO field, `?expand=name` | `RestlessEmbedResolver` |
 | Cap an unbounded `GET .../list` | `restless.list.max-size` (default 10,000) | [API completeness](#api-completeness) |
-| Require a fresh row before writing | `If-Match` header (needs `@Version` on the entity) | [API completeness](#api-completeness) |
+| Require a fresh row before writing | `If-Match` header (needs `@Version` on the entity) | [Tutorial: conditional requests](#tutorial-conditional-requests-and-optimistic-concurrency) |
 
 ## Project status
 
 Working proof of the runtime-registration mechanism, the compile-time generator (now including a
-reflective default `Mapper` and annotation-wired `AuthorizationGuard`), the library/example split,
+generated default `Mapper` and annotation-wired `AuthorizationGuard`), the library/example split,
 and a real Cerbos + Keycloak-backed authorization demo. Every entity `example` exposes now carries
 a real `CerbosAuthorizationGuard` backed by its own policy (`employee`/`department`/`project`) —
 row-level scoping (by JWT claim for `employee.yaml`, by a principal attribute resolved from
@@ -1283,17 +1426,22 @@ carries it while staying fully compile-time generated, via the delegating-bean p
 [Tutorial: adding a new entity](#tutorial-adding-a-new-entity)). The full reactor's `mvn test` is
 green, including every Testcontainers-backed class (a live Cerbos PDP is started automatically for
 those): `app`'s own suite (`app/src/test/.../fixtures/`, `.../registry/`) proves the framework
-mechanism in isolation via `Gadget`/`Gizmo`/`Sprocket`/`Doohickey` — the last exercising the
-generated default `Mapper`, `@RestlessMapperExclude`, an annotation-wired guard, API versioning,
-and an opt-in `PATCH` route; `cerbos`'s suite proves the query-plan translator, the field masker,
-the guard's three hook points (including fail-closed behavior against a killed PDP), the health
-indicator, and `principalAttributesExtender`, all against a real PDP; `example`'s suite proves the
-same mechanism through realistic, business-named usage — full route coverage, cross-resource
-isolation, duplicate-`basePath` detection, error-response parity against a hand-written baseline,
-default-CUD end-to-end behavior, custom read actions, write commands (`promote`/`giveRaise`/
+mechanism in isolation via `Gadget`/`Gizmo`/`Sprocket`/`Doohickey` and dozens of other small,
+purpose-built fixtures — the generated default `Mapper`, `@RestlessMapperExclude`, an
+annotation-wired guard, API versioning, an opt-in `PATCH` route, conditional requests
+(`ETag`/`If-Match`/`If-None-Match`), soft-delete write rejection, and batched bulk guard checks,
+among others; `cerbos`'s suite proves the query-plan translator (including null-literal
+`eq`/`ne` and enum/`UUID`/`java.time` coercion), the field masker (including the automatic
+single-entity masking hook), the guard's hook points (including fail-closed behavior against a
+killed PDP and against an unsupported query-plan shape), the health indicator, and
+`principalAttributesExtender`'s once-per-request caching, all against a real PDP; `example`'s
+suite proves the same mechanism through realistic, business-named usage — full route coverage,
+cross-resource isolation, duplicate-`basePath` detection, error-response parity against a
+hand-written baseline, default-CUD end-to-end behavior (against both H2 and a real PostgreSQL
+Testcontainer), custom read actions, write commands (`promote`/`giveRaise`/
 `addCertification`/`recordAchievement` on `Employee`), the filter DSL (both the fully-automatic
 path on `Project` and the `RestlessSpecifications`-in-a-hand-written-override path on `Employee`),
 bulk create/update, multi-field sort, the many-to-many `ProjectAssignment` bridge resource
 (bulk-add at scale, transactional rollback on a bad row, pagination), default OpenAPI document
-generation, and every guard's row-scoping and (for Employee) field-masking scenarios. 174 tests
-across the reactor.
+generation, and every guard's row-scoping and (for Employee) field-masking scenarios. Over 250
+tests across the reactor.

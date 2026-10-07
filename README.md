@@ -67,43 +67,51 @@ business rules, the framework steps out of the way cleanly instead of fighting y
 
 - **Zero-boilerplate, genuinely codeless CRUD** — an entity plus four DTOs (`CreateModel`,
   `UpdateModel`, `SearchDto`, `Dto`) is the entire surface area for a standard resource; a
-  compile-time annotation processor generates the repository, a reflective mapper, and the
-  resource glue class.
+  compile-time annotation processor generates the repository, a mapper (one explicit
+  `dto.setX(source.getX())` per matched field, not reflection), and the resource glue class.
 - **Three levels of control, chosen per entity, not globally** — fully generated, generated with
   one or two hand-written overrides (a custom `*DataSource`, a real guard), or a fully manual
-  `RestlessResourceHandler` subclass for entities with genuinely custom logic.
-- **Authorization as a framework-native, first-class seam** — `AuthorizationGuard<E>`'s three hook
-  points (`preCheck` / `scope` / `canAccess`) sit on every route. No Spring Security dependency
-  in the base library; plug in whatever principal source your own stack already populates.
+  `RestlessResourceHandler` subclass for entities with genuinely custom logic. See the
+  [tier decision diagram](#which-tier-does-an-entity-need) below.
+- **Authorization as a framework-native, first-class seam** — `AuthorizationGuard<E>`'s hook
+  points (`preCheck` / `scope` / `canAccess`, plus a post-write check, a batched bulk check, and a
+  response-shaping hook) sit on every route. No Spring Security dependency in the base library;
+  plug in whatever principal source your own stack already populates.
 - **Optional Cerbos-backed authorization** — policy-as-code row-level scoping (via Cerbos query
-  plans translated into JPA `Specification`s) and field-level masking (`@CerbosHiddenField`)
-  against a real PDP, fail-**closed** by design.
+  plans translated into JPA `Specification`s) and field-level masking (`@CerbosHiddenField`,
+  applied automatically on single-entity responses) against a real PDP, fail-**closed** by
+  design.
 - **Bulk operations on every resource, unconditionally** — bulk create/update/delete, all
-  transactional and fail-fast (every row guard-checked before anything is written).
+  transactional and fail-fast (every row loaded and guard-checked in one batched call before
+  anything is written).
 - **Write commands for real domain transitions** — named, intent-carrying mutations
   (`POST {basePath}/{id}/actions/{name}`) for illegal-transition prevention and multi-step domain
   logic a full-replace `PUT` has no vocabulary to express.
 - **A filter DSL with zero extra code** — `SearchDto` fields suffixed `Gte`/`Lte`/`Gt`/`Lt`/`Like`/
-  `Ne`/`In` filter with that operator instead of plain equality, reflected automatically.
+  `ILike`/`StartsWith`/`Ne`/`In` filter with that operator instead of plain equality, reflected
+  automatically.
 - **Fully synchronous, thread-safe by construction** — one stateless `RestlessResourceHandler`
   Spring bean per resource, no mutable shared state; every request-scoped value is a method
   parameter or a local, never a field.
-- **RFC 9457-compliant error responses**, automatic OpenAPI/Swagger documentation, optimistic
-  concurrency (`@Version` + `If-Match`), soft delete, and JPA auditing — all opt-in, all with
-  minimal or zero extra code.
+- **RFC 9457-compliant error responses**, automatic OpenAPI/Swagger documentation, conditional
+  requests + optimistic concurrency (`@Version` + `ETag`/`If-Match`/`If-None-Match`), soft delete,
+  and JPA auditing — all opt-in, all with minimal or zero extra code.
 
 ## Requirements
 
 | Component | Version |
 |---|---|
-| Java | 25+ |
+| Java (shipped library — `app`/`processor`/`cerbos`/`spring-boot-restless-test`) | 17+ |
+| Java (building the full reactor, including the `example` module) | 25+ |
 | Spring Boot | 4.1.x |
 | Build tool | Maven 3.9+ (a wrapper, `./mvnw`, is bundled) |
 | Persistence | Spring Data JPA (a relational database with a `Specification`-capable `JpaRepository`) |
 | Authorization backend (optional) | [Cerbos](https://www.cerbos.dev/) PDP, via `spring-boot-restless-cerbos` |
 
 No other infrastructure is required for the base library — the optional `cerbos` module is the
-only piece with an external runtime dependency (a running Cerbos PDP).
+only piece with an external runtime dependency (a running Cerbos PDP). The `example` module
+(demo/tutorial code, never shipped) targets Java 25 and is free to use newer language features;
+the library you actually depend on only ever requires 17.
 
 ## Installation
 
@@ -199,6 +207,11 @@ restless:
     # Hard cap on GET {basePath}/list (unpaginated read). A response that hits the cap carries
     # the response header X-Restless-List-Truncated: true.
     max-size: 10000
+  soft-delete:
+    # true (default): findOne/a named view still return an already-soft-deleted row by id.
+    # false: 404 it there too, same as a row that was never there. A write on a soft-deleted
+    # row (update/patch/deleteById/a write action) always 404s, regardless of this setting.
+    include-in-single-read: true
 
 # Only read if spring-boot-restless-cerbos is on the classpath.
 cerbos:
@@ -217,6 +230,7 @@ cerbos:
 | `restless.list.max-size` | `int` | `10000` | Maximum rows returned by the unpaginated `GET {basePath}/list` route. |
 | `restless.page.max-size` | `int` | `2000` | Maximum client-supplied `size` on `GET {basePath}`/`.../overview`/`.../select/async`/a named read action - a request over this is rejected `400`, not silently clamped. |
 | `restless.bulk.max-size` | `int` | `1000` | Maximum items in a single `createBulk`/`updateBulk`/`deleteAll` request - over this is rejected `400` before any item is processed. |
+| `restless.soft-delete.include-in-single-read` | `boolean` | `true` | Whether `findOne`/a named view still returns an already-soft-deleted row (`true`) or 404s it too (`false`). A write on a soft-deleted row always 404s either way. |
 | `cerbos.client.target` | `String` | `localhost:3593` | Cerbos PDP address (`host:port`), gRPC. |
 | `cerbos.client.plaintext` | `boolean` | `true` | Whether the gRPC channel to the PDP is unencrypted. |
 | `cerbos.client.timeout` | `Duration` | `3s` | Deadline for a single `check`/`plan` RPC before the guard fails closed. |
@@ -232,6 +246,26 @@ The core usage pattern is not "inject a bean and call a method" — it's "declar
 DTOs, and the framework registers a live Spring MVC resource for you." This is the library's
 defining feature: for a standard entity, no service, controller, or repository class is written
 by hand at all.
+
+### Which tier does an entity need?
+
+Three levels of control exist, chosen per entity — authorization alone is never a reason to leave
+the codeless/generated tier, since `authorizationGuard` wires a real guard into a generated
+resource too. What actually forces the manual tier is entity-specific CUD logic, or needing a
+custom read action / write command / named view, none of which `@RestlessEntity` has an attribute
+for today:
+
+```mermaid
+flowchart TD
+    Q1{"Entity-specific create/update/delete logic,<br/>or a custom read action needed?"}
+    Q1 -->|No| Codeless["<b>Codeless tier</b><br/>Entity + 4 DTOs only —<br/>everything else is generated"]
+    Q1 -->|Yes| Q2{"Is depending on the <code>processor</code><br/>module (compile-time codegen) acceptable?"}
+    Q2 -->|Yes| Generated["<b>Generated + override</b><br/>Same as codeless, but point one or two<br/>@RestlessEntity attributes<br/>(createDataSource, authorizationGuard, ...)<br/>at a hand-written class"]
+    Q2 -->|"No — or need a write command /<br/>named read action / named view"| Manual["<b>Manual tier</b><br/>Hand-wire a RestlessResourceHandler<br/>subclass directly"]
+```
+
+The walkthrough below builds the codeless tier; see [Advanced Usage](#advanced-usage) for
+overriding one verb and the fully manual shape.
 
 **1. Annotate the entity:**
 
@@ -280,8 +314,8 @@ public class TaskDto implements EntityDto {
 ```
 
 **3. Build.** `RestlessEntityProcessor` (the `spring-boot-restless-processor` annotation
-processor) generates `TaskRepository`, a reflective `TaskMapper`, and `TaskRestlessResource` from
-just the code above. At application startup, `RestlessRegistrar` finds the generated resource and
+processor) generates `TaskRepository`, a `TaskMapper` (one explicit setter call per matched
+field), and `TaskRestlessResource` from just the code above. At application startup, `RestlessRegistrar` finds the generated resource and
 registers every route live against a real Spring Data JPA repository:
 
 ```java
@@ -396,8 +430,9 @@ Every resource gets three bulk routes for free — no opt-in, riding on the same
 | `POST` | `{basePath}/bulk-delete` | `{"ids": ["1", "2", "3"]}` | `204 No Content` |
 
 Every bulk write is one real transaction — all-or-nothing, not best-effort. Bulk update/delete
-additionally load and `canAccess`-check every target **before** writing anything, so a batch never
-partially applies because item #7 of 10 turned out to be denied.
+additionally load every target in one `findAllById` query and `canAccess`-check all of them in one
+batched `canAccessAll` call **before** writing anything, so a batch never partially applies
+because item #7 of 10 turned out to be denied.
 
 ```bash
 curl -X PUT -H "Content-Type: application/json" \
@@ -428,9 +463,12 @@ support, `In` on a non-`Collection` field, and a primitive filter field (it can 
 real entity property (e.g. `checkIn`) is treated as plain equality on that property, not the
 suffix - only once neither the full name nor the base resolves does startup fail.
 
-Combine with multi-field sort, Spring Data's own convention: `?sort=lastName,asc&sort=firstName,asc`.
-For anything beyond these operators (joins, boolean OR, cross-field logic), override
-`getSpecification()` — `RestlessSpecifications` is a small fluent builder for that escape hatch.
+Combine with multi-field sort, Spring Data's own convention: `?sort=lastName,asc&sort=firstName,asc`,
+or a single `?sort=lastName,asc` for one field. A leading `-` is also accepted as shorthand for
+descending (`?sort=-lastName`, same convention GitHub's and many other REST APIs' own sort
+parameters use). For anything beyond these operators (joins, boolean OR, cross-field logic),
+override `getSpecification()` — `RestlessSpecifications` is a small fluent builder for that escape
+hatch.
 
 ### Partial updates (`PATCH`)
 
@@ -554,6 +592,47 @@ public class TaskAuthorizationGuard implements AuthorizationGuard<Task> {
 public class Task { /* ... */ }
 ```
 
+`preCheck`/`scope`/`canAccess` are the three hooks most guards override; `AuthorizationGuard` has
+three more, each defaulting to delegating to one of the above so an existing guard keeps working
+unchanged unless it opts in: `canAccessAfterWrite` (post-image check after `update`/`patch`),
+`canAccessAll` (batched pre-image check for a bulk write), and `postProcessResponse` (response
+shaping after `Mapper.map(...)` — what `CerbosAuthorizationGuard` uses to auto-mask
+`@CerbosHiddenField` fields). The full lifecycle for a single-item `PUT`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant H as RestlessResourceHandler
+    participant G as AuthorizationGuard
+    participant D as UpdateDataSource
+    participant M as Mapper
+
+    C->>H: PUT /tasks/{id}
+    H->>G: preCheck(UPDATE)
+    alt denied
+        H-->>C: 403 Forbidden
+    end
+    H->>D: findOne(id)
+    D-->>H: Task (existing)
+    H->>G: canAccess(UPDATE, existing)
+    alt denied
+        H-->>C: 403 Forbidden
+    end
+    H->>H: checkIfMatch (optional - 412 on a stale/missing ETag match)
+    H->>D: update(id, model)
+    D-->>H: Task (updated)
+    H->>G: canAccessAfterWrite(UPDATE, updated)
+    alt denied
+        H-->>C: 403 Forbidden - transaction rolls back
+    end
+    H->>M: map(updated)
+    M-->>H: TaskDto
+    H->>G: postProcessResponse(UPDATE, updated, dto)
+    G-->>H: dto (CerbosAuthorizationGuard: masked here)
+    H-->>C: 200 OK + ETag
+```
+
 ### Overriding a single verb's data source
 
 Entity-specific create/update/delete logic doesn't require abandoning the generated tier — point
@@ -602,16 +681,17 @@ protected AuthorizationGuard<Task> getAuthorizationGuard() {
 | Add entity-specific CUD logic | Point `createDataSource`/`updateDataSource`/`deleteDataSource` at a hand-written class | Generated + override |
 | Control who can do what | `authorizationGuard = ...` / override `getAuthorizationGuard()` | Any |
 | Back authorization with policy-as-code | `CerbosAuthorizationGuard<E>` (`spring-boot-restless-cerbos`) | Any |
-| Hide individual fields per caller | `@CerbosHiddenField` + `CerbosFieldMasker`, called from your `Mapper` | Any (needs `cerbos`) |
+| Hide individual fields per caller | `@CerbosHiddenField` — masked automatically on single-entity responses; call `CerbosFieldMasker.maskAll` yourself for list/page responses | Any (needs `cerbos`) |
 | Restrict which routes exist | `operations = {...}` / override `getEnabledOperations()` | Any |
 | Add partial update (`PATCH`) | `patchDataSource = ...` / override `getPatchDataSource()` | Any |
 | Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`ILike`/`StartsWith`/`Ne`/`In`) | Any |
+| Return a stale concurrent write as `409`, add `ETag`/`If-Match`/`If-None-Match` | `@jakarta.persistence.Version` on the entity (automatic once added) | Any |
 | Add a filtered read beyond `SearchDto` | `getCustomReadActions()` | Hand-wired only |
 | Add a domain-meaningful mutation ("promote", "cancel") | `getCustomWriteActions()` — see [Write commands](#feature-guide) | Hand-wired only |
 | Expose a different response shape of the same entity | `getNamedViews()` | Hand-wired only |
 | Create/update/delete many rows in one request | `POST`/`PUT {basePath}/bulk`, `POST {basePath}/bulk-delete` | Any, unconditional |
-| Add optimistic concurrency | `@jakarta.persistence.Version` on the entity | Any |
 | Soft-delete instead of hard-delete | Implement `SoftDeletable`, `deleteDataSource = DefaultSoftDeleteDataSource` | Any |
+| Keep a soft-deleted row readable/unreadable by id | `restless.soft-delete.include-in-single-read` (default `true`) | Global |
 | Add `createdDate`/`lastModifiedDate` | Extend `AbstractAuditableEntity` + `@EnableJpaAuditing` | Any |
 | Version an API | `version = "..."` on `@RestlessEntity`/`@RestlessResource` | Any |
 | Expand a related resource inline | `@RestlessEmbed` on a DTO field, `?expand=name` | Any |
@@ -774,7 +854,8 @@ prioritized first:
 
 - `RestlessResourceHandler<E, K>` and its `get*DataSource()`/`getAuthorizationGuard()`/
   `getSpecification()`/`getCustomReadActions()`/`getEnabledOperations()` extension points.
-- `AuthorizationGuard<E>` and its three hook points (`preCheck`/`scope`/`canAccess`).
+- `AuthorizationGuard<E>` and its hook points (`preCheck`/`scope`/`canAccess`/
+  `canAccessAfterWrite`/`canAccessAll`/`postProcessResponse`).
 - The `@Restless*` annotation set: `@RestlessEntity`, `@RestlessResource`, `@RestlessEmbed`,
   `@RestlessMapperExclude`, `@CerbosHiddenField`.
 - The `*DataSource` base classes (`CreateDataSource`, `ReadDataSource`, `UpdateDataSource`,
@@ -909,11 +990,12 @@ responsibly.
 
 **Scope** — things that count as a security issue here:
 
-- Authorization bypass in `AuthorizationGuard`'s three hook points (`preCheck`/`scope`/
-  `canAccess`), `RestlessRegistrar`'s startup fail-fast-on-no-guard check, or the Cerbos-backed
+- Authorization bypass in any of `AuthorizationGuard`'s hook points (`preCheck`/`scope`/
+  `canAccess`/`canAccessAfterWrite`/`canAccessAll`/`postProcessResponse`),
+  `RestlessRegistrar`'s startup fail-fast-on-no-guard check, or the Cerbos-backed
   guard/field-masker in the `cerbos` module.
 - Mass-assignment / unintended field exposure through the reflective `Default*DataSource` classes
-  or the reflective default `Mapper` the annotation processor can generate.
+  or the default `Mapper` the annotation processor can generate.
 - Anything that lets one `@RestlessResource` read/write another's data (cross-resource isolation).
 - Injection via the reflection-driven default search filter (`getSpecification`) or
   `@RestlessEmbed` resolution.
@@ -1207,6 +1289,28 @@ above for what stability guarantees actually apply before 1.0.
 
 **Fixed**
 
+- **`@Id` declared on a shared `@MappedSuperclass` (e.g. a project-wide `BaseEntity`) failed
+  compilation** - `RestlessEntityProcessor` only ever looked at the annotated entity's own
+  declared fields, so an entity whose `@Id` actually lived on its superclass hit "has no field
+  annotated `@jakarta.persistence.Id`" even though one genuinely existed. `resolveIdType` now
+  walks superclasses the same way `declaredFieldsOf`/`reservedEntityFieldNames` already did,
+  resolving a generic superclass's own type argument (`BaseEntity<K>`) via `Types.asMemberOf`
+  rather than returning the erased type variable name. See `example`'s own `Skill`/`BaseEntity`
+  (`entity/shared`) for the end-to-end proof, and `RestlessEntityProcessorInheritedIdTest`
+  (`processor` module) for the isolated compile-time one.
+- **A single `?sort=field,direction` (one occurrence, not the repeated-param form) was silently
+  broken** - `?sort=date,asc` returned `400 "Unknown sort property 'asc'"`. `ServletRequestDataBinder`
+  hands a single-occurrence query parameter to the conversion service as a plain `String`, not a
+  one-element array; converting that onto `AbstractSearchDto#sort`'s `List<String>` then goes
+  through `DefaultConversionService`'s `StringToCollectionConverter`, which splits on *every*
+  comma in the whole string - turning one `"date,asc"` entry into two broken ones, `"date"` and
+  `"asc"`, each parsed as its own property with no direction. A repeated `sort` param
+  (`?sort=a,asc&sort=b,desc`) never hit this, since Spring binds a multi-value parameter as a real
+  array with no comma-splitting involved - which is why only the single-value form was broken.
+  `RestlessResourceHandler` now reads `sort`'s raw request-parameter values directly instead of
+  leaving it to the generic binder, bypassing the faulty conversion entirely. Also added: a
+  leading `-` as shorthand for descending (`?sort=-lastName`, same convention GitHub's and many
+  other REST APIs' own sort parameters use).
 - `SECURITY.md`/[Security Policy](#security-policy) pointed at a `<developers>` section in the
   root `pom.xml` that never existed - dead end for anyone trying to report a vulnerability
   privately. Now relies solely on GitHub's private vulnerability reporting (Security tab).

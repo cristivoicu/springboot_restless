@@ -38,7 +38,9 @@ write command / named view, none of which `@RestlessEntity` has an attribute for
 Write exactly five files, same package, naming convention `{Entity}{Suffix}` — nothing else:
 
 1. **Entity** — `@Entity`, no-arg constructor (Lombok `@NoArgsConstructor`/`@AllArgsConstructor`
-   is fine), annotated `@RestlessEntity(basePath = "/things")`.
+   is fine), annotated `@RestlessEntity(basePath = "/things")`. `@Id` may live directly on the
+   entity or on a shared `@MappedSuperclass` (a project-wide `BaseEntity`) - the processor walks
+   superclasses to find it either way, including through a generic one (`BaseEntity<K>`).
 2. **`{Entity}CreateModel`** implements `CreateModel` — bean-validated input fields for create.
 3. **`{Entity}UpdateModel`** implements `UpdateModel` — same idea for full-replace `PUT`.
 4. **`{Entity}SearchDto`** extends `AbstractSearchDto` — one field per equality/filter-DSL-suffixed
