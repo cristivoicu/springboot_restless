@@ -16,6 +16,7 @@ class, never a parameterized type):
 | `version` | — (forwarded verbatim) | No version constraint on this resource's routes |
 | `operations` | A `RestlessOperation[]` subset | Every fixed route (`ALL_OPERATIONS`) |
 | `allowAll` | — (boolean) | `false` — startup fails fast with no guard configured |
+| `parent` | `@RestlessParent(variable = "...", field = "...")` — nests this resource under a parent path variable | Unset — flat, non-nested resource |
 
 Example, pointing several at once:
 
@@ -96,3 +97,16 @@ needs a second hand-written `@RestController` or base path.
 - **OpenAPI/Swagger**: add `springdoc-openapi-starter-webmvc-ui` to the classpath — every route
   this framework registers (generated or hand-wired, fixed or bulk or a named action) is
   documented at `/v3/api-docs`/`/swagger-ui.html` automatically, no extra config.
+- **Nested (parent-scoped) resources**: `parent = @RestlessParent(variable = "eventId", field =
+  "eventId")` (on `@RestlessEntity` or `@RestlessResource`) mounts a resource under a parent's
+  path variable (`basePath = "/events/{eventId}/guests"`). `field` is a flat scalar column or one
+  dotted `association.idProperty` segment (`"event.id"`). The parent id is forced from the path
+  on create (a body value for the same field is ignored), auto-filtered on every read, protected
+  from being moved on update, and enforced as a 404 for both single-row and bulk writes targeting
+  a different parent. See `docs/DEEP_DIVE.md`'s own nested-resources tutorial for the full
+  semantics and a migration note for an existing flat resource.
+- **`RestlessContext`**: a context-aware overload on every `*DataSource` verb (`create(C,
+  RestlessContext)`, ...) and the static `RestlessContext.current()` give data sources/guards
+  access to resolved path variables (`ctx.pathVariable(name, Class)`), the request, and the
+  current `Authentication` — most useful together with `parent` above (reading the parent id in
+  a guard's own `preCheck`, cheaply, once per request) but available on any resource.

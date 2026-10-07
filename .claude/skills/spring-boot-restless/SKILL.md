@@ -109,6 +109,8 @@ resource on the manual tier (see reference/customization.md):
 | API versioning | `version = "1"` on `@RestlessEntity`/`@RestlessResource` |
 | Restrict which routes exist | `operations = {...}` (generated tier) / override `getEnabledOperations()` (manual) |
 | Embed a related resource inline | `@RestlessEmbed` on a DTO field, client sends `?expand=name` |
+| Mount under a parent's path variable (`/events/{eventId}/guests`) | `parent = @RestlessParent(variable = "eventId", field = "eventId")` (flat column, or `"event.id"` for a `@ManyToOne`) |
+| Read path variables/request/`Authentication` in a data source or guard | `RestlessContext` — a context-aware `*DataSource` overload, or `RestlessContext.current()` anywhere (e.g. a guard's `preCheck`) |
 
 ## Common pitfalls
 

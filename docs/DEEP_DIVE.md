@@ -47,6 +47,7 @@ action: fine-grained authorization.
 - [Tutorial: Cerbos-backed authorization](#tutorial-cerbos-backed-authorization)
 - [Tutorial: hiding fields with `@CerbosHiddenField`](#tutorial-hiding-fields-with-cerboshiddenfield)
 - [Tutorial: conditional requests and optimistic concurrency](#tutorial-conditional-requests-and-optimistic-concurrency)
+- [Tutorial: nested (parent-scoped) resources and `RestlessContext`](#tutorial-nested-parent-scoped-resources-and-restlesscontext)
 - [Tutorial: bulk operations](#tutorial-bulk-operations)
 - [Tutorial: write commands (`WriteAction`)](#tutorial-write-commands-writeaction)
 - [Running the full demo: Docker Compose + Keycloak](#running-the-full-demo-docker-compose--keycloak)
@@ -916,6 +917,145 @@ sequenceDiagram
 See `PreconditionSupport` (`app` module) for the implementation, and `ConditionalRequestsTest`/
 `WriteActionIfMatchTest` (`app`'s own `Widget`/`Racer` fixtures) for the full behavioral proof.
 
+## Tutorial: nested (parent-scoped) resources and `RestlessContext`
+
+Driven by a real consumer integration: an events app needed `/api/events/{eventId}/guests`, but
+the framework had no way to mount a resource under a parent's own path variable, and no way for
+a data source to see the request at all (so entity-specific create logic couldn't read `eventId`
+either). Two additions fix both gaps.
+
+### `RestlessContext`
+
+A per-request object, built right before `checkPreCheck` runs, carrying:
+
+- `pathVariables()` / `pathVariable(name, Class)` — every resolved path variable, the typed
+  accessor converting via the app's own `ConversionService` (a `400` on failure, not an unhandled
+  exception).
+- `request()` — the `HttpServletRequest` itself.
+- `authentication()` — the current Spring Security `Authentication`, typed `Object` (not
+  `Authentication`) since `app` has no *mandatory* Spring Security dependency — it's an
+  `optional=true` compile dependency purely so this field can exist; cast it yourself when your
+  app actually has Spring Security on the classpath. `null` otherwise, or when nothing's
+  authenticated.
+- `action()` / `customActionName()` — which `AuthorizationGuard.Action` (and, for a named
+  action/view, which name) this request is being checked against.
+
+Every `*DataSource` verb gained a context-aware overload (`create(C, RestlessContext)`,
+`update(K, U, RestlessContext)`, `findOne(K, RestlessContext)`, ...), each defaulting to the
+existing non-context method — `RestlessResourceHandler` always calls the context-aware form, so
+every hand-written data source that never overrides it keeps working completely unchanged:
+
+```java
+public class GuestCreateDataSource extends CreateDataSource<Guest, UUID, GuestCreateModel> {
+    @Override
+    public Guest create(GuestCreateModel model, RestlessContext ctx) {
+        UUID eventId = ctx.pathVariable("eventId", UUID.class);
+        // ... entity-specific create logic that genuinely needs the request ...
+    }
+}
+```
+
+It's also reachable anywhere via the static `RestlessContext.current()` — a nesting-safe
+thread-local, installed for the duration of each handler method and restored (not cleared) across
+a `@RestlessEmbed` call into a different resource mid-request. This is how a guard reaches it,
+since `AuthorizationGuard`'s own hook methods can't grow a new parameter without breaking every
+existing implementation:
+
+```java
+@Override
+public boolean preCheck(Action action, String customActionName, HttpServletRequest request) {
+    UUID eventId = RestlessContext.current().pathVariable("eventId", UUID.class);
+    return eventId != null && eventRepository.existsById(eventId); // cheap, once per request
+}
+```
+
+### `@RestlessParent`
+
+```java
+@RestlessEntity(basePath = "/events/{eventId}/guests",
+        parent = @RestlessParent(variable = "eventId", field = "eventId"))
+public class Guest {
+    @Id private UUID id;
+    private UUID eventId;      // flat scalar FK form
+    private String name;
+}
+```
+
+`field` names either a flat scalar column (above) or one dotted `association.idProperty` segment
+for a real `@ManyToOne`/`@OneToOne` (`field = "event.id"` against `private Event event`) — both
+resolved purely via reflection (no `EntityManager`/second repository lookup): the association
+form writes a *shallow* instance of the target type with just its id field set, the same
+"reference without a full load" shape `EntityManager.getReference(...)` gives.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Handler as RestlessResourceHandler
+    participant Guard as AuthorizationGuard
+    participant DS as CreateDataSource
+
+    Client->>Handler: POST /events/{eventId}/guests {name, eventId: "other-event"}
+    Handler->>Handler: build RestlessContext(pathVariables={eventId})
+    Handler->>Guard: preCheck(CREATE, ctx via current())
+    Guard-->>Handler: true (parent exists - cheap, once)
+    Handler->>DS: create(model, ctx)
+    DS-->>Handler: Guest{eventId = "other-event" (from body!)}
+    Handler->>Handler: writeParentFieldIfNested(guest, ctx)
+    Note over Handler: forces guest.eventId = ctx path value - body's "other-event" is discarded
+    Handler->>Guard: canAccess(CREATE, guest)
+    Guard-->>Handler: true
+    Handler-->>Client: 201 Created {eventId: "<path eventId>", ...}
+```
+
+Full semantics (all enforced by `RestlessResourceHandler`, none needing a hand-written override):
+
+1. **Routing** — every fixed/bulk/PATCH/named-action route registers under the templated path.
+   `RestlessRegistrar`'s duplicate-basePath check normalizes every `{variable}` segment first, so
+   `/a/{x}/b` and `/a/{y}/b` collide as the same route regardless of what either resource calls
+   its own variable.
+2. **Create** (single + bulk) — the parent field is forced to the path's value *after* the create
+   model is applied; a body-supplied value for the same field (as in the diagram above) is always
+   discarded, never honored.
+3. **Reads** — a `parentField = :pathValue` predicate is auto-ANDed onto the specification,
+   *before* the guard's own `scope()`.
+4. **Single-row routes** (`GET`/`PUT`/`PATCH`/`DELETE`/a named action) for a row under a
+   *different* parent `404` — checked inside the same transaction, before `canAccess`, so a
+   caller can't distinguish "wrong parent" from "never existed". **Bulk** update/delete: even one
+   foreign-parent target fails the *whole* batch with `404`, nothing written.
+5. **Update/patch can never move a row** to a different parent — protected like `@Id`, forcibly
+   reset after every write regardless of what the data source did with a body-supplied value.
+6. **An unconvertible path value is a clean `400`**, via the app's own `ConversionService`.
+7. **Both parent-field forms are supported** — a flat scalar column, or one dotted
+   `association.idProperty` segment. The processor validates `field` at compile time for the
+   generated tier (exists, isn't a type a path variable could never convert to, e.g. a
+   `Collection`); a runtime check in `RestlessResourceHandler#init` backstops both tiers
+   (`IllegalStateException` at startup if `variable` doesn't actually appear in `basePath`).
+8. **A guard can cheaply authorize the parent once per request** via `RestlessContext` in its own
+   `preCheck` (see above) — cheaper than letting every action fall through to the per-row
+   404-on-mismatch check, which only runs once a row has already been loaded.
+9. **OpenAPI documents the parent path parameter** (with the right schema type, from
+   `ResourceMetadata#parentIdType()`) on every route of a nested resource.
+10. **`@RestlessEmbed` and soft delete keep working unchanged** on a nested resource.
+
+See `example`'s `Task` (`/projects/{projectId}/tasks`, `field = "project.id"` — the dotted
+association form, plus `TaskAuthorizationGuardBean` demonstrating item 8) and `app`'s `Ticket`
+fixture (`/boards/{boardId}/tickets`, a flat scalar `boardId` — the backend-nunti-shaped form) for
+full end-to-end proofs.
+
+### Migrating a flat resource to nested
+
+A resource that used to take the parent id from the body/query string (`POST /guests` with
+`eventId` in the create model, `GET /guests?eventId=...`) moves to the templated path instead:
+
+1. Drop the parent-id field from the create/update models and search DTO — it's never read from
+   the body again once `parent` is set.
+2. Change `basePath` to the templated form and add `parent = @RestlessParent(...)`.
+3. Point every client at `/events/{eventId}/guests` instead of `/guests?eventId=...`.
+4. Delete anything that only existed to inject/validate the parent id by hand — a
+   `GuestCreateDataSource` whose only job was copying a body `eventId` onto the entity, or an
+   `OwnedByEventGuard` whose only job was the same per-row ownership check
+   `RestlessResourceHandler` now runs automatically, can usually go away entirely.
+
 ## Tutorial: bulk operations
 
 Every resource — any tier, generated or hand-wired — gets three bulk routes for free, since bulk
@@ -1265,6 +1405,14 @@ principal, since this demo has no such role modeled.
 
 ## API completeness
 
+- **Nested (parent-scoped) resources and `RestlessContext`.** `@RestlessParent` mounts a resource
+  under a parent's own path variable (`/events/{eventId}/guests`), with the parent field forced
+  from the path on create, auto-ANDed onto every read filter, protected from being moved on
+  update, and enforced as a 404-on-mismatch for both single-row and bulk writes. `RestlessContext`
+  gives data sources/guards access to the resolved path variables, request, and `Authentication`
+  without a new parameter on `AuthorizationGuard` itself. See
+  [Tutorial: nested (parent-scoped) resources and `RestlessContext`](#tutorial-nested-parent-scoped-resources-and-restlesscontext)
+  above for the full walkthrough.
 - **`PATCH`** — entirely opt-in (`@RestlessEntity(patchDataSource = ...)` or a resource overriding
   `getPatchDataSource()`), unlike the four mandatory CUD verbs: no route gets registered at all
   until one is provided. `DefaultPatchDataSource` is the reflective default — copies whichever
