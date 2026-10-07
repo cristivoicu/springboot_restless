@@ -24,14 +24,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * ({@code CREATE} - {@code create}/{@code createBulk} - plus {@code READ_LIST}; see {@code
  * BulkTransactionRollbackTest}), plus one extra route per named custom read action (Gadget's
  * {@code byEmailDomain}), per named write action (Gadget's {@code rename}), per named view
- * (Gadget's {@code summary}), and per opt-in {@code PATCH} route (Doohickey's), no more, no
- * fewer.
+ * (Gadget's {@code summary}), and per opt-in {@code PATCH} route (Doohickey's), plus Ticket
+ * (Feature B's scalar-FK nested-resource fixture, full CRUD, mounted under the templated
+ * {@code /boards/{boardId}/tickets}), no more, no fewer.
  */
 @SpringBootTest
 class DynamicRouteCountTest {
 
     private static final int FIXED_ROUTES_PER_RESOURCE = 11;
-    private static final int FULL_CRUD_RESOURCE_COUNT = 8; // Gadget, Gizmo, Sprocket, Doohickey (both generated), Widget, Task, Racer, Doodad
+    private static final int FULL_CRUD_RESOURCE_COUNT = 9; // Gadget, Gizmo, Sprocket, Doohickey (both generated), Widget, Task, Racer, Doodad, Ticket
     private static final int READ_ONLY_ROUTE_COUNT = 3; // Cog: READ_ONE, READ_LIST, READ_PAGE only
     private static final int CREATE_AND_LIST_ROUTE_COUNT = 3; // Bolt: create, createBulk, findList only
     private static final int CUSTOM_READ_ACTION_COUNT = 1; // Gadget's "byEmailDomain"
