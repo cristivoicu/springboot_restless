@@ -5,6 +5,8 @@ import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 import ro.cristivoicu.springbootrestless.datasource.TypedDataSource;
 import ro.cristivoicu.springbootrestless.models.CreateModel;
 import ro.cristivoicu.springbootrestless.repository.SpecificationRepository;
+import ro.cristivoicu.springbootrestless.annotation.RestlessSubtype;
+import ro.cristivoicu.springbootrestless.resource.RestlessContext;
 
 /**
  * Default {@link CreateDataSource}: builds a new entity instance and copies whichever
@@ -33,9 +35,41 @@ public class DefaultCreateDataSource<E, K, C extends CreateModel>
 
     @Override
     public E create(C createDto) {
-        E entity = BeanUtils.instantiate(entityType);
-        BeanUtils.copyProperties(createDto, entity, ProtectedEntityFields.of(entityType));
+        return specificationRepository.save(instantiate(createDto));
+    }
+
+    /**
+     * Server-managed fields (a nested resource's parent, {@code @RestlessFromPrincipal}) are
+     * written onto the entity <em>before</em> it's saved - see {@link RestlessContext#applyParentTo}
+     * for why after-the-fact isn't enough for a NOT NULL column.
+     */
+    @Override
+    public E create(C createDto, RestlessContext context) {
+        E entity = instantiate(createDto);
+        if (context != null) {
+            context.applyServerFieldsTo(entity);
+        }
         return specificationRepository.save(entity);
+    }
+
+    /**
+     * The resource's entity type - or, for a polymorphic resource, the subclass the create model's
+     * {@link RestlessSubtype} names (found on the model's class or any superclass).
+     */
+    private E instantiate(C createDto) {
+        Class<?> target = entityType;
+        RestlessSubtype subtype = org.springframework.core.annotation.AnnotationUtils.findAnnotation(createDto.getClass(), RestlessSubtype.class);
+        if (subtype != null) {
+            if (!entityType.isAssignableFrom(subtype.value())) {
+                throw new IllegalStateException("@RestlessSubtype(" + subtype.value().getSimpleName() + ") on "
+                        + createDto.getClass().getSimpleName() + " isn't a subtype of " + entityType.getSimpleName());
+            }
+            target = subtype.value();
+        }
+        @SuppressWarnings("unchecked")
+        E entity = (E) BeanUtils.instantiateClass(target);
+        BeanUtils.copyProperties(createDto, entity, ProtectedEntityFields.of(target));
+        return entity;
     }
 
     @Override

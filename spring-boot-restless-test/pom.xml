@@ -51,6 +51,13 @@
             <artifactId>hamcrest</artifactId>
         </dependency>
 
+        <!-- RestlessOwnershipContract reads ids out of JSON responses; compile scope for the same
+             reason as hamcrest above. Version managed by spring-boot-starter-parent's BOM. -->
+        <dependency>
+            <groupId>com.jayway.jsonpath</groupId>
+            <artifactId>json-path</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

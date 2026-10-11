@@ -131,4 +131,58 @@ public @interface RestlessEntity {
      * {@code @RestlessResource(parent = ...)}.
      */
     RestlessParent parent() default @RestlessParent;
+
+    /**
+     * What a denied caller gets - see {@code RestlessDenial}. {@link RestlessDenial#DEFAULT}
+     * defers to {@code restless.authorization.deny-as}. Forwarded onto the generated
+     * {@code @RestlessResource}.
+     */
+    RestlessDenial denyAs() default RestlessDenial.DEFAULT;
+
+    /**
+     * {@code ReadAction} beans served at {@code GET {basePath}/actions/{name}} as a page of rows,
+     * each named with {@code @RestlessActionName}.
+     */
+    Class<?>[] readActions() default {};
+
+    /**
+     * {@code CollectionAction} beans - a summary, an export, a download link - served at
+     * {@code GET {basePath}/actions/{name}}, each named with {@code @RestlessActionName}.
+     */
+    Class<?>[] collectionActions() default {};
+
+    /** {@code WriteAction} beans served at {@code POST {basePath}/{id}/actions/{name}}, each named with {@code @RestlessActionName}. */
+    Class<?>[] writeActions() default {};
+
+    /**
+     * Named views - {@code Mapper<Entity, ?>} beans served at {@code GET {basePath}/{id}/{name}},
+     * each named with {@code @RestlessActionName}. A view may return a {@code RestlessBinary}
+     * (a PDF, an image) instead of JSON.
+     */
+    Class<?>[] views() default {};
+
+    /** {@code RestlessLifecycleHook<Entity>} beans run around every write, in this order. */
+    Class<?>[] hooks() default {};
+
+    /**
+     * {@code POST {basePath}} also accepts {@code multipart/form-data}, bound onto the create model
+     * (a {@code MultipartFile} field receives the file part of the same name).
+     */
+    boolean multipartCreate() default false;
+
+    /** How {@code POST {basePath}/bulk} treats bad rows - see {@code RestlessBulkMode}. */
+    RestlessBulkMode bulkMode() default RestlessBulkMode.DEFAULT;
+
+    /** A {@code RestlessDedupeKey<Entity, CreateModel>} bean - duplicates are skipped by a {@code PARTIAL} bulk create. */
+    Class<?> bulkDedupe() default Void.class;
+
+    /** What a plain {@code GET {basePath}} returns - see {@code RestlessCollectionGet}. */
+    RestlessCollectionGet collectionGet() default RestlessCollectionGet.DEFAULT;
+
+    /**
+     * The repository to use instead of the {@code {Entity}Repository} naming convention in the
+     * entity's own package - for a project whose repositories live elsewhere. Must extend
+     * {@code SpecificationRepository<Entity, Id>}.
+     */
+    Class<?> repository() default Void.class;
 }

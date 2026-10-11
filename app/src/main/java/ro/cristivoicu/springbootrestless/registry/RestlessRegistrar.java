@@ -13,7 +13,10 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import ro.cristivoicu.springbootrestless.annotation.RestlessResource;
+import ro.cristivoicu.springbootrestless.annotation.RestlessDenial;
+import ro.cristivoicu.springbootrestless.annotation.RestlessImmutable;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
+import ro.cristivoicu.springbootrestless.authorization.RestlessPrincipalIdResolver;
 import ro.cristivoicu.springbootrestless.autoconfigure.RestlessProperties;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
@@ -48,6 +51,7 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
     private final PlatformTransactionManager transactionManager;
     private final RestlessAuthorizationMetrics metrics;
     private final RestlessProperties properties;
+    private final RestlessPrincipalIdResolver principalIdResolver;
 
     public RestlessRegistrar(ApplicationContext applicationContext,
                               RequestMappingHandlerMapping requestMappingHandlerMapping,
@@ -58,6 +62,20 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
                               PlatformTransactionManager transactionManager,
                               ObjectProvider<RestlessAuthorizationMetrics> metricsProvider,
                               RestlessProperties properties) {
+        this(applicationContext, requestMappingHandlerMapping, objectMapper, conversionService, validator, embedResolver,
+                transactionManager, metricsProvider, properties, RestlessPrincipalIdResolver.AUTHENTICATION_NAME);
+    }
+
+    public RestlessRegistrar(ApplicationContext applicationContext,
+                              RequestMappingHandlerMapping requestMappingHandlerMapping,
+                              ObjectMapper objectMapper,
+                              ConversionService conversionService,
+                              Validator validator,
+                              RestlessEmbedResolver embedResolver,
+                              PlatformTransactionManager transactionManager,
+                              ObjectProvider<RestlessAuthorizationMetrics> metricsProvider,
+                              RestlessProperties properties,
+                              RestlessPrincipalIdResolver principalIdResolver) {
         this.applicationContext = applicationContext;
         this.requestMappingHandlerMapping = requestMappingHandlerMapping;
         this.objectMapper = objectMapper;
@@ -71,6 +89,7 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         // every resource gets the shared no-op NONE instance instead.
         this.metrics = metricsProvider.getIfAvailable(() -> RestlessAuthorizationMetrics.NONE);
         this.properties = properties == null ? new RestlessProperties() : properties;
+        this.principalIdResolver = principalIdResolver;
     }
 
     @Override
@@ -102,7 +121,13 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         resource.init(new RestlessInitContext(metadata, objectMapper, conversionService, validator, embedResolver,
                 transactionManager, metrics, properties.getList().getMaxSize(), properties.getPage().getMaxSize(),
                 properties.getBulk().getMaxSize(), properties.getSoftDelete().isIncludeInSingleRead(),
-                annotation.parent().variable(), annotation.parent().field()));
+                annotation.parent().variable(), annotation.parent().field(),
+                annotation.denyAs() == RestlessDenial.DEFAULT ? properties.getAuthorization().getDenyAs() : annotation.denyAs(),
+                principalIdResolver,
+                properties.getImmutable().getOnUpdate() == RestlessImmutable.OnChange.REJECT,
+                annotation.bulkMode(),
+                annotation.collectionGet() == ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet.DEFAULT
+                        ? properties.getCollectionGet() : annotation.collectionGet()));
 
         // Fail-fast, not fail-open: a resource with no real AuthorizationGuard (still the
         // default-permissive AuthorizationGuard.allowAll()) never gets registered at all unless
@@ -124,12 +149,28 @@ public class RestlessRegistrar implements SmartInitializingSingleton {
         Set<AuthorizationGuard.Action> enabledOperations = resource.getEnabledOperations();
         RestlessRoutes.FIXED.stream()
                 .filter(route -> enabledOperations.contains(route.operation()))
-                .forEach(route -> registerRoute(resource, basePath + route.pathSuffix(), route.httpMethod(), route.handlerMethodName(), version));
+                .forEach(route -> registerRoute(resource, basePath + RestlessRoutes.pathSuffixOf(route, resource.getCollectionGet()),
+                        route.httpMethod(), route.handlerMethodName(), version));
+        // collectionGet = LIST: GET {basePath} is the bare list, and /list stays as an alias.
+        if (resource.getCollectionGet() == ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet.LIST
+                && enabledOperations.contains(AuthorizationGuard.Action.READ_LIST)) {
+            registerRoute(resource, basePath + "/list", RequestMethod.GET, "findList", version);
+        }
 
         // One extra route per named ReadAction, all sharing the single customRead Method -
         // getCustomReadActions() is empty by default, so this is a no-op for most resources.
         resource.getCustomReadActions().keySet().forEach(actionName ->
                 registerRoute(resource, basePath + "/actions/" + actionName, RequestMethod.GET, "customRead", version));
+
+        // Collection actions share the /actions/ namespace with custom read actions - a name used by
+        // both would make one of them unreachable, so that's a startup error, not a silent shadow.
+        resource.getCollectionActions().keySet().forEach(actionName -> {
+            if (resource.getCustomReadActions().containsKey(actionName)) {
+                throw new IllegalStateException("Resource at '" + basePath + "' declares '" + actionName
+                        + "' as both a custom read action and a collection action");
+            }
+            registerRoute(resource, basePath + "/actions/" + actionName, RequestMethod.GET, "collectionAction", version);
+        });
 
         // One extra route per named view, all sharing the single namedView Method - same
         // no-op-by-default shape as custom read actions above, just single-item (by id) instead

@@ -106,12 +106,19 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
 
         for (RestlessRoutes.RouteDefinition route : RestlessRoutes.FIXED) {
             if (enabled.contains(route.operation())) {
-                addFixedRoute(openApi, metadata, tag, route);
+                addFixedRoute(openApi, metadata, tag, route, RestlessRoutes.pathSuffixOf(route, resource.getCollectionGet()));
             }
         }
 
         resource.getCustomReadActions().forEach((actionName, action) ->
                 addCustomReadRoute(openApi, metadata, tag, actionName, action));
+
+        resource.getCollectionActions().keySet().forEach(actionName ->
+                addCollectionActionRoute(openApi, metadata, tag, actionName));
+
+        if (resource.acceptsMultipartCreate() && enabled.contains(AuthorizationGuard.Action.CREATE)) {
+            addMultipartCreateBody(openApi, metadata);
+        }
 
         resource.getNamedViews().forEach((viewName, mapper) ->
                 addNamedViewRoute(openApi, metadata, tag, viewName, mapper));
@@ -124,8 +131,9 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
 
     // ---- one branch per fixed-route shape ----
 
-    private void addFixedRoute(OpenAPI openApi, ResourceMetadata metadata, String tag, RestlessRoutes.RouteDefinition route) {
-        String path = metadata.basePath() + route.pathSuffix();
+    private void addFixedRoute(OpenAPI openApi, ResourceMetadata metadata, String tag, RestlessRoutes.RouteDefinition route,
+                               String pathSuffix) {
+        String path = metadata.basePath() + pathSuffix;
         Operation operation = new Operation()
                 .addTagsItem(tag)
                 .operationId(operationId(route.handlerMethodName(), metadata))
@@ -316,6 +324,37 @@ public class RestlessOpenApiCustomizer implements GlobalOpenApiCustomizer {
             case DELETE -> { if (pathItem.getDelete() == null) pathItem.setDelete(operation); }
             default -> throw new IllegalStateException("No Restless route ever uses " + httpMethod);
         }
+    }
+
+    /**
+     * A {@code CollectionAction}'s result type isn't known statically (any JSON value, or a
+     * {@code RestlessBinary}), so the response is documented as "any" - the route, its parent
+     * parameter and its authorization semantics are what matters here.
+     */
+    private void addCollectionActionRoute(OpenAPI openApi, ResourceMetadata metadata, String tag, String actionName) {
+        String path = metadata.basePath() + "/actions/" + actionName;
+        Operation operation = new Operation()
+                .addTagsItem(tag)
+                .operationId(operationId("collection_" + actionName, metadata))
+                .summary("Collection action \"" + actionName + "\" on " + tag + " - over the caller's visible rows");
+        addParentParameterIfNested(operation, openApi, metadata);
+        operation.responses(new ApiResponses().addApiResponse("200", new ApiResponse().description("OK")
+                .content(new Content().addMediaType("*/*", new MediaType().schema(new Schema<>())))));
+        applyVersion(operation, metadata.version());
+        putOperation(openApi, path, RequestMethod.GET, operation);
+    }
+
+    /** {@code POST {basePath}} also takes {@code multipart/form-data} - the same create model, as form fields and file parts. */
+    private void addMultipartCreateBody(OpenAPI openApi, ResourceMetadata metadata) {
+        if (openApi.getPaths() == null || openApi.getPaths().get(metadata.basePath()) == null) {
+            return;
+        }
+        Operation create = openApi.getPaths().get(metadata.basePath()).getPost();
+        if (create == null || create.getRequestBody() == null || create.getRequestBody().getContent() == null) {
+            return;
+        }
+        create.getRequestBody().getContent().addMediaType("multipart/form-data",
+                new MediaType().schema(refSchema(openApi, metadata.createModelType())));
     }
 
     private RequestBody jsonBody(Schema<?> schema, boolean required) {

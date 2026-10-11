@@ -59,6 +59,14 @@ public class RestlessEntityProcessor extends AbstractProcessor {
     private static final String SOFT_DELETABLE_INTERFACE = "ro.cristivoicu.springbootrestless.datasource.SoftDeletable";
     private static final String VOID_SENTINEL = "java.lang.Void"; // "not overridden" - see RestlessEntity's javadoc
     private static final String MAPPER_EXCLUDE_ANNOTATION = "ro.cristivoicu.springbootrestless.annotation.RestlessMapperExclude";
+    private static final String OWNED_BY_ANNOTATION = "ro.cristivoicu.springbootrestless.annotation.RestlessOwnedBy";
+    // Runtime annotation from the app module - matched by name, this module stays dependency-free.
+    private static final String FROM_PRINCIPAL_ANNOTATION = "ro.cristivoicu.springbootrestless.annotation.RestlessFromPrincipal";
+    private static final String OWNERSHIP_GUARDS = "ro.cristivoicu.springbootrestless.authorization.ownership.RestlessOwnershipGuards";
+
+    /** {@code @RestlessOwnedBy}, resolved: the Java expression that builds the guard from the {@code ownershipGuards} bean. */
+    private record Ownership(String guardExpression) {
+    }
 
     /** A resolved {@code *DataSource} verb: either "use the default" (typeFqn == null,
      * constructed inline from the repository) or "inject this hand-written bean instead"
@@ -147,13 +155,25 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         if (updateEnabled) {
             checkNoProtectedFields(updateModel, reservedFieldNames, "UpdateModel", entityType);
         }
+        // @RestlessFromPrincipal fields are written from the principal, never from a body - a
+        // model declaring one would only ever have its value ignored, which is a mistake.
+        Set<String> principalFieldNames = fieldsAnnotated(entityType, FROM_PRINCIPAL_ANNOTATION);
+        if (createEnabled) {
+            checkNoPrincipalFields(createModel, principalFieldNames, "CreateModel", entityType);
+        }
+        if (updateEnabled) {
+            checkNoPrincipalFields(updateModel, principalFieldNames, "UpdateModel", entityType);
+        }
 
         String mapper = resolveMapperType(entityType, packageName, entityName);
         if (mapper == null) {
             return; // errors already reported via the messager
         }
 
-        String repository = resolveOrGenerateRepository(packageName, entityName, idType, entityType);
+        TypeMirror repositoryOverride = readClassAttribute(entityType, "repository");
+        String repository = isVoidSentinel(repositoryOverride)
+                ? resolveOrGenerateRepository(packageName, entityName, idType, entityType)
+                : repositoryOverride.toString();
 
         VerbOverride createDataSource = resolveVerbOverride(entityType, "createDataSource");
         VerbOverride readDataSource = resolveVerbOverride(entityType, "readDataSource");
@@ -169,16 +189,204 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         TypeElement patchModelElement = resolvePatchModelType(patchDataSource);
         if (patchModelElement != null) {
             checkNoProtectedFields(patchModelElement.getQualifiedName().toString(), reservedFieldNames, "PatchModel", entityType);
+            checkNoPrincipalFields(patchModelElement.getQualifiedName().toString(), principalFieldNames, "PatchModel", entityType);
             checkPatchModelHasNoPrimitiveFields(patchModelElement);
         }
 
         validateParent(entityType, restlessEntity, entityName);
 
+        Ownership ownership = resolveOwnership(entityType, entityName, authorizationGuard);
+        if (ownership == null && hasAnnotation(entityType, OWNED_BY_ANNOTATION)) {
+            return; // errors already reported via the messager
+        }
+
         writeResourceClass(packageName, entityName, idType, createModel, updateModel, searchDto, mapper,
                 repository, restlessEntity.basePath(), restlessEntity.version(), restlessEntity.operations(),
                 restlessEntity.allowAll(), createEnabled, updateEnabled, createDataSource, readDataSource,
                 updateDataSource, deleteDataSource, authorizationGuard, patchDataSource,
-                restlessEntity.parent().variable(), restlessEntity.parent().field(), entityType);
+                restlessEntity.parent().variable(), restlessEntity.parent().field(),
+                restlessEntity.denyAs(), ownership, readComponents(entityType), restlessEntity.multipartCreate(),
+                restlessEntity.bulkMode(), restlessEntity.collectionGet(), resolveVerbOverride(entityType, "bulkDedupe"), entityType);
+    }
+
+    /** The bean lists of {@code @RestlessEntity}: actions, views, hooks - each a list of class names. */
+    private record Components(List<String> readActions, List<String> collectionActions, List<String> writeActions,
+                              List<String> views, List<String> hooks) {
+    }
+
+    private Components readComponents(TypeElement entityType) {
+        return new Components(classListAttribute(entityType, "readActions"), classListAttribute(entityType, "collectionActions"),
+                classListAttribute(entityType, "writeActions"), classListAttribute(entityType, "views"),
+                classListAttribute(entityType, "hooks"));
+    }
+
+    /** A {@code Class<?>[]} attribute of {@code @RestlessEntity}, read through mirrors - same reason as {@link #readClassAttribute}. */
+    private List<String> classListAttribute(TypeElement entityType, String attributeName) {
+        List<String> names = new ArrayList<>();
+        for (AnnotationMirror mirror : entityType.getAnnotationMirrors()) {
+            if (!mirror.getAnnotationType().toString().equals(RestlessEntity.class.getCanonicalName())) {
+                continue;
+            }
+            Object value = annotationValue(mirror, attributeName);
+            if (value instanceof List<?> list) {
+                for (Object item : list) {
+                    names.add(((AnnotationValue) item).getValue().toString());
+                }
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Constructor parameters, field assignments and the accessor override for one bean list:
+     * {@code accessor} returns {@code returnType}, built from the injected beans by {@code builder}
+     * ({@code "RestlessActions.byName"} or {@code "java.util.List.of"}).
+     */
+    private String[] componentCode(List<String> types, String fieldName, String returnType, String accessorSignature,
+                                   String builder, StringBuilder extraParams) {
+        if (types.isEmpty()) {
+            return new String[]{"", "", ""};
+        }
+        List<String> params = new ArrayList<>();
+        for (int i = 0; i < types.size(); i++) {
+            String param = fieldName + i;
+            extraParams.append(", ").append(types.get(i)).append(' ').append(param);
+            params.add(param);
+        }
+        String field = "    private final " + returnType + " " + fieldName + ";\n";
+        String assignment = "        this." + fieldName + " = " + builder + "(" + String.join(", ", params) + ");\n";
+        String accessor = "\n"
+                + "    @Override\n"
+                + "    " + accessorSignature + " {\n"
+                + "        return " + fieldName + ";\n"
+                + "    }\n";
+        return new String[]{field, assignment, accessor};
+    }
+
+    /**
+     * {@code @RestlessOwnedBy}: validates the declaration and returns the guard-building
+     * expression, or {@code null} when the entity has no such annotation - or has an invalid one
+     * (errors reported). Exactly one shape: {@code field}, or {@code path} + {@code via} +
+     * {@code ownerField}; never together with an explicit {@code authorizationGuard}.
+     */
+    private Ownership resolveOwnership(TypeElement entityType, String entityName, VerbOverride authorizationGuard) {
+        AnnotationMirror mirror = findAnnotation(entityType, OWNED_BY_ANNOTATION);
+        if (mirror == null) {
+            return null;
+        }
+        String field = (String) annotationValue(mirror, "field");
+        String path = (String) annotationValue(mirror, "path");
+        String ownerField = (String) annotationValue(mirror, "ownerField");
+        TypeMirror via = (TypeMirror) annotationValue(mirror, "via");
+        boolean viaSet = !isVoidSentinel(via);
+
+        if (authorizationGuard.isOverridden()) {
+            messager.printMessage(Diagnostic.Kind.ERROR, "@RestlessOwnedBy and @RestlessEntity(authorizationGuard) "
+                    + "can't be combined - the ownership guard IS the authorization guard", entityType);
+            return null;
+        }
+        boolean direct = !field.isBlank();
+        boolean throughParent = !path.isBlank() || viaSet || !ownerField.isBlank();
+        if (direct == throughParent || (throughParent && (path.isBlank() || !viaSet || ownerField.isBlank()))) {
+            messager.printMessage(Diagnostic.Kind.ERROR, "@RestlessOwnedBy: set either field, or path + via + ownerField", entityType);
+            return null;
+        }
+        if (direct) {
+            if (!pathExists(entityType, field, entityType, "field")) {
+                return null;
+            }
+            return new Ownership("ownershipGuards.owned(%s.class, \"%s\")".formatted(entityName, field));
+        }
+        TypeElement viaType = asTypeElement(via);
+        if (!pathExists(entityType, path, entityType, "path") || viaType == null
+                || !pathExists(viaType, ownerField, entityType, "ownerField")) {
+            return null;
+        }
+        return new Ownership("ownershipGuards.ownedVia(%s.class, \"%s\", %s.class, \"%s\")"
+                .formatted(entityName, path, viaType.getQualifiedName(), ownerField));
+    }
+
+    /** A field path with at most one association hop ({@code "ownerId"}, {@code "event.id"}) exists on {@code type}; reports an error on {@code origin} otherwise. */
+    private boolean pathExists(TypeElement type, String path, TypeElement origin, String attribute) {
+        String[] parts = path.split("\\.");
+        if (parts.length > 2) {
+            messager.printMessage(Diagnostic.Kind.ERROR, "@RestlessOwnedBy(" + attribute + " = \"" + path
+                    + "\"): at most one association hop", origin);
+            return false;
+        }
+        TypeElement current = type;
+        for (String part : parts) {
+            Element element = current == null ? null : findFieldElement(current, part);
+            if (element == null) {
+                messager.printMessage(Diagnostic.Kind.ERROR, "@RestlessOwnedBy(" + attribute + " = \"" + path
+                        + "\"): no property '" + part + "' on " + (current == null ? "?" : current.getSimpleName()), origin);
+                return false;
+            }
+            current = asTypeElement(element.asType());
+        }
+        return true;
+    }
+
+    private AnnotationMirror findAnnotation(TypeElement type, String annotationFqn) {
+        for (AnnotationMirror mirror : type.getAnnotationMirrors()) {
+            if (mirror.getAnnotationType().toString().equals(annotationFqn)) {
+                return mirror;
+            }
+        }
+        return null;
+    }
+
+    private boolean hasAnnotation(TypeElement type, String annotationFqn) {
+        return findAnnotation(type, annotationFqn) != null;
+    }
+
+    private Object annotationValue(AnnotationMirror mirror, String attributeName) {
+        for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry
+                : elements.getElementValuesWithDefaults(mirror).entrySet()) {
+            if (entry.getKey().getSimpleName().contentEquals(attributeName)) {
+                return entry.getValue().getValue();
+            }
+        }
+        return null;
+    }
+
+    /** Names of every field on {@code type}'s hierarchy annotated {@code annotationFqn}. */
+    private Set<String> fieldsAnnotated(TypeElement type, String annotationFqn) {
+        Set<String> names = new LinkedHashSet<>();
+        for (TypeElement current = type; current != null && !current.getQualifiedName().contentEquals("java.lang.Object");
+             current = asTypeElement(current.getSuperclass())) {
+            for (Element enclosed : current.getEnclosedElements()) {
+                if (enclosed.getKind() != ElementKind.FIELD) {
+                    continue;
+                }
+                for (AnnotationMirror mirror : enclosed.getAnnotationMirrors()) {
+                    if (mirror.getAnnotationType().toString().equals(annotationFqn)) {
+                        names.add(enclosed.getSimpleName().toString());
+                    }
+                }
+            }
+        }
+        return names;
+    }
+
+    /** Emits a compile error for every model field named like a {@code @RestlessFromPrincipal} entity field. */
+    private void checkNoPrincipalFields(String modelQualifiedName, Set<String> principalNames, String modelKind, TypeElement entityType) {
+        if (principalNames.isEmpty()) {
+            return;
+        }
+        TypeElement model = elements.getTypeElement(modelQualifiedName);
+        if (model == null) {
+            return;
+        }
+        for (Element enclosed : model.getEnclosedElements()) {
+            if ((enclosed.getKind() == ElementKind.FIELD || enclosed.getKind() == ElementKind.RECORD_COMPONENT)
+                    && principalNames.contains(enclosed.getSimpleName().toString())) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "@RestlessEntity: " + modelKind + " field '" + enclosed.getSimpleName() + "' is @RestlessFromPrincipal on "
+                                + entityType.getSimpleName() + " - it's always set from the principal and never read from a "
+                                + "body; remove it from the model", enclosed);
+            }
+        }
     }
 
     /**
@@ -632,7 +840,11 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                                      VerbOverride updateDataSource, VerbOverride deleteDataSource,
                                      VerbOverride authorizationGuard, VerbOverride patchDataSource,
                                      String parentVariable, String parentField,
-                                     Element origin) throws IOException {
+                                     ro.cristivoicu.springbootrestless.annotation.RestlessDenial denyAs,
+                                     Ownership ownership, Components components, boolean multipartCreate,
+                                     ro.cristivoicu.springbootrestless.annotation.RestlessBulkMode bulkMode,
+                                     ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet collectionGet,
+                                     VerbOverride bulkDedupe, Element origin) throws IOException {
         String resourceName = entityName + "RestlessResource";
 
         // Forwarded onto the generated @RestlessResource verbatim - RestlessRegistrar (not this
@@ -649,6 +861,18 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         if (nested) {
             restlessResourceAttrsBuilder.append(", parent = @ro.cristivoicu.springbootrestless.annotation.RestlessParent(variable = \"")
                     .append(parentVariable).append("\", field = \"").append(parentField).append("\")");
+        }
+        if (denyAs != ro.cristivoicu.springbootrestless.annotation.RestlessDenial.DEFAULT) {
+            restlessResourceAttrsBuilder.append(", denyAs = ro.cristivoicu.springbootrestless.annotation.RestlessDenial.")
+                    .append(denyAs.name());
+        }
+        if (bulkMode != ro.cristivoicu.springbootrestless.annotation.RestlessBulkMode.DEFAULT) {
+            restlessResourceAttrsBuilder.append(", bulkMode = ro.cristivoicu.springbootrestless.annotation.RestlessBulkMode.")
+                    .append(bulkMode.name());
+        }
+        if (collectionGet != ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet.DEFAULT) {
+            restlessResourceAttrsBuilder.append(", collectionGet = ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet.")
+                    .append(collectionGet.name());
         }
         String restlessResourceAttrs = restlessResourceAttrsBuilder.toString();
 
@@ -712,7 +936,16 @@ public class RestlessEntityProcessor extends AbstractProcessor {
         String guardFieldDecl = "";
         String guardAssignment = "";
         String guardMethod = "";
-        if (authorizationGuard.isOverridden()) {
+        if (ownership != null) {
+            extraParams.append(", ").append(OWNERSHIP_GUARDS).append(" ownershipGuards");
+            guardFieldDecl = "    private final AuthorizationGuard<%s> authorizationGuard;\n".formatted(entityName);
+            guardAssignment = "        this.authorizationGuard = " + ownership.guardExpression() + ";\n";
+            guardMethod = "\n"
+                    + "    @Override\n"
+                    + "    protected AuthorizationGuard<" + entityName + "> getAuthorizationGuard() {\n"
+                    + "        return authorizationGuard;\n"
+                    + "    }\n";
+        } else if (authorizationGuard.isOverridden()) {
             String guardType = authorizationGuard.typeFqn();
             extraParams.append(", ").append(guardType).append(" authorizationGuard");
             guardFieldDecl = "    private final %s authorizationGuard;\n".formatted(guardType);
@@ -746,6 +979,51 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                     + "        return java.util.Optional.of(patchDataSource);\n"
                     + "    }\n";
         }
+
+        // Actions, views, hooks: each listed bean becomes a constructor parameter (Spring injects it)
+        // and the matching RestlessResourceHandler accessor returns them, keyed by @RestlessActionName.
+        String e = entityName;
+        String[] readActionCode = componentCode(components.readActions(), "readActions",
+                "java.util.Map<String, ro.cristivoicu.springbootrestless.resource.ReadAction<" + e + ", ?>>",
+                "public java.util.Map<String, ro.cristivoicu.springbootrestless.resource.ReadAction<" + e + ", ?>> getCustomReadActions()",
+                "ro.cristivoicu.springbootrestless.resource.RestlessActions.byName", extraParams);
+        String[] collectionActionCode = componentCode(components.collectionActions(), "collectionActions",
+                "java.util.Map<String, ro.cristivoicu.springbootrestless.resource.CollectionAction<" + e + ">>",
+                "public java.util.Map<String, ro.cristivoicu.springbootrestless.resource.CollectionAction<" + e + ">> getCollectionActions()",
+                "ro.cristivoicu.springbootrestless.resource.RestlessActions.byName", extraParams);
+        String[] writeActionCode = componentCode(components.writeActions(), "writeActions",
+                "java.util.Map<String, ro.cristivoicu.springbootrestless.resource.WriteAction<" + e + ", ?, ?>>",
+                "public java.util.Map<String, ro.cristivoicu.springbootrestless.resource.WriteAction<" + e + ", ?, ?>> getCustomWriteActions()",
+                "ro.cristivoicu.springbootrestless.resource.RestlessActions.byName", extraParams);
+        String[] viewCode = componentCode(components.views(), "views",
+                "java.util.Map<String, Mapper<" + e + ", ?>>",
+                "public java.util.Map<String, Mapper<" + e + ", ?>> getNamedViews()",
+                "ro.cristivoicu.springbootrestless.resource.RestlessActions.byName", extraParams);
+        String[] hookCode = componentCode(components.hooks(), "hooks",
+                "java.util.List<ro.cristivoicu.springbootrestless.resource.RestlessLifecycleHook<" + e + ">>",
+                "protected java.util.List<ro.cristivoicu.springbootrestless.resource.RestlessLifecycleHook<" + e + ">> getLifecycleHooks()",
+                "java.util.List.of", extraParams);
+        String multipartMethod = !multipartCreate ? "" : "\n"
+                + "    @Override\n"
+                + "    public boolean acceptsMultipartCreate() {\n"
+                + "        return true;\n"
+                + "    }\n";
+        String dedupeField = "";
+        String dedupeAssignment = "";
+        String dedupeAccessor = "";
+        if (bulkDedupe.isOverridden()) {
+            extraParams.append(", ").append(bulkDedupe.typeFqn()).append(" bulkDedupe");
+            dedupeField = "    private final " + bulkDedupe.typeFqn() + " bulkDedupe;\n";
+            dedupeAssignment = "        this.bulkDedupe = bulkDedupe;\n";
+            dedupeAccessor = "\n"
+                    + "    @Override\n"
+                    + "    public ro.cristivoicu.springbootrestless.resource.RestlessDedupeKey<" + entityName + ", ?> getBulkDeduplicator() {\n"
+                    + "        return bulkDedupe;\n"
+                    + "    }\n";
+        }
+        String componentFields = dedupeField + readActionCode[0] + collectionActionCode[0] + writeActionCode[0] + viewCode[0] + hookCode[0];
+        String componentAssignments = dedupeAssignment + readActionCode[1] + collectionActionCode[1] + writeActionCode[1] + viewCode[1] + hookCode[1];
+        String componentAccessors = dedupeAccessor + readActionCode[2] + collectionActionCode[2] + writeActionCode[2] + viewCode[2] + hookCode[2] + multipartMethod;
 
         // Unset (the default, all nine RestlessOperation values) means no override at all -
         // RestlessResourceHandler#getEnabledOperations already defaults to ALL_OPERATIONS, so
@@ -841,8 +1119,8 @@ public class RestlessEntityProcessor extends AbstractProcessor {
                     """.formatted(packageName, entityName, restlessResourceAttrs, resourceName, idType,
                     createModel, searchDto, updateModel, mapper, repository, extraParams,
                     createInit, readInit, updateInit, deleteInit,
-                    guardFieldDecl + patchFieldDecl, guardAssignment + patchAssignment,
-                    guardMethod + patchMethod + operationsMethod,
+                    guardFieldDecl + patchFieldDecl + componentFields, guardAssignment + patchAssignment + componentAssignments,
+                    guardMethod + patchMethod + operationsMethod + componentAccessors,
                     createFieldDecl, updateFieldDecl, createAssignment, updateAssignment,
                     createGetterMethod, updateGetterMethod));
         }

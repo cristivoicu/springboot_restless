@@ -6,6 +6,7 @@ import org.springframework.core.convert.ConversionService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
+import ro.cristivoicu.springbootrestless.authorization.RestlessPrincipalIdResolver;
 
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -45,15 +46,28 @@ public final class RestlessContext {
     private final AuthorizationGuard.Action action;
     private final String customActionName;
     private final ConversionService conversionService;
+    // Null for a flat (non-nested) resource. Lets applyParentTo write the path's parent id the same
+    // way RestlessResourceHandler does, from inside a data source, before the entity is saved.
+    private final ParentFieldSupport.ParentDescriptor parent;
+    private final RestlessPrincipalIdResolver principalIdResolver;
+    private final FieldRules fieldRules;
+    // Resolved on first use, at most once per request: a resolver may well hit the database.
+    private boolean principalResolved;
+    private Object principalId;
 
     private RestlessContext(Map<String, String> pathVariables, HttpServletRequest request, Object authentication,
-                             AuthorizationGuard.Action action, String customActionName, ConversionService conversionService) {
+                             AuthorizationGuard.Action action, String customActionName, ConversionService conversionService,
+                             ParentFieldSupport.ParentDescriptor parent, RestlessPrincipalIdResolver principalIdResolver,
+                             FieldRules fieldRules) {
         this.pathVariables = pathVariables;
         this.request = request;
         this.authentication = authentication;
         this.action = action;
         this.customActionName = customActionName;
         this.conversionService = conversionService;
+        this.parent = parent;
+        this.principalIdResolver = principalIdResolver == null ? RestlessPrincipalIdResolver.AUTHENTICATION_NAME : principalIdResolver;
+        this.fieldRules = fieldRules == null ? FieldRules.NONE : fieldRules;
     }
 
     /**
@@ -118,11 +132,99 @@ public final class RestlessContext {
         return customActionName;
     }
 
+    /**
+     * The current principal's id, from the application's {@link RestlessPrincipalIdResolver} bean
+     * (default: the authenticated principal's name) - {@code null} when there is none. Resolved
+     * once per request and cached.
+     */
+    public Object principalId() {
+        if (!principalResolved) {
+            principalId = principalIdResolver.resolve(this);
+            principalResolved = true;
+        }
+        return principalId;
+    }
+
+    /**
+     * {@link #principalId()} converted to {@code type} with the application's {@link
+     * ConversionService} - {@code null} when there is no principal, or when it can't be converted
+     * (a principal that doesn't fit an id column owns nothing; callers treat {@code null} as a
+     * denial).
+     */
+    public <T> T principalId(Class<T> type) {
+        Object raw = principalId();
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return conversionService.convert(raw, type);
+        } catch (ConversionException e) {
+            return null;
+        }
+    }
+
+    /** The {@code @RestlessParent} field path of a nested resource ({@code "eventId"}, {@code "project.id"}), or {@code null} for a flat one. */
+    public String parentField() {
+        return parent == null ? null : String.join(".", parent.segments().stream().map(java.lang.reflect.Field::getName).toList());
+    }
+
+    /** The parent id from the path of a nested resource, converted to the parent id type - {@code null} for a flat resource. */
+    public Object parentValue() {
+        return parent == null ? null : pathVariable(parent.pathVariable(), parent.leafIdType());
+    }
+
+    /**
+     * Writes every server-managed field a create needs before the entity is saved: the nested
+     * resource's parent ({@link #applyParentTo}) and every {@code @RestlessFromPrincipal} field.
+     * {@code DefaultCreateDataSource} calls it for you; a hand-written create data source that
+     * builds and saves its own entity should call it before {@code save}, for the same NOT NULL
+     * reason {@link #applyParentTo} documents. The handler writes both again after any data source,
+     * so skipping it is never a security hole - only, possibly, a constraint violation.
+     *
+     * @throws ResponseStatusException 401 if the entity has a principal field and there is no principal
+     */
+    public void applyServerFieldsTo(Object entity) {
+        applyParentTo(entity);
+        fieldRules.applyPrincipal(entity, this, conversionService);
+    }
+
+    /**
+     * Nested resources: writes the parent id from the path onto {@code entity}'s
+     * {@code @RestlessParent} field - a no-op for a flat resource. A create data source calls this
+     * <em>before</em> saving: {@code RestlessResourceHandler} also writes the parent after
+     * {@code create(...)} returns (so a data source that never calls this is still correct), but
+     * by then the entity has already been persisted, and Hibernate builds the INSERT from the state
+     * at persist time - the late value only reaches the database as a follow-up UPDATE. A NOT NULL
+     * parent column (the normal case for a mandatory parent) rejects that INSERT outright.
+     * {@code DefaultCreateDataSource} calls it for you.
+     *
+     * @throws ResponseStatusException 400 if the path value doesn't convert to the parent id type
+     */
+    public void applyParentTo(Object entity) {
+        if (parent == null || entity == null) {
+            return;
+        }
+        ParentFieldSupport.writeLeafValue(entity, parent, pathVariable(parent.pathVariable(), parent.leafIdType()));
+    }
+
     static RestlessContext build(Map<String, String> pathVariables, HttpServletRequest request,
                                   AuthorizationGuard.Action action, String customActionName,
                                   ConversionService conversionService) {
+        return build(pathVariables, request, action, customActionName, conversionService, null);
+    }
+
+    static RestlessContext build(Map<String, String> pathVariables, HttpServletRequest request,
+                                  AuthorizationGuard.Action action, String customActionName,
+                                  ConversionService conversionService, ParentFieldSupport.ParentDescriptor parent) {
+        return build(pathVariables, request, action, customActionName, conversionService, parent, null, null);
+    }
+
+    static RestlessContext build(Map<String, String> pathVariables, HttpServletRequest request,
+                                  AuthorizationGuard.Action action, String customActionName,
+                                  ConversionService conversionService, ParentFieldSupport.ParentDescriptor parent,
+                                  RestlessPrincipalIdResolver principalIdResolver, FieldRules fieldRules) {
         return new RestlessContext(pathVariables, request, OptionalSpringSecurity.currentAuthentication(),
-                action, customActionName, conversionService);
+                action, customActionName, conversionService, parent, principalIdResolver, fieldRules);
     }
 
     /**

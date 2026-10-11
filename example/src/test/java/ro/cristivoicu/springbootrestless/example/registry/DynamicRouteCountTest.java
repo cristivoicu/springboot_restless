@@ -32,11 +32,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DynamicRouteCountTest {
 
     private static final int FIXED_ROUTES_PER_RESOURCE = 11;
-    private static final int FULL_CRUD_RESOURCE_COUNT = 5; // Employee, Department, Project, Skill, Task
+    private static final int FULL_CRUD_RESOURCE_COUNT = 8; // Employee, Department, Project, Skill, Task, Notebook, Note, Shape
     private static final int NO_UPDATE_ROUTE_COUNT = 9; // ProjectAssignment: everything but update/updateBulk
+    private static final int ATTACHMENT_ROUTE_COUNT = 7; // create, createBulk, findOne, findList (at its base path and at /list - collectionGet = LIST), deleteById, deleteAll
     private static final int CUSTOM_READ_ACTION_COUNT = 1; // Employee's "byEmailDomain"
-    private static final int CUSTOM_WRITE_ACTION_COUNT = 4; // Employee's "promote"/"giveRaise"/"addCertification"/"recordAchievement"
-    private static final int NAMED_VIEW_COUNT = 1; // Employee's "contact"
+    private static final int COLLECTION_ACTION_COUNT = 2; // Notebook's "stats", Attachment's "total-size"
+    private static final int CUSTOM_WRITE_ACTION_COUNT = 5; // Employee's "promote"/"giveRaise"/"addCertification"/"recordAchievement", Notebook's "stamp"
+    private static final int NAMED_VIEW_COUNT = 2; // Employee's "contact", Attachment's "content"
     private static final int PATCH_ROUTE_COUNT = 1; // Department's
 
     @Autowired
@@ -52,7 +54,8 @@ class DynamicRouteCountTest {
                 .count();
 
         assertThat(dynamicRouteCount).isEqualTo(
-                (long) (FIXED_ROUTES_PER_RESOURCE * FULL_CRUD_RESOURCE_COUNT) + NO_UPDATE_ROUTE_COUNT
-                        + CUSTOM_READ_ACTION_COUNT + CUSTOM_WRITE_ACTION_COUNT + NAMED_VIEW_COUNT + PATCH_ROUTE_COUNT);
+                (long) (FIXED_ROUTES_PER_RESOURCE * FULL_CRUD_RESOURCE_COUNT) + NO_UPDATE_ROUTE_COUNT + ATTACHMENT_ROUTE_COUNT
+                        + CUSTOM_READ_ACTION_COUNT + COLLECTION_ACTION_COUNT + CUSTOM_WRITE_ACTION_COUNT + NAMED_VIEW_COUNT
+                        + PATCH_ROUTE_COUNT);
     }
 }

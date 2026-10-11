@@ -44,8 +44,10 @@ public class Task {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne
-    @JoinColumn(name = "project_id")
+    // Mandatory, as a real parent almost always is: a NOT NULL column is what proves the parent id
+    // reaches the entity before the INSERT, not only as a follow-up UPDATE.
+    @ManyToOne(optional = false)
+    @JoinColumn(name = "project_id", nullable = false)
     private Project project;
 
     private String title;

@@ -3,6 +3,8 @@ package ro.cristivoicu.springbootrestless.resource;
 import org.springframework.core.convert.ConversionService;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.validation.Validator;
+import ro.cristivoicu.springbootrestless.annotation.RestlessDenial;
+import ro.cristivoicu.springbootrestless.authorization.RestlessPrincipalIdResolver;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
 import tools.jackson.databind.ObjectMapper;
@@ -27,6 +29,11 @@ import tools.jackson.databind.ObjectMapper;
  * namedView} same as any other; {@code false} 404s instead, same as a row that was never there at
  * all. Writes/write actions on a soft-deleted row always 404, unconditionally - this flag only
  * ever affects a plain read.
+ * <p>
+ * {@code denyAs} is already resolved ({@code @RestlessResource(denyAs)}, else {@code
+ * restless.authorization.deny-as}) - never {@link RestlessDenial#DEFAULT}. {@code
+ * principalIdResolver} may be {@code null} ({@link RestlessPrincipalIdResolver#AUTHENTICATION_NAME}).
+ * {@code rejectImmutableByDefault} is {@code restless.immutable.on-update=reject}.
  */
 public record RestlessInitContext(
         ResourceMetadata metadata,
@@ -41,6 +48,22 @@ public record RestlessInitContext(
         int maxBulkSize,
         boolean includeSoftDeletedInSingleRead,
         String parentPathVariable,
-        String parentField
+        String parentField,
+        RestlessDenial denyAs,
+        RestlessPrincipalIdResolver principalIdResolver,
+        boolean rejectImmutableByDefault,
+        ro.cristivoicu.springbootrestless.annotation.RestlessBulkMode bulkMode,
+        ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet collectionGet
 ) {
+
+    /** The pre-ownership shape: denials are 403, the default principal resolver, immutable changes ignored. */
+    public RestlessInitContext(ResourceMetadata metadata, ObjectMapper objectMapper, ConversionService conversionService,
+                               Validator validator, RestlessEmbedResolver embedResolver,
+                               PlatformTransactionManager transactionManager, RestlessAuthorizationMetrics metrics,
+                               int maxListSize, int maxPageSize, int maxBulkSize, boolean includeSoftDeletedInSingleRead,
+                               String parentPathVariable, String parentField) {
+        this(metadata, objectMapper, conversionService, validator, embedResolver, transactionManager, metrics,
+                maxListSize, maxPageSize, maxBulkSize, includeSoftDeletedInSingleRead, parentPathVariable, parentField,
+                RestlessDenial.FORBIDDEN, null, false, null, null);
+    }
 }

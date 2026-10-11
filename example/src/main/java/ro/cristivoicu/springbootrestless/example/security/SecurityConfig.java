@@ -45,7 +45,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/employees/**", "/departments/**", "/projects/**").authenticated()
+                        .requestMatchers("/employees/**", "/departments/**", "/projects/**", "/notebooks/**").authenticated()
                         .anyRequest().permitAll())
                 // Stateless JSON API with no cookie-based session and no browser form post - the
                 // CSRF token flow CSRF protection assumes doesn't apply here, same reasoning

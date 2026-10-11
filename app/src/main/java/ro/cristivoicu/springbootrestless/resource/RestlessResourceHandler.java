@@ -21,7 +21,12 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.ServletRequestDataBinder;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.HandlerMapping;
+import ro.cristivoicu.springbootrestless.annotation.RestlessBulkMode;
+import ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet;
+import ro.cristivoicu.springbootrestless.annotation.RestlessDenial;
+import ro.cristivoicu.springbootrestless.models.RestlessValidationGroups;
 import ro.cristivoicu.springbootrestless.authorization.AuthorizationGuard;
+import ro.cristivoicu.springbootrestless.authorization.RestlessPrincipalIdResolver;
 import ro.cristivoicu.springbootrestless.controller.create.CreateDataSource;
 import ro.cristivoicu.springbootrestless.controller.delete.DeleteDataSource;
 import ro.cristivoicu.springbootrestless.controller.patch.PatchDataSource;
@@ -137,6 +142,15 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     private boolean includeSoftDeletedInSingleRead = true;
     private String idPropertyName;
 
+    /** Resolved in {@link #init}; never {@code DEFAULT}. */
+    private RestlessBulkMode bulkMode = RestlessBulkMode.ALL_OR_NOTHING;
+
+    /** Resolved in {@link #init}; never {@code DEFAULT}. */
+    private RestlessCollectionGet collectionGet = RestlessCollectionGet.PAGE;
+
+    /** {@link #getLifecycleHooks()}, resolved once in {@link #init}. */
+    private List<RestlessLifecycleHook<E>> hooks = List.of();
+
     /** {@link #getAuthorizationGuard()}, resolved once in {@link #init} - see that method's own javadoc for why. */
     private AuthorizationGuard<E> cachedGuard;
 
@@ -149,6 +163,15 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     private ParentFieldSupport.ParentDescriptor parentDescriptor;
 
     private TransactionSupport transactionSupport;
+
+    /** Resolved in {@link #init}: {@code @RestlessResource(denyAs)}, else {@code restless.authorization.deny-as}. Never {@code DEFAULT}. */
+    private RestlessDenial denyAs = RestlessDenial.FORBIDDEN;
+
+    /** {@code null} means {@link RestlessPrincipalIdResolver#AUTHENTICATION_NAME} - see {@link RestlessContext#principalId()}. */
+    private RestlessPrincipalIdResolver principalIdResolver;
+
+    /** This entity's {@code @RestlessFromPrincipal}/{@code @RestlessImmutable} fields - see {@link FieldRules}. */
+    private FieldRules fieldRules = FieldRules.NONE;
 
     /**
      * {@link #findList}'s default hard cap on how many rows a single unpaginated {@code
@@ -213,7 +236,15 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         this.maxBulkSize = context.maxBulkSize() > 0 ? context.maxBulkSize() : DEFAULT_MAX_BULK_SIZE;
         this.includeSoftDeletedInSingleRead = context.includeSoftDeletedInSingleRead();
         this.idPropertyName = resolveIdPropertyName(metadata.entityType());
+        this.denyAs = context.denyAs() == null || context.denyAs() == RestlessDenial.DEFAULT ? RestlessDenial.FORBIDDEN : context.denyAs();
+        this.principalIdResolver = context.principalIdResolver();
+        this.fieldRules = FieldRules.resolve(metadata.entityType(), context.rejectImmutableByDefault());
         this.cachedGuard = getAuthorizationGuard();
+        this.hooks = List.copyOf(getLifecycleHooks());
+        this.bulkMode = context.bulkMode() == null || context.bulkMode() == RestlessBulkMode.DEFAULT
+                ? RestlessBulkMode.ALL_OR_NOTHING : context.bulkMode();
+        this.collectionGet = context.collectionGet() == null || context.collectionGet() == RestlessCollectionGet.DEFAULT
+                ? RestlessCollectionGet.PAGE : context.collectionGet();
         this.parentDescriptor = ParentFieldSupport.resolve(metadata.entityType(), context.parentPathVariable(), context.parentField());
         // Fail closed (Ground rules for this feature): a parent variable that doesn't actually
         // appear as a {variable} path segment in this resource's own basePath is a startup error,
@@ -432,6 +463,49 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
      */
     public Map<String, WriteAction<E, ?, ?>> getCustomWriteActions() {
         return Map.of();
+    }
+
+    /**
+     * Named reads over the whole collection that aren't a page of rows - summaries, exports,
+     * download links ({@code GET {basePath}/actions/{name}}), see {@link CollectionAction}. Empty by
+     * default; names share the {@code /actions/} namespace with {@link #getCustomReadActions()}.
+     * <b>Public</b> for the same reason as the other action accessors.
+     */
+    public Map<String, CollectionAction<E>> getCollectionActions() {
+        return Map.of();
+    }
+
+    /** Side effects around this resource's writes - see {@link RestlessLifecycleHook}. Empty by default. */
+    protected List<RestlessLifecycleHook<E>> getLifecycleHooks() {
+        return List.of();
+    }
+
+    /**
+     * Whether {@code POST {basePath}} also accepts {@code multipart/form-data}: the form fields and
+     * files are bound onto the create model (a {@code MultipartFile} field receives the part of the
+     * same name) and validated like a JSON body. {@code false} by default - a multipart request is
+     * then a {@code 415}. Public so OpenAPI generation can document the second media type.
+     */
+    public boolean acceptsMultipartCreate() {
+        return false;
+    }
+
+    /**
+     * Duplicate detection for a {@code PARTIAL} bulk create - see {@link RestlessDedupeKey}.
+     * {@code null} (default): no row is ever a duplicate.
+     */
+    public RestlessDedupeKey<E, ?> getBulkDeduplicator() {
+        return null;
+    }
+
+    /** What {@code GET {basePath}} serves for this resource - resolved at startup, see {@link RestlessCollectionGet}. */
+    public final RestlessCollectionGet getCollectionGet() {
+        return collectionGet;
+    }
+
+    /** How {@code POST {basePath}/bulk} treats bad rows - resolved at startup, see {@link RestlessBulkMode}. */
+    public final RestlessBulkMode getBulkMode() {
+        return bulkMode;
     }
 
     /**
@@ -700,8 +774,8 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.CREATE, null);
         return RestlessContext.runWith(ctx, () -> {
             checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
-            Object body = readBody(request, metadata.createModelType());
-            validate(body);
+            Object body = isMultipart(request) ? bindMultipart(request, metadata.createModelType()) : readBody(request, metadata.createModelType());
+            validate(body, RestlessValidationGroups.OnCreate.class);
             // Raw-type escape hatch: C's bound (CreateModel) can't be named here since the actual
             // type is only known at runtime via metadata.createModelType(). Safe because `body` was
             // just deserialized as exactly that class.
@@ -715,7 +789,12 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 // create model is applied - a body-supplied value for the same field is always
                 // overwritten, never honored. See ParentFieldSupport's own javadoc.
                 writeParentFieldIfNested(created, ctx);
+                // Same "written after, whatever the data source did" guarantee for principal fields.
+                fieldRules.applyPrincipal(created, ctx, conversionService);
                 checkCanAccess(AuthorizationGuard.Action.CREATE, request, created);
+                for (RestlessLifecycleHook<E> hook : hooks) {
+                    hook.afterCreate(created, ctx);
+                }
                 rawDataSource.flush();
                 // 201 + Location, not 200: RFC 9110 §15.3.2 - a successful POST that creates a
                 // resource should report 201 and point at where the new resource can be fetched.
@@ -790,11 +869,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             checkPreCheck(AuthorizationGuard.Action.CREATE, null, request);
             List<Object> bodies = readBodyList(request, metadata.createModelType());
             checkBulkSize(bodies.size());
-            for (Object body : bodies) {
-                validate(body);
-            }
             @SuppressWarnings({"unchecked", "rawtypes"})
             CreateDataSource rawDataSource = getCreateDataSource();
+            if (bulkMode == RestlessBulkMode.PARTIAL) {
+                return createBulkPartial(request, ctx, bodies, rawDataSource);
+            }
+            for (Object body : bodies) {
+                validate(body, RestlessValidationGroups.OnCreate.class);
+            }
             // Row-level authorization on writes (Ground rules item 2) extends to bulk create too -
             // otherwise this route would be a direct bypass of the same check single create() now
             // runs. Every created item is checked (fail-fast, before the response goes out) inside
@@ -804,7 +886,11 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 List<E> created = rawDataSource.createAll(bodies, ctx);
                 for (E entity : created) {
                     writeParentFieldIfNested(entity, ctx);
+                    fieldRules.applyPrincipal(entity, ctx, conversionService);
                     checkCanAccess(AuthorizationGuard.Action.CREATE, request, entity);
+                    for (RestlessLifecycleHook<E> hook : hooks) {
+                        hook.afterCreate(entity, ctx);
+                    }
                 }
                 rawDataSource.flush();
                 return ResponseEntity.ok(getEntityMapper().map(created));
@@ -834,7 +920,9 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 if (found == null || (isSoftDeleted(found) && !includeSoftDeletedInSingleRead) || parentMismatch(found, ctx)) {
                     return ResponseEntity.notFound().build();
                 }
-                checkCanAccess(AuthorizationGuard.Action.READ_ONE, request, found);
+                if (!canRead(AuthorizationGuard.Action.READ_ONE, null, request, found)) {
+                    return ResponseEntity.notFound().build();
+                }
                 Optional<String> etag = PreconditionSupport.eTagOf(found);
                 if (etag.isPresent() && PreconditionSupport.matchesIfNoneMatch(ifNoneMatch, etag.get())) {
                     return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag.get()).build();
@@ -929,6 +1017,53 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     }
 
     /**
+     * Shared entry point for every {@link CollectionAction} - same one-{@link Method}-per-name
+     * dispatch as {@link #customRead}. The action gets the caller's visible rows as a
+     * specification (parent filter, guard scope, soft delete) and returns any body: JSON, or a
+     * {@link RestlessBinary} written straight to the response. Runs in a read-only transaction.
+     */
+    public final ResponseEntity<?> collectionAction(HttpServletRequest request) throws Exception {
+        String actionName = resolveActionName(request);
+        RestlessContext ctx = buildContext(request, AuthorizationGuard.Action.CUSTOM_READ, actionName);
+        return RestlessContext.runWith(ctx, () -> {
+            checkPreCheck(AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
+            CollectionAction<E> action = getCollectionActions().get(actionName);
+            if (action == null) {
+                return ResponseEntity.notFound().build();
+            }
+            Specification<E> visibleRows = withScope(withParentFilter(excludeSoftDeleted((root, query, cb) -> cb.conjunction()), ctx),
+                    AuthorizationGuard.Action.CUSTOM_READ, actionName, request);
+            return transactionSupport.inReadOnlyTransaction(() -> {
+                Object result = action.execute(visibleRows, ctx);
+                return result instanceof RestlessBinary binary ? writeBinary(binary) : ResponseEntity.ok(result);
+            });
+        });
+    }
+
+    /**
+     * Writes a {@link RestlessBinary} directly to the servlet response - synchronously, so it runs
+     * inside the caller's transaction - and returns {@code null}, which tells Spring MVC the
+     * response is already handled.
+     */
+    private ResponseEntity<?> writeBinary(RestlessBinary binary) throws java.io.IOException {
+        jakarta.servlet.http.HttpServletResponse response =
+                ((org.springframework.web.context.request.ServletRequestAttributes)
+                        org.springframework.web.context.request.RequestContextHolder.currentRequestAttributes()).getResponse();
+        if (response == null) {
+            throw new IllegalStateException("No servlet response bound to this request - a RestlessBinary needs one");
+        }
+        response.setStatus(HttpStatus.OK.value());
+        response.setContentType(binary.contentType());
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION, binary.contentDisposition());
+        if (binary.length() != null) {
+            response.setContentLengthLong(binary.length());
+        }
+        binary.writer().writeTo(response.getOutputStream());
+        response.flushBuffer();
+        return null;
+    }
+
+    /**
      * Shared entry point for every named view in {@link #getNamedViews()} - same one-{@link
      * Method}-per-name dispatch idiom as {@link #customRead}, reusing {@link #resolveActionName}
      * unchanged (it already just recovers "whatever the last literal path segment was," nothing
@@ -950,12 +1085,18 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 if (found == null || (isSoftDeleted(found) && !includeSoftDeletedInSingleRead) || parentMismatch(found, ctx)) {
                     return ResponseEntity.notFound().build();
                 }
-                checkCanAccess(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found);
+                if (!canRead(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found)) {
+                    return ResponseEntity.notFound().build();
+                }
                 Mapper<E, ?> mapper = getNamedViews().get(viewName);
                 if (mapper == null) {
                     return ResponseEntity.notFound().build();
                 }
-                Object dto = postProcessResponse(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found, mapper.map(found));
+                Object view = mapper.map(found);
+                if (view instanceof RestlessBinary binary) {
+                    return writeBinary(binary);
+                }
+                Object dto = postProcessResponse(AuthorizationGuard.Action.NAMED_VIEW, viewName, request, found, view);
                 embedResolver.resolve(dto, found, request);
                 return withETag(ResponseEntity.ok(), found).body(dto);
             });
@@ -1031,7 +1172,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 PreconditionSupport.checkIfMatch(ifMatch, found);
                 @SuppressWarnings("unchecked")
                 Object response = rawAction.execute(found, body);
-                return ResponseEntity.ok(response);
+                return response instanceof RestlessBinary binary ? writeBinary(binary) : ResponseEntity.ok(response);
             });
         });
     }
@@ -1067,7 +1208,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             K id = extractId(request);
             String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
             Object body = readBody(request, metadata.updateModelType());
-            validate(body);
+            validate(body, RestlessValidationGroups.OnUpdate.class);
             @SuppressWarnings({"unchecked", "rawtypes"})
             UpdateDataSource rawDataSource = getUpdateDataSource();
 
@@ -1088,12 +1229,22 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 }
                 checkCanAccess(AuthorizationGuard.Action.UPDATE, request, existing);
                 PreconditionSupport.checkIfMatch(ifMatch, existing);
+                // Taken before the data source runs: it usually mutates this same managed instance.
+                Map<Field, Object> immutableValues = fieldRules.snapshot(existing);
+                fieldRules.rejectChanges(body, immutableValues);
+                for (RestlessLifecycleHook<E> hook : hooks) {
+                    hook.beforeUpdate(existing, ctx);
+                }
                 @SuppressWarnings("unchecked")
                 E updated = (E) rawDataSource.update(id, (UpdateModel) body, ctx);
                 // The parent field can never change via update (Feature B item 5 - "protected
                 // like @Id") - forcibly reset regardless of what the data source did with it.
                 writeParentFieldIfNested(updated, ctx);
+                fieldRules.restore(updated, immutableValues);
                 checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, updated);
+                for (RestlessLifecycleHook<E> hook : hooks) {
+                    hook.afterUpdate(updated, ctx);
+                }
                 rawDataSource.flush();
                 Object dto = postProcessResponse(AuthorizationGuard.Action.UPDATE, null, request, updated, getEntityMapper().map(updated));
                 return withETag(ResponseEntity.ok(), updated).body(dto);
@@ -1118,7 +1269,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             K id = extractId(request);
             String ifMatch = request.getHeader(HttpHeaders.IF_MATCH);
             Object body = readBody(request, patchModelType);
-            validate(body);
+            validate(body, RestlessValidationGroups.OnPatch.class);
             @SuppressWarnings({"unchecked", "rawtypes"})
             PatchDataSource rawDataSource = getPatchDataSource().orElseThrow(
                     () -> new IllegalStateException("PATCH route registered but getPatchDataSource() is now empty"));
@@ -1130,11 +1281,20 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 }
                 checkCanAccess(AuthorizationGuard.Action.PATCH, request, existing);
                 PreconditionSupport.checkIfMatch(ifMatch, existing);
+                Map<Field, Object> immutableValues = fieldRules.snapshot(existing);
+                fieldRules.rejectChanges(body, immutableValues);
+                for (RestlessLifecycleHook<E> hook : hooks) {
+                    hook.beforeUpdate(existing, ctx);
+                }
                 @SuppressWarnings("unchecked")
                 E patched = (E) rawDataSource.patch(id, (PatchModel) body, ctx);
                 // Protected like @Id, same as update() - see Feature B item 5.
                 writeParentFieldIfNested(patched, ctx);
+                fieldRules.restore(patched, immutableValues);
                 checkCanAccessAfterWrite(AuthorizationGuard.Action.PATCH, request, patched);
+                for (RestlessLifecycleHook<E> hook : hooks) {
+                    hook.afterUpdate(patched, ctx);
+                }
                 rawDataSource.flush();
                 Object dto = postProcessResponse(AuthorizationGuard.Action.PATCH, null, request, patched, getEntityMapper().map(patched));
                 return withETag(ResponseEntity.ok(), patched).body(dto);
@@ -1164,7 +1324,7 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
 
             Map<K, Object> byId = new LinkedHashMap<>();
             for (Map.Entry<String, Object> entry : rawBodies.entrySet()) {
-                validate(entry.getValue());
+                validate(entry.getValue(), RestlessValidationGroups.OnUpdate.class);
                 byId.put(convertId(entry.getKey()), entry.getValue());
             }
             @SuppressWarnings({"unchecked", "rawtypes"})
@@ -1176,11 +1336,25 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 // Also runs (even with no guard configured) when this is a nested resource -
                 // Feature B item 4: any target missing/foreign-parent is 404 for the whole batch,
                 // nothing written, checked here, before any write.
-                if (hasGuard() || isNested()) {
+                // Immutable fields: every target's stored values, keyed by id, taken before any write.
+                Map<Object, Map<Field, Object>> immutableValues = new HashMap<>();
+                if (hasGuard() || isNested() || !fieldRules.isEmpty() || !hooks.isEmpty()) {
                     List<E> loaded = getReadDataSource().findAllById(byId.keySet(), ctx);
                     checkAllFoundAndParentMatchedOrFail(byId.keySet(), loaded, ctx);
                     if (hasGuard()) {
                         checkCanAccessAll(AuthorizationGuard.Action.UPDATE, request, loaded);
+                    }
+                    if (!fieldRules.isEmpty()) {
+                        for (E entity : loaded) {
+                            Map<Field, Object> snapshot = fieldRules.snapshot(entity);
+                            fieldRules.rejectChanges(byId.get(idOf(entity)), snapshot);
+                            immutableValues.put(idOf(entity), snapshot);
+                        }
+                    }
+                    for (E entity : loaded) {
+                        for (RestlessLifecycleHook<E> hook : hooks) {
+                            hook.beforeUpdate(entity, ctx);
+                        }
                     }
                 }
                 @SuppressWarnings("unchecked")
@@ -1190,7 +1364,11 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 // route would be a direct bypass of it.
                 for (E entity : updated) {
                     writeParentFieldIfNested(entity, ctx);
+                    fieldRules.restore(entity, immutableValues.getOrDefault(idOf(entity), Map.of()));
                     checkCanAccessAfterWrite(AuthorizationGuard.Action.UPDATE, request, entity);
+                    for (RestlessLifecycleHook<E> hook : hooks) {
+                        hook.afterUpdate(entity, ctx);
+                    }
                 }
                 rawDataSource.flush();
                 return ResponseEntity.ok(getEntityMapper().map(updated));
@@ -1224,8 +1402,14 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
                 }
                 checkCanAccess(AuthorizationGuard.Action.DELETE_ONE, request, existing);
                 PreconditionSupport.checkIfMatch(ifMatch, existing);
+                for (RestlessLifecycleHook<E> hook : hooks) {
+                    hook.beforeDelete(existing, ctx);
+                }
                 dataSource.deleteById(id, ctx);
                 dataSource.flush();
+                for (RestlessLifecycleHook<E> hook : hooks) {
+                    hook.afterDelete(existing, ctx);
+                }
                 return ResponseEntity.noContent().build();
             });
         });
@@ -1250,15 +1434,27 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
             // item 4: any target missing/foreign-parent is 404 for the whole batch, nothing
             // deleted.
             transactionSupport.<Void>inTransaction(() -> {
-                if (hasGuard() || isNested()) {
+                List<E> loaded = List.of();
+                if (hasGuard() || isNested() || !hooks.isEmpty()) {
                     List<K> ids = deleteModel.getIds().stream().map(this::convertId).toList();
-                    List<E> loaded = getReadDataSource().findAllById(ids, ctx);
+                    loaded = getReadDataSource().findAllById(ids, ctx);
                     checkAllFoundAndParentMatchedOrFail(ids, loaded, ctx);
                     if (hasGuard()) {
                         checkCanAccessAll(AuthorizationGuard.Action.DELETE_ALL, request, loaded);
                     }
                 }
+                for (E entity : loaded) {
+                    for (RestlessLifecycleHook<E> hook : hooks) {
+                        hook.beforeDelete(entity, ctx);
+                    }
+                }
                 rawDataSource.deleteAll(deleteModel, ctx);
+                rawDataSource.flush();
+                for (E entity : loaded) {
+                    for (RestlessLifecycleHook<E> hook : hooks) {
+                        hook.afterDelete(entity, ctx);
+                    }
+                }
                 return null;
             });
             return ResponseEntity.noContent().build();
@@ -1469,6 +1665,27 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         throw new IllegalStateException("No @Id field found on " + entityType);
     }
 
+    private static boolean isMultipart(HttpServletRequest request) {
+        String contentType = request.getContentType();
+        return contentType != null && contentType.toLowerCase(java.util.Locale.ROOT).startsWith("multipart/");
+    }
+
+    /**
+     * Multipart create: binds form fields and file parts onto a fresh {@code type} instance with the
+     * same {@link ServletRequestDataBinder} search DTOs use - a {@code MultipartFile} property
+     * receives the part with its name. {@code 415} unless {@link #acceptsMultipartCreate()}.
+     */
+    private Object bindMultipart(HttpServletRequest request, Class<?> type) throws Exception {
+        if (!acceptsMultipartCreate()) {
+            throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "This resource accepts JSON only");
+        }
+        Object target = resolveNoArgConstructor(type, "multipart create model").newInstance();
+        ServletRequestDataBinder binder = new ServletRequestDataBinder(target);
+        binder.setConversionService(conversionService);
+        binder.bind(request);
+        return target;
+    }
+
     private Object readBody(HttpServletRequest request, Class<?> type) throws java.io.IOException {
         // Bypasses HttpMessageConverter (there's no typed @RequestBody parameter to hang one off
         // of), so malformed JSON must be translated to 400 by hand - otherwise it surfaces as an
@@ -1597,11 +1814,123 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     }
 
     private void validate(Object target) throws MethodArgumentNotValidException {
-        BindingResult errors = new BeanPropertyBindingResult(target, target.getClass().getSimpleName());
-        validator.validate(target, errors);
+        validate(target, null);
+    }
+
+    /**
+     * {@code group} (one of {@link RestlessValidationGroups}) is applied on top of {@code Default},
+     * when the validator supports groups (Spring Boot's always does).
+     */
+    private void validate(Object target, Class<?> group) throws MethodArgumentNotValidException {
+        BindingResult errors = violations(target, group);
         if (errors.hasErrors()) {
             throw new MethodArgumentNotValidException(new MethodParameter(VALIDATION_TARGET_METHOD, 0), errors);
         }
+    }
+
+    private BindingResult violations(Object target, Class<?> group) {
+        BindingResult errors = new BeanPropertyBindingResult(target, target.getClass().getSimpleName());
+        if (group != null && validator instanceof org.springframework.validation.SmartValidator smart) {
+            smart.validate(target, errors, jakarta.validation.groups.Default.class, group);
+        } else {
+            validator.validate(target, errors);
+        }
+        return errors;
+    }
+
+    /** Marks an authorization denial inside a {@code PARTIAL} bulk row, so it aborts the request instead of becoming a row error. */
+    private static final class BulkRowDenied extends RuntimeException {
+        private final ResponseStatusException denial;
+
+        BulkRowDenied(ResponseStatusException denial) {
+            super(denial);
+            this.denial = denial;
+        }
+    }
+
+    /**
+     * {@code PARTIAL} bulk create. Each row gets its own transaction ({@link
+     * TransactionSupport#inNewTransaction}): a row that fails validation, that its data source
+     * rejects, or that the database refuses is reported in {@link RestlessBulkResult#errors()} and
+     * rolled back alone; a duplicate (see {@link #getBulkDeduplicator()}) is skipped. An
+     * authorization denial is never "a bad row": it aborts the request, leaving the rows already
+     * created - each of which passed the same checks - in place.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private ResponseEntity<?> createBulkPartial(HttpServletRequest request, RestlessContext ctx, List<Object> bodies,
+                                                CreateDataSource rawDataSource) throws Exception {
+        RestlessDedupeKey dedupe = getBulkDeduplicator();
+        boolean dedupeOn = dedupe != null && !"false".equalsIgnoreCase(request.getParameter("dedupe"));
+        Set<Object> seen = new HashSet<>();
+        if (dedupeOn) {
+            Specification<E> visible = withScope(withParentFilter(excludeSoftDeleted((root, query, cb) -> cb.conjunction()), ctx),
+                    AuthorizationGuard.Action.READ_LIST, null, request);
+            List<E> existing = transactionSupport.inReadOnlyTransaction(() ->
+                    getReadDataSource().findAll(visible, org.springframework.data.domain.PageRequest.of(0, maxListSize), ctx).getContent());
+            for (E row : existing) {
+                Object key = dedupe.keyOfExisting(row);
+                if (key != null) {
+                    seen.add(key);
+                }
+            }
+        }
+
+        List<RestlessBulkResult.RowError> errors = new ArrayList<>();
+        List<Object> items = new ArrayList<>();
+        int skipped = 0;
+        for (int index = 0; index < bodies.size(); index++) {
+            Object body = bodies.get(index);
+            BindingResult invalid = violations(body, RestlessValidationGroups.OnCreate.class);
+            if (invalid.hasErrors()) {
+                errors.add(new RestlessBulkResult.RowError(index, describe(invalid)));
+                continue;
+            }
+            if (dedupeOn) {
+                Object key = dedupe.keyOfModel(body);
+                if (key != null && !seen.add(key)) {
+                    skipped++;
+                    continue;
+                }
+            }
+            try {
+                items.add(transactionSupport.inNewTransaction(() -> {
+                    E created = (E) rawDataSource.create((CreateModel) body, ctx);
+                    writeParentFieldIfNested(created, ctx);
+                    fieldRules.applyPrincipal(created, ctx, conversionService);
+                    try {
+                        checkCanAccess(AuthorizationGuard.Action.CREATE, request, created);
+                    } catch (ResponseStatusException denial) {
+                        throw new BulkRowDenied(denial);
+                    }
+                    for (RestlessLifecycleHook<E> hook : hooks) {
+                        hook.afterCreate(created, ctx);
+                    }
+                    rawDataSource.flush();
+                    return getEntityMapper().map(created);
+                }));
+            } catch (BulkRowDenied denied) {
+                throw denied.denial;
+            } catch (ResponseStatusException e) {
+                int status = e.getStatusCode().value();
+                if (status == 401 || status == 403) {
+                    throw e;
+                }
+                errors.add(new RestlessBulkResult.RowError(index, e.getReason() != null ? e.getReason() : e.getMessage()));
+            } catch (MethodArgumentNotValidException e) {
+                errors.add(new RestlessBulkResult.RowError(index, describe(e.getBindingResult())));
+            } catch (RuntimeException e) {
+                errors.add(new RestlessBulkResult.RowError(index, e instanceof org.springframework.dao.DataIntegrityViolationException
+                        ? "The row conflicts with existing data" : String.valueOf(e.getMessage())));
+            }
+        }
+        return ResponseEntity.ok(new RestlessBulkResult(items.size(), skipped, errors, items));
+    }
+
+    private static String describe(BindingResult errors) {
+        return errors.getFieldErrors().stream()
+                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .sorted()
+                .collect(java.util.stream.Collectors.joining("; "));
     }
 
     // ---- RestlessContext construction (Feature A) / nested-resource parent scoping (Feature B) ----
@@ -1614,7 +1943,8 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     private RestlessContext buildContext(HttpServletRequest request, AuthorizationGuard.Action action, String customActionName) {
         @SuppressWarnings("unchecked")
         Map<String, String> pathVariables = (Map<String, String>) request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
-        return RestlessContext.build(pathVariables == null ? Map.of() : pathVariables, request, action, customActionName, conversionService);
+        return RestlessContext.build(pathVariables == null ? Map.of() : pathVariables, request, action, customActionName,
+                conversionService, parentDescriptor, principalIdResolver, fieldRules);
     }
 
     private boolean isNested() {
@@ -1707,25 +2037,52 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
         return hasGuard();
     }
 
+    // Denials and denyAs: under NOT_FOUND every denial below is shaped exactly like the matching
+    // "doesn't exist" answer of the same route - same status, same message, and for the two plain
+    // reads (findOne/namedView, whose missing row is a bodiless 404) no body either, see canRead.
+    // A caller can't tell "not yours" from "not there". Metrics still count every denial.
+
+    private boolean hidesDenials() {
+        return denyAs == RestlessDenial.NOT_FOUND;
+    }
+
     private void checkPreCheck(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request) {
         if (!cachedGuard.preCheck(action, customActionName, request)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "preCheck");
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to perform " + action);
+            throw hidesDenials()
+                    ? new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found")
+                    : new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to perform " + action);
         }
     }
 
     private void checkCanAccess(AuthorizationGuard.Action action, HttpServletRequest request, E entity) {
         if (!cachedGuard.canAccess(action, request, entity)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
+            throw denied(action, entity, "Not authorized to access this " + metadata.entityType().getSimpleName());
         }
+    }
+
+    /**
+     * {@link #findOne}/{@link #namedView}: {@code false} for a denial under {@code NOT_FOUND}, so the
+     * caller can answer with the same bodiless 404 a missing row gets; under {@code FORBIDDEN} a
+     * denial throws the usual 403.
+     */
+    private boolean canRead(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request, E entity) {
+        if (cachedGuard.canAccess(action, customActionName, request, entity)) {
+            return true;
+        }
+        metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
+        if (hidesDenials()) {
+            return false;
+        }
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
     }
 
     /** Post-image counterpart to {@link #checkCanAccess} (Ground rules item 2) - see {@link AuthorizationGuard#canAccessAfterWrite}'s own javadoc. */
     private void checkCanAccessAfterWrite(AuthorizationGuard.Action action, HttpServletRequest request, E after) {
         if (!cachedGuard.canAccessAfterWrite(action, null, request, after)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccessAfterWrite");
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to leave this " + metadata.entityType().getSimpleName() + " in its new state");
+            throw denied(action, after, "Not authorized to leave this " + metadata.entityType().getSimpleName() + " in its new state");
         }
     }
 
@@ -1733,16 +2090,32 @@ public abstract class RestlessResourceHandler<E, K> implements ro.cristivoicu.sp
     private void checkCanAccessAll(AuthorizationGuard.Action action, HttpServletRequest request, List<E> entities) {
         if (!cachedGuard.canAccessAll(action, request, entities)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccessAll");
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access one or more of these " + metadata.entityType().getSimpleName());
+            throw hidesDenials()
+                    ? new ResponseStatusException(HttpStatus.NOT_FOUND, "One or more entities not found")
+                    : new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access one or more of these " + metadata.entityType().getSimpleName());
         }
     }
 
-    /** Same as {@link #checkCanAccess(AuthorizationGuard.Action, HttpServletRequest, Object)}, threading a name through to the guard's own name-aware overload - see {@link #namedView}, the only caller. */
+    /** Same as {@link #checkCanAccess(AuthorizationGuard.Action, HttpServletRequest, Object)}, threading a name through to the guard's own name-aware overload. */
     private void checkCanAccess(AuthorizationGuard.Action action, String customActionName, HttpServletRequest request, E entity) {
         if (!cachedGuard.canAccess(action, customActionName, request, entity)) {
             metrics.recordDenial(metadata.entityType().getSimpleName(), action.name(), "canAccess");
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this " + metadata.entityType().getSimpleName());
+            throw denied(action, entity, "Not authorized to access this " + metadata.entityType().getSimpleName());
         }
+    }
+
+    /**
+     * The exception for a per-row denial: 403 with {@code forbiddenMessage}, or under {@code
+     * NOT_FOUND} the exact "Entity {id} not found" every write route answers for a missing row. A
+     * denied create gets a plain "Not found" - its id was only just generated and means nothing.
+     */
+    private ResponseStatusException denied(AuthorizationGuard.Action action, E entity, String forbiddenMessage) {
+        if (!hidesDenials()) {
+            return new ResponseStatusException(HttpStatus.FORBIDDEN, forbiddenMessage);
+        }
+        return action == AuthorizationGuard.Action.CREATE
+                ? new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found")
+                : new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity " + idOf(entity) + " not found");
     }
 
     /**

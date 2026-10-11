@@ -83,14 +83,25 @@ public class RestlessExceptionHandler {
      */
     private static final URI PROBLEM_BASE = URI.create("https://github.com/cristivoicu/spring-boot-restless/problems/");
 
+    /** {@code null}: answer with a {@code ProblemDetail}. See {@link RestlessErrorBodyFactory}. */
+    private final RestlessErrorBodyFactory bodyFactory;
+
+    public RestlessExceptionHandler() {
+        this(null);
+    }
+
+    public RestlessExceptionHandler(RestlessErrorBodyFactory bodyFactory) {
+        this.bodyFactory = bodyFactory;
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<ProblemDetail> handleResponseStatus(ResponseStatusException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleResponseStatus(ResponseStatusException ex, HttpServletRequest request) {
         String message = ex.getReason() != null ? ex.getReason() : reasonPhraseOf(ex.getStatusCode());
         return respond(ex.getStatusCode(), problemType(slugOf(ex.getStatusCode())), message, request, List.of());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ProblemDetail> handleValidation(MethodArgumentNotValidException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleValidation(MethodArgumentNotValidException ex, HttpServletRequest request) {
         // Sorted: Jakarta Bean Validation makes no ordering guarantee for which constraint
         // violation surfaces first, and RestlessResourceHandler's manual Validator.validate()
         // call (dynamic routes) doesn't necessarily walk fields in the same order a real
@@ -110,12 +121,12 @@ public class RestlessExceptionHandler {
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ProblemDetail> handleUnreadableBody(HttpMessageNotReadableException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleUnreadableBody(HttpMessageNotReadableException ex, HttpServletRequest request) {
         return respond(HttpStatus.BAD_REQUEST, problemType("malformed-request-body"), "Malformed request body", request, List.of());
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    public ResponseEntity<ProblemDetail> handleTypeMismatch(MethodArgumentTypeMismatchException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleTypeMismatch(MethodArgumentTypeMismatchException ex, HttpServletRequest request) {
         String message = "Failed to convert '" + ex.getName() + "' to the expected type";
         return respond(HttpStatus.BAD_REQUEST, problemType("type-mismatch"), message, request, List.of());
     }
@@ -131,7 +142,7 @@ public class RestlessExceptionHandler {
      * attempted), this reports a write that was actually attempted and rejected by the database.
      */
     @ExceptionHandler(OptimisticLockingFailureException.class)
-    public ResponseEntity<ProblemDetail> handleOptimisticLock(OptimisticLockingFailureException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleOptimisticLock(OptimisticLockingFailureException ex, HttpServletRequest request) {
         return respond(HttpStatus.CONFLICT, problemType("optimistic-lock-conflict"),
                 "The resource was modified concurrently - reload and try again", request, List.of());
     }
@@ -146,7 +157,7 @@ public class RestlessExceptionHandler {
      * which belongs in a response body.
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ProblemDetail> handleDataIntegrityViolation(DataIntegrityViolationException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleDataIntegrityViolation(DataIntegrityViolationException ex, HttpServletRequest request) {
         return respond(HttpStatus.CONFLICT, problemType("data-integrity-violation"),
                 "The request conflicts with existing data", request, List.of());
     }
@@ -167,7 +178,7 @@ public class RestlessExceptionHandler {
      * expected, routine outcomes that don't warrant one.
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleUnexpected(Exception ex, HttpServletRequest request) {
         if (ex instanceof org.springframework.web.ErrorResponse selfDescribing) {
             String message = selfDescribing.getBody().getDetail();
             return respond(selfDescribing.getStatusCode(), problemType(slugOf(selfDescribing.getStatusCode())),
@@ -178,8 +189,13 @@ public class RestlessExceptionHandler {
                 "Internal server error", request, List.of());
     }
 
-    private ResponseEntity<ProblemDetail> respond(HttpStatusCode status, URI type, String message, HttpServletRequest request,
+    private ResponseEntity<Object> respond(HttpStatusCode status, URI type, String message, HttpServletRequest request,
                                                     List<RestlessFieldError> details) {
+        if (bodyFactory != null) {
+            return ResponseEntity.status(status)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(bodyFactory.body(status, message, details, request));
+        }
         ProblemDetail body = ProblemDetail.forStatusAndDetail(status, message);
         body.setType(type);
         body.setTitle(reasonPhraseOf(status));

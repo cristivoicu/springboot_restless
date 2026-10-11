@@ -68,6 +68,36 @@ public final class RestlessSpecifications<E> {
         return values == null || values.isEmpty() ? this : add((root, query, cb) -> root.get(property).in(values));
     }
 
+    /**
+     * Rows whose {@code ownerProperty} equals {@code principalId}; a {@code null} principal
+     * matches nothing (fail closed) rather than being skipped like other absent filter values.
+     */
+    public RestlessSpecifications<E> ownedBy(String ownerProperty, Object principalId) {
+        return add(principalId == null
+                ? (root, query, cb) -> cb.disjunction()
+                : (root, query, cb) -> cb.equal(root.get(ownerProperty), principalId));
+    }
+
+    /**
+     * Rows whose {@code linkProperty} points at a {@code parentType} row (by its {@code
+     * parentIdProperty}) whose {@code parentOwnerProperty} equals {@code principalId} - one SQL
+     * subquery, for hand-written guards' {@code scope()}. A {@code null} principal matches nothing.
+     */
+    public RestlessSpecifications<E> ownedVia(String linkProperty, Class<?> parentType, String parentIdProperty,
+                                              String parentOwnerProperty, Object principalId) {
+        if (principalId == null) {
+            return add((root, query, cb) -> cb.disjunction());
+        }
+        return add((root, query, cb) -> {
+            Class<?> idType = root.get(linkProperty).getJavaType();
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            jakarta.persistence.criteria.Subquery<Object> owned = (jakarta.persistence.criteria.Subquery) query.subquery(idType);
+            jakarta.persistence.criteria.Root<?> parent = owned.from(parentType);
+            owned.select(parent.get(parentIdProperty)).where(cb.equal(parent.get(parentOwnerProperty), principalId));
+            return root.get(linkProperty).in(owned);
+        });
+    }
+
     private RestlessSpecifications<E> add(Specification<E> spec) {
         predicates.add(spec);
         return this;

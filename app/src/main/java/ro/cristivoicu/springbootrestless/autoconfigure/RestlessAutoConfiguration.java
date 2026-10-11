@@ -13,6 +13,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.validation.Validator;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import org.springdoc.core.customizers.GlobalOpenApiCustomizer;
+import ro.cristivoicu.springbootrestless.authorization.RestlessPrincipalIdResolver;
+import ro.cristivoicu.springbootrestless.authorization.ownership.RestlessOwnershipGuards;
 import ro.cristivoicu.springbootrestless.embed.RestlessEmbedResolver;
 import ro.cristivoicu.springbootrestless.error.RestlessExceptionHandler;
 import ro.cristivoicu.springbootrestless.metrics.RestlessAuthorizationMetrics;
@@ -63,10 +65,30 @@ public class RestlessAutoConfiguration {
         return new RestlessAuthorizationMetrics(registryProvider);
     }
 
+    /**
+     * The default principal id - the authenticated principal's name. Replace it with your own
+     * bean when owner columns hold something else (a local user id, a tenant id).
+     */
     @Bean
     @ConditionalOnMissingBean
-    public RestlessExceptionHandler restlessExceptionHandler() {
-        return new RestlessExceptionHandler();
+    public RestlessPrincipalIdResolver restlessPrincipalIdResolver() {
+        return RestlessPrincipalIdResolver.AUTHENTICATION_NAME;
+    }
+
+    /**
+     * Backs {@code @RestlessOwnedBy}. The {@code EntityManager} is Spring's shared, transaction-bound
+     * proxy, so the guard's ownership lookups join the request's own transaction.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public RestlessOwnershipGuards restlessOwnershipGuards(jakarta.persistence.EntityManager entityManager) {
+        return new RestlessOwnershipGuards(entityManager);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public RestlessExceptionHandler restlessExceptionHandler(ObjectProvider<ro.cristivoicu.springbootrestless.error.RestlessErrorBodyFactory> bodyFactory) {
+        return new RestlessExceptionHandler(bodyFactory.getIfAvailable());
     }
 
     /**
@@ -100,8 +122,10 @@ public class RestlessAutoConfiguration {
                                                 RestlessEmbedResolver embedResolver,
                                                 PlatformTransactionManager transactionManager,
                                                 ObjectProvider<RestlessAuthorizationMetrics> metricsProvider,
-                                                RestlessProperties properties) {
+                                                RestlessProperties properties,
+                                                ObjectProvider<RestlessPrincipalIdResolver> principalIdResolver) {
         return new RestlessRegistrar(applicationContext, requestMappingHandlerMapping, objectMapper,
-                conversionService, validator, embedResolver, transactionManager, metricsProvider, properties);
+                conversionService, validator, embedResolver, transactionManager, metricsProvider, properties,
+                principalIdResolver.getIfAvailable(() -> RestlessPrincipalIdResolver.AUTHENTICATION_NAME));
     }
 }

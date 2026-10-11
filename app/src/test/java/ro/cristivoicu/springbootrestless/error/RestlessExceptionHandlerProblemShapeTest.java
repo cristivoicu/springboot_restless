@@ -45,10 +45,10 @@ class RestlessExceptionHandlerProblemShapeTest {
         RestlessExceptionHandler handler = new RestlessExceptionHandler();
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/nuggets/missing");
 
-        ResponseEntity<ProblemDetail> response = handler.handleResponseStatus(
+        ResponseEntity<Object> response = handler.handleResponseStatus(
                 new ResponseStatusException(HttpStatus.NOT_FOUND, "Entity missing not found"), request);
 
-        URI type = response.getBody().getType();
+        URI type = ((ProblemDetail) response.getBody()).getType();
         assertThat(type).isNotEqualTo(URI.create("about:blank"));
         assertThat(type.toString()).endsWith("not-found");
     }
@@ -58,10 +58,10 @@ class RestlessExceptionHandlerProblemShapeTest {
         RestlessExceptionHandler handler = new RestlessExceptionHandler();
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/x");
 
-        URI forbidden = handler.handleResponseStatus(
-                new ResponseStatusException(HttpStatus.FORBIDDEN, "nope"), request).getBody().getType();
-        URI badRequest = handler.handleResponseStatus(
-                new ResponseStatusException(HttpStatus.BAD_REQUEST, "bad"), request).getBody().getType();
+        URI forbidden = ((ProblemDetail) handler.handleResponseStatus(
+                new ResponseStatusException(HttpStatus.FORBIDDEN, "nope"), request).getBody()).getType();
+        URI badRequest = ((ProblemDetail) handler.handleResponseStatus(
+                new ResponseStatusException(HttpStatus.BAD_REQUEST, "bad"), request).getBody()).getType();
 
         assertThat(forbidden).isNotEqualTo(badRequest);
     }
@@ -76,11 +76,11 @@ class RestlessExceptionHandlerProblemShapeTest {
         bindingResult.addError(new org.springframework.validation.FieldError(
                 "NuggetCreateModel", "code", null, false, new String[]{"NotBlank"}, null, "must not be blank"));
 
-        ResponseEntity<ProblemDetail> response = handler.handleValidation(
+        ResponseEntity<Object> response = handler.handleValidation(
                 new MethodArgumentNotValidException(DUMMY_PARAMETER, bindingResult), request);
 
         @SuppressWarnings("unchecked")
-        List<RestlessFieldError> errors = (List<RestlessFieldError>) response.getBody().getProperties().get("errors");
+        List<RestlessFieldError> errors = (List<RestlessFieldError>) ((ProblemDetail) response.getBody()).getProperties().get("errors");
         assertThat(errors).hasSize(1);
         RestlessFieldError error = errors.get(0);
         assertThat(error.field()).isEqualTo("code");

@@ -23,11 +23,11 @@ class RestlessExceptionHandlerOptimisticLockTest {
         RestlessExceptionHandler handler = new RestlessExceptionHandler();
         MockHttpServletRequest request = new MockHttpServletRequest("PUT", "/widgets/1");
 
-        ResponseEntity<ProblemDetail> response = handler.handleOptimisticLock(
+        ResponseEntity<Object> response = handler.handleOptimisticLock(
                 new OptimisticLockingFailureException("stale write"), request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        ProblemDetail body = response.getBody();
+        ProblemDetail body = ((ProblemDetail) response.getBody());
         assertThat(body).isNotNull();
         assertThat(body.getStatus()).isEqualTo(409);
         assertThat(body.getTitle()).isEqualTo("Conflict");

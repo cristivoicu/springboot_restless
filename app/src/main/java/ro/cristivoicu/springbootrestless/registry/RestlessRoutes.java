@@ -49,6 +49,23 @@ public final class RestlessRoutes {
             new RouteDefinition("deleteAll", "/bulk-delete", RequestMethod.POST, AuthorizationGuard.Action.DELETE_ALL)
     );
 
+    /**
+     * Where a fixed route is mounted for a resource's {@code collectionGet}: under {@code LIST} the
+     * bare collection path serves {@code findList} and {@code findPage} moves to {@code /page};
+     * every other route is unaffected. Shared by registration and OpenAPI generation.
+     */
+    public static String pathSuffixOf(RouteDefinition route, ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet collectionGet) {
+        if (collectionGet == ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet.LIST) {
+            if (route.handlerMethodName().equals("findList")) {
+                return "";
+            }
+            if (route.handlerMethodName().equals("findPage")) {
+                return "/page";
+            }
+        }
+        return route.pathSuffix();
+    }
+
     private RestlessRoutes() {
     }
 }

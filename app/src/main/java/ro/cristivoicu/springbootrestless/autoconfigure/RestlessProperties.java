@@ -30,6 +30,12 @@ public class RestlessProperties {
     @NestedConfigurationProperty
     private final SoftDelete softDelete = new SoftDelete();
 
+    @NestedConfigurationProperty
+    private final Authorization authorization = new Authorization();
+
+    @NestedConfigurationProperty
+    private final Immutable immutable = new Immutable();
+
     public List getList() {
         return list;
     }
@@ -44,6 +50,65 @@ public class RestlessProperties {
 
     public SoftDelete getSoftDelete() {
         return softDelete;
+    }
+
+    /**
+     * {@code restless.collection-get}: what a plain {@code GET {basePath}} returns on resources that
+     * don't choose - {@code page} (default) or {@code list}. See {@code RestlessCollectionGet}.
+     */
+    private ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet collectionGet =
+            ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet.PAGE;
+
+    public ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet getCollectionGet() {
+        return collectionGet;
+    }
+
+    public void setCollectionGet(ro.cristivoicu.springbootrestless.annotation.RestlessCollectionGet collectionGet) {
+        this.collectionGet = collectionGet;
+    }
+
+    public Authorization getAuthorization() {
+        return authorization;
+    }
+
+    public Immutable getImmutable() {
+        return immutable;
+    }
+
+    /**
+     * {@code restless.authorization.deny-as}: what a denied caller gets on every resource that
+     * doesn't set its own {@code denyAs} - {@code forbidden} (403, the default) or {@code
+     * not-found} (404, indistinguishable from a missing id). See {@code RestlessDenial}.
+     */
+    public static class Authorization {
+        private ro.cristivoicu.springbootrestless.annotation.RestlessDenial denyAs =
+                ro.cristivoicu.springbootrestless.annotation.RestlessDenial.FORBIDDEN;
+
+        public ro.cristivoicu.springbootrestless.annotation.RestlessDenial getDenyAs() {
+            return denyAs;
+        }
+
+        public void setDenyAs(ro.cristivoicu.springbootrestless.annotation.RestlessDenial denyAs) {
+            this.denyAs = denyAs;
+        }
+    }
+
+    /**
+     * {@code restless.immutable.on-update}: what {@code @RestlessImmutable(onUpdate = DEFAULT)}
+     * does when an update/patch tries to change the field - {@code ignore} (the default) or
+     * {@code reject} (400).
+     */
+    public static class Immutable {
+        private ro.cristivoicu.springbootrestless.annotation.RestlessImmutable.OnChange onUpdate =
+                ro.cristivoicu.springbootrestless.annotation.RestlessImmutable.OnChange.IGNORE;
+
+        public ro.cristivoicu.springbootrestless.annotation.RestlessImmutable.OnChange getOnUpdate() {
+            return onUpdate;
+        }
+
+        public void setOnUpdate(ro.cristivoicu.springbootrestless.annotation.RestlessImmutable.OnChange onUpdate) {
+            this.onUpdate = onUpdate;
+        }
     }
 
     /** {@code restless.list.*} - see {@link RestlessResourceHandler#DEFAULT_MAX_LIST_SIZE}'s own javadoc for why this cap exists at all. */

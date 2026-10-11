@@ -38,7 +38,9 @@ final class ProtectedEntityFields {
                 if (field.isAnnotationPresent(Id.class)
                         || field.isAnnotationPresent(Version.class)
                         || field.isAnnotationPresent(CreatedDate.class)
-                        || field.isAnnotationPresent(LastModifiedDate.class)) {
+                        || field.isAnnotationPresent(LastModifiedDate.class)
+                        // Server-set from the principal, never from a body - see RestlessFromPrincipal.
+                        || field.isAnnotationPresent(ro.cristivoicu.springbootrestless.annotation.RestlessFromPrincipal.class)) {
                     names.add(field.getName());
                 }
             }

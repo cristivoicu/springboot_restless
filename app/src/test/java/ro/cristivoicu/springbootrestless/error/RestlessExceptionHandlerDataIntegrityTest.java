@@ -22,11 +22,11 @@ class RestlessExceptionHandlerDataIntegrityTest {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/nuggets");
         String sqlLeak = "Unique index or primary key violation: \"PUBLIC.NUGGET(CODE) VALUES ('a-code')\"";
 
-        ResponseEntity<ProblemDetail> response = handler.handleDataIntegrityViolation(
+        ResponseEntity<Object> response = handler.handleDataIntegrityViolation(
                 new DataIntegrityViolationException(sqlLeak), request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        ProblemDetail body = response.getBody();
+        ProblemDetail body = ((ProblemDetail) response.getBody());
         assertThat(body).isNotNull();
         assertThat(body.getDetail()).doesNotContain("PUBLIC.NUGGET").doesNotContain("a-code");
     }

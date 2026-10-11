@@ -91,6 +91,30 @@ final class TransactionSupport {
         }
     }
 
+    /**
+     * {@code REQUIRES_NEW}: its own transaction, committed or rolled back on its own - used by a
+     * {@code PARTIAL} bulk create so one bad row (even one that made a {@code @Transactional}
+     * service mark its transaction rollback-only) can't take the good rows down with it.
+     */
+    <T> T inNewTransaction(Callable<T> work) throws Exception {
+        if (transactionManager == null) {
+            return work.call();
+        }
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        try {
+            return template.execute(status -> {
+                try {
+                    return work.call();
+                } catch (Exception e) {
+                    throw new TransactionRollbackWrapper(e);
+                }
+            });
+        } catch (TransactionRollbackWrapper wrapper) {
+            throw wrapper.cause;
+        }
+    }
+
     /** See {@link #inTransaction}'s own javadoc for why this exists at all. */
     private static final class TransactionRollbackWrapper extends RuntimeException {
         private final Exception cause;

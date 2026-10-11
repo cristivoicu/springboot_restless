@@ -609,6 +609,88 @@ whose only job was the same per-row check `RestlessResourceHandler` now does aut
 usually be deleted outright - see the previous changelog entry's `example` reference for a
 real one.
 
+### Ownership, denials and server-set fields
+
+"A user manages only what they own" is declarative - no guard class:
+
+```java
+@RestlessEntity(basePath = "/notebooks", denyAs = RestlessDenial.NOT_FOUND)
+@RestlessOwnedBy(field = "ownerUsername")
+public class Notebook {
+    @RestlessFromPrincipal @Column(nullable = false) private String ownerUsername; // set from the caller, never from a body
+    @RestlessImmutable(onUpdate = RestlessImmutable.OnChange.REJECT) private String code; // 400 if an update changes it
+}
+
+@RestlessEntity(basePath = "/notebooks/{notebookId}/notes",
+        parent = @RestlessParent(variable = "notebookId", field = "notebookId"), denyAs = RestlessDenial.NOT_FOUND)
+@RestlessOwnedBy(path = "notebookId", via = Notebook.class, ownerField = "ownerUsername")
+public class Note { ... }
+```
+
+- **`@RestlessOwnedBy`** builds an ownership guard (`RestlessOwnershipGuards`): lists are scoped in
+  SQL (a subquery for the `via` shape), every single row is checked, a create pointing at someone
+  else's parent is rolled back. Nested under its own parent, the guard answers for the path's parent
+  once, in `preCheck`. No principal owns nothing (fail closed).
+- **`denyAs`** - `FORBIDDEN` (403, default) or `NOT_FOUND` (404, byte-identical to a missing id).
+  Global default: `restless.authorization.deny-as`.
+- **`@RestlessFromPrincipal`** - written from the caller on create (before the INSERT), immutable
+  afterwards, rejected at compile time if a create/update/patch model declares it.
+- **`@RestlessImmutable`** - set on create, never changed by update/patch; `IGNORE` or `REJECT`
+  (`restless.immutable.on-update`).
+- **Who is the caller** - a `RestlessPrincipalIdResolver` bean (default: the authenticated name),
+  available everywhere as `RestlessContext.principalId()`. Return a local user id if that's what
+  owner columns hold.
+
+### Actions, files and lifecycle hooks on the generated tier
+
+```java
+@RestlessEntity(basePath = "/notebooks/{notebookId}/attachments", ...,
+        multipartCreate = true,                        // POST also takes multipart/form-data
+        views = AttachmentContentView.class,           // GET .../{id}/content -> RestlessBinary
+        collectionActions = AttachmentTotalSizeAction.class, // GET .../actions/total-size
+        hooks = AttachmentAuditHook.class)
+```
+
+- Action and view beans are named with `@RestlessActionName("...")`; `readActions`,
+  `collectionActions`, `writeActions` and `views` all take bean classes.
+- **`CollectionAction<E>`** - a read over the whole collection that isn't a page of rows (a summary,
+  an export, a download link). It receives the caller's visible rows as a `Specification`.
+- **`RestlessBinary`** - return it from a view, write action or collection action to send a PDF,
+  ZIP or image; written straight to the response inside the route's transaction.
+- **`multipartCreate`** - form fields and file parts bound onto the create model
+  (`MultipartFile file`), validated like JSON; a JSON-only resource answers `415`.
+- **`RestlessLifecycleHook<E>`** - `afterCreate`, `beforeUpdate`/`afterUpdate`,
+  `beforeDelete`/`afterDelete`, inside the write's transaction and only after authorization
+  succeeded; bulk routes call them per row.
+
+### Bulk import, polymorphism, validation groups, error shape
+
+- **Partial bulk** - `@RestlessEntity(bulkMode = PARTIAL, bulkDedupe = NoteTextKey.class)`:
+  `POST {basePath}/bulk` creates the good rows, reports the bad ones by index, and skips
+  duplicates of rows the caller can already see (or of earlier rows in the batch) unless
+  `?dedupe=false`. Each row has its own transaction; an authorization denial still aborts the
+  request. Response: `RestlessBulkResult {created, skipped, errors[{index, message}], items}`.
+- **Polymorphic create** - put `@RestlessSubtype(Circle.class)` on each `@JsonTypeInfo` create model
+  subtype; the default create data source instantiates that entity subclass.
+- **Validation groups** - one model for create and update:
+  `@NotBlank(groups = RestlessValidationGroups.OnCreate.class) String name` is required to create,
+  optional to update (`OnUpdate`, `OnPatch` exist too).
+- **List or page** - `collectionGet = LIST` (or `restless.collection-get=list` globally) makes
+  `GET {basePath}` the plain array; pages move to `{basePath}/page`, `/list` stays as an alias.
+- **Your own error body** - register a `RestlessErrorBodyFactory` bean and every generated route
+  answers with what it returns instead of a `ProblemDetail`.
+- **Repository elsewhere** - `@RestlessEntity(repository = ShapeStore.class)` instead of the
+  `{Entity}Repository`-next-to-the-entity convention.
+- **Ownership contract in one call** (`spring-boot-restless-test`):
+
+```java
+RestlessOwnershipContract.of(mockMvc, "/notebooks/{notebookId}/notes")
+        .pathVariable("notebookId", alicesNotebook)
+        .owner(user("alice")).stranger(user("bob"))
+        .createBody("{\"text\":\"secret\"}").updateBody("{\"text\":\"changed\"}")
+        .verify(); // stranger: 404 on read/update/delete/bulk-delete, invisible in lists, can't create under Alice
+```
+
 ### OpenAPI / Swagger documentation
 
 Add `springdoc-openapi-starter-webmvc-ui` to the classpath and every route this framework

@@ -68,4 +68,16 @@ public @interface RestlessResource {
      * variable}/{@code field}) means a flat, non-nested resource - today's behavior, unchanged.
      */
     RestlessParent parent() default @RestlessParent;
+
+    /**
+     * What a denied caller gets - see {@link RestlessDenial}. {@link RestlessDenial#DEFAULT} defers
+     * to {@code restless.authorization.deny-as}.
+     */
+    RestlessDenial denyAs() default RestlessDenial.DEFAULT;
+
+    /** How bulk create treats bad rows - see {@link RestlessBulkMode}. */
+    RestlessBulkMode bulkMode() default RestlessBulkMode.DEFAULT;
+
+    /** What a plain {@code GET {basePath}} returns - see {@link RestlessCollectionGet}; {@code DEFAULT} defers to {@code restless.collection-get}. */
+    RestlessCollectionGet collectionGet() default RestlessCollectionGet.DEFAULT;
 }
