@@ -685,7 +685,7 @@ sequenceDiagram
 <dependency>
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless-cerbos</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
 </dependency>
 ```
 
@@ -698,7 +698,7 @@ declare (`spring-boot-restless`, `spring-boot-restless-cerbos`, `spring-boot-res
         <dependency>
             <groupId>ro.cristivoicu</groupId>
             <artifactId>spring-boot-restless-dependencies</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <version>0.0.1</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>

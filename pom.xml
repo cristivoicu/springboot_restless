@@ -5,7 +5,7 @@
 
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless-reactor</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
     <packaging>pom</packaging>
     <name>spring-boot-restless-reactor</name>
     <description>Reactor build: the annotation processor must be a separately-built artifact

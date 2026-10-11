@@ -10,7 +10,7 @@
     </parent>
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
     <name>spring-boot-restless</name>
     <description>Annotation-driven REST CRUD for Spring Boot, built around DDD and volatility-based design.</description>
     <url>https://github.com/cristivoicu/spring-boot-restless</url>
@@ -75,7 +75,7 @@
         <dependency>
             <groupId>ro.cristivoicu</groupId>
             <artifactId>spring-boot-restless-processor</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <version>0.0.1</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -158,7 +158,7 @@
                         <path>
                             <groupId>ro.cristivoicu</groupId>
                             <artifactId>spring-boot-restless-processor</artifactId>
-                            <version>0.0.1-SNAPSHOT</version>
+                            <version>0.0.1</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>
@@ -192,7 +192,7 @@
             <!-- Ground rules Phase 3 item 17: wired against the stable-surface packages (see
                  the README's "Versioning and API Stability" section for the full list by class
                  name), but there is no previously published release of this artifact to diff
-                 against yet - only 0.0.1-SNAPSHOT, nothing on Maven Central.
+                 against yet - only 0.0.1, nothing on Maven Central.
                  ignoreMissingOldVersion makes that a correctly-wired no-op today (oldVersion's
                  RELEASE simply can't resolve) rather than a build failure; it starts actually
                  comparing the moment a real first version is published. Not a meaningful

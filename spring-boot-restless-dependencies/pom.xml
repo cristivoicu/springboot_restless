@@ -5,7 +5,7 @@
 
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless-dependencies</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
     <packaging>pom</packaging>
     <name>spring-boot-restless-dependencies</name>
     <description>Bill of materials for spring-boot-restless: import this into a consuming
@@ -25,17 +25,17 @@
             <dependency>
                 <groupId>ro.cristivoicu</groupId>
                 <artifactId>spring-boot-restless</artifactId>
-                <version>0.0.1-SNAPSHOT</version>
+                <version>0.0.1</version>
             </dependency>
             <dependency>
                 <groupId>ro.cristivoicu</groupId>
                 <artifactId>spring-boot-restless-cerbos</artifactId>
-                <version>0.0.1-SNAPSHOT</version>
+                <version>0.0.1</version>
             </dependency>
             <dependency>
                 <groupId>ro.cristivoicu</groupId>
                 <artifactId>spring-boot-restless-test</artifactId>
-                <version>0.0.1-SNAPSHOT</version>
+                <version>0.0.1</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

@@ -10,7 +10,7 @@
     </parent>
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless-example</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
     <name>spring-boot-restless-example</name>
     <description>Standalone implementation example: consumes spring-boot-restless (the
         framework) and spring-boot-restless-processor as a real external project would, under
@@ -23,14 +23,14 @@
     <!-- Imported, not hand-pinned per dependency below - example is the one place in this
          reactor meant to look like a real external consumer, so it's also the one place that
          demonstrates importing spring-boot-restless-dependencies instead of repeating
-         "0.0.1-SNAPSHOT" on every ro.cristivoicu dependency by hand (see the root README's
+         "0.0.1" on every ro.cristivoicu dependency by hand (see the root README's
          Cerbos-dependency step for the same snippet). -->
     <dependencyManagement>
         <dependencies>
             <dependency>
                 <groupId>ro.cristivoicu</groupId>
                 <artifactId>spring-boot-restless-dependencies</artifactId>
-                <version>0.0.1-SNAPSHOT</version>
+                <version>0.0.1</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -101,7 +101,7 @@
         <dependency>
             <groupId>ro.cristivoicu</groupId>
             <artifactId>spring-boot-restless-processor</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <version>0.0.1</version>
             <scope>provided</scope>
         </dependency>
 
@@ -192,7 +192,7 @@
                         <path>
                             <groupId>ro.cristivoicu</groupId>
                             <artifactId>spring-boot-restless-processor</artifactId>
-                            <version>0.0.1-SNAPSHOT</version>
+                            <version>0.0.1</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>

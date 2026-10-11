@@ -10,7 +10,7 @@
     </parent>
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless-test</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
     <name>spring-boot-restless-test</name>
     <description>MockMvc-based assertion helpers for a consumer's own tests against their
         Restless resources: the standard ErrorResponse shape (RestlessErrorAssertions) and the
@@ -29,7 +29,7 @@
         <dependency>
             <groupId>ro.cristivoicu</groupId>
             <artifactId>spring-boot-restless</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <version>0.0.1</version>
         </dependency>
 
         <!-- Compile scope, not test scope: ResultMatcher/MockMvcResultMatchers/jsonPath are this

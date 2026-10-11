@@ -10,7 +10,7 @@
     </parent>
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless-cerbos</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
     <name>spring-boot-restless-cerbos</name>
     <description>Optional Cerbos-backed AuthorizationGuard for spring-boot-restless. A separate
         module (not a package inside "app") so consumers who don't want Cerbos never pull in
@@ -26,7 +26,7 @@
         <dependency>
             <groupId>ro.cristivoicu</groupId>
             <artifactId>spring-boot-restless</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <version>0.0.1</version>
         </dependency>
 
         <dependency>

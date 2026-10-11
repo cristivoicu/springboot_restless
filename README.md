@@ -8,7 +8,7 @@
 [![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-brightgreen?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 
-> **Status:** pre-1.0 (`0.0.1-SNAPSHOT`). Not yet published to Maven Central — build and install locally (see [Installation](#installation)). See [Versioning and API Stability](#versioning-and-api-stability) for what stability guarantees apply before `1.0`.
+> **Status:** pre-1.0 (`0.0.1`). Not yet published to Maven Central — build and install locally (see [Installation](#installation)). See [Versioning and API Stability](#versioning-and-api-stability) for what stability guarantees apply before `1.0`.
 >
 > **Looking for more depth?** This README is a concise reference. For a full tutorial-depth
 > walkthrough of every mechanism — with sequence diagrams, the three-tier decision framework, and
@@ -115,7 +115,7 @@ the library you actually depend on only ever requires 17.
 
 ## Installation
 
-The project isn't published to Maven Central yet (still `0.0.1-SNAPSHOT` — see the status note
+The project isn't published to Maven Central yet (still `0.0.1` — see the status note
 above). Build and install it into your local repository first:
 
 ```bash
@@ -132,14 +132,14 @@ Then declare the dependency exactly as you would any other library.
 <dependency>
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
 </dependency>
 
 <!-- Optional: compile-time codegen from @RestlessEntity -->
 <dependency>
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless-processor</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
     <scope>provided</scope>
 </dependency>
 
@@ -147,7 +147,7 @@ Then declare the dependency exactly as you would any other library.
 <dependency>
     <groupId>ro.cristivoicu</groupId>
     <artifactId>spring-boot-restless-cerbos</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
 </dependency>
 ```
 
@@ -159,7 +159,7 @@ Or import the BOM once and drop the version from every `spring-boot-restless*` d
         <dependency>
             <groupId>ro.cristivoicu</groupId>
             <artifactId>spring-boot-restless-dependencies</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <version>0.0.1</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -171,11 +171,11 @@ Or import the BOM once and drop the version from every `spring-boot-restless*` d
 
 ```kotlin
 dependencies {
-    implementation("ro.cristivoicu:spring-boot-restless:0.0.1-SNAPSHOT")
-    annotationProcessor("ro.cristivoicu:spring-boot-restless-processor:0.0.1-SNAPSHOT") // optional
+    implementation("ro.cristivoicu:spring-boot-restless:0.0.1")
+    annotationProcessor("ro.cristivoicu:spring-boot-restless-processor:0.0.1") // optional
 
-    implementation("ro.cristivoicu:spring-boot-restless-cerbos:0.0.1-SNAPSHOT") // optional
-    testImplementation("ro.cristivoicu:spring-boot-restless-test:0.0.1-SNAPSHOT") // optional
+    implementation("ro.cristivoicu:spring-boot-restless-cerbos:0.0.1") // optional
+    testImplementation("ro.cristivoicu:spring-boot-restless-test:0.0.1") // optional
 }
 ```
 
@@ -183,11 +183,11 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'ro.cristivoicu:spring-boot-restless:0.0.1-SNAPSHOT'
-    annotationProcessor 'ro.cristivoicu:spring-boot-restless-processor:0.0.1-SNAPSHOT' // optional
+    implementation 'ro.cristivoicu:spring-boot-restless:0.0.1'
+    annotationProcessor 'ro.cristivoicu:spring-boot-restless-processor:0.0.1' // optional
 
-    implementation 'ro.cristivoicu:spring-boot-restless-cerbos:0.0.1-SNAPSHOT' // optional
-    testImplementation 'ro.cristivoicu:spring-boot-restless-test:0.0.1-SNAPSHOT' // optional
+    implementation 'ro.cristivoicu:spring-boot-restless-cerbos:0.0.1' // optional
+    testImplementation 'ro.cristivoicu:spring-boot-restless-test:0.0.1' // optional
 }
 ```
 
@@ -984,11 +984,11 @@ priority-ordered backlog with design notes, not a commitment.
 
 ## Versioning and API Stability
 
-`spring-boot-restless` is pre-1.0 (every module currently ships as `0.0.1-SNAPSHOT`). This section
+`spring-boot-restless` is pre-1.0 (every module currently ships as `0.0.1`). This section
 says, honestly, what that means for anyone depending on it today: what's stable enough to build
 on, what's still free to change shape, and what to expect once 1.0 actually ships.
 
-**Before 1.0:** no compatibility guarantee exists yet across any release. A `0.0.1-SNAPSHOT` build
+**Before 1.0:** no compatibility guarantee exists yet across any release. A `0.0.1` build
 today may not be source- or binary-compatible with the next one. That said, churn is concentrated
 in specific places (below) — most of the framework's public surface has been stable for a while in
 practice, just not yet under a stated promise.
@@ -1115,7 +1115,7 @@ reviewed and investigated promptly and fairly.
 
 ## Security Policy
 
-**Supported Versions:** `spring-boot-restless` is pre-1.0 (`0.0.1-SNAPSHOT`) and under active
+**Supported Versions:** `spring-boot-restless` is pre-1.0 (`0.0.1`) and under active
 development — only the latest commit on `main` is supported. There is no backport policy yet; see
 [Versioning and API Stability](#versioning-and-api-stability) above for what "pre-1.0" means for
 API stability.
@@ -1154,10 +1154,10 @@ properties, or Java code you control to reach.
 
 All notable changes to this project are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project doesn't follow SemVer yet
-(still `0.0.1-SNAPSHOT`, pre-1.0) — see [Versioning and API Stability](#versioning-and-api-stability)
+(still `0.0.1`, pre-1.0) — see [Versioning and API Stability](#versioning-and-api-stability)
 above for what stability guarantees actually apply before 1.0.
 
-### [Unreleased]
+### [0.0.1] - 2026-10-11
 
 **Added**
 
