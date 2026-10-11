@@ -52,12 +52,27 @@ public abstract class CreateDataSource<E, K, C extends CreateModel> extends Data
      * CreateDataSource} that only overrides the single-item context-aware {@code create} still
      * gets correct bulk behavior for free, the same "override one, get bulk for free" shape
      * {@link #createAll(List)} itself already has for the non-context {@link #create(Object)}.
+     * <p>
+     * Exception: a subclass that overrides {@link #createAll(List)} (a batched, validate-everything-
+     * first strategy) gets that override called - otherwise it would be silently bypassed and the
+     * batch would be created row by row instead.
      */
     public List<E> createAll(List<C> items, RestlessContext context) throws Exception {
+        if (overridesPlainCreateAll()) {
+            return createAll(items);
+        }
         List<E> created = new ArrayList<>(items.size());
         for (C item : items) {
             created.add(create(item, context));
         }
         return created;
+    }
+
+    private boolean overridesPlainCreateAll() {
+        try {
+            return getClass().getMethod("createAll", List.class).getDeclaringClass() != CreateDataSource.class;
+        } catch (NoSuchMethodException e) {
+            return false;
+        }
     }
 }
