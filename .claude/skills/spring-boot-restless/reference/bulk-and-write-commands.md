@@ -26,10 +26,18 @@ none of the rows exist yet for a per-instance check).
 Override `CreateDataSource#createAll`/`UpdateDataSource#updateAll` directly (they default to a
 plain loop over the single-item verb) only for a genuinely different bulk strategy (a single
 batched `saveAll(...)`, say) — a hand-written single-item `*DataSource` already gets correct bulk
-behavior for free otherwise.
+behavior for free otherwise. An overridden `createAll(List)` is honored by the context-aware
+`createAll(List, RestlessContext)` the handler calls.
 
-**When not to reach for it:** very large/unreliable-source batches (one bad row aborts
-everything — pre-validate or chunk instead), a mutation that isn't a plain field-level replace
+**Partial bulk create.** `bulkMode = RestlessBulkMode.PARTIAL` (on `@RestlessEntity` or
+`@RestlessResource`): each row in its own `REQUIRES_NEW` transaction; invalid/rejected rows are
+reported by index, the rest are created; response is `RestlessBulkResult {created, skipped,
+errors[{index, message}], items}`. With `bulkDedupe = <RestlessDedupeKey bean>`, rows whose key
+matches a visible existing row or an earlier row of the batch are skipped (`?dedupe=false` turns
+it off). An authorization denial still aborts the whole request. Only bulk create has this mode.
+
+**When not to reach for it:** very large/unreliable-source batches in the default mode (one bad
+row aborts everything — use `PARTIAL`, or pre-validate/chunk), a mutation that isn't a plain field-level replace
 (see write commands below — no `BulkWriteAction` exists), or high-volume streaming ingestion
 (every id is individually loaded/checked, fine for hundreds-to-low-thousands per request).
 
@@ -37,8 +45,9 @@ everything — pre-validate or chunk instead), a mutation that isn't a plain fie
 
 For a transition a full-replace `PUT` has no vocabulary to guard (illegal-state prevention,
 multi-step domain logic, a cap that depends on the row's *current* state, append-only mutation of
-a collection the update model deliberately never exposes). **Hand-wired tier only** —
-`@RestlessEntity` has no attribute for this.
+a collection the update model deliberately never exposes). On the generated tier, a
+`@Component @RestlessActionName("promote")` bean listed in `@RestlessEntity(writeActions = ...)`;
+on the manual tier, `getCustomWriteActions()`.
 
 ```
 POST {basePath}/{id}/actions/{name}

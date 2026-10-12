@@ -69,6 +69,7 @@ protected Specification<Thing> getSpecification(SearchDto dto) {
 }
 ```
 
-Or add a **named custom read action** (`getCustomReadActions()`, hand-wired tier only) alongside
+Or add a **named custom read action** (`readActions = ...` on `@RestlessEntity`, or
+`getCustomReadActions()` on the manual tier) alongside
 the default filter for a genuinely different query/`SearchDto` shape, exposed at
 `GET {basePath}/actions/{name}`.

@@ -68,6 +68,32 @@ public class ThingAuthorizationGuardBean implements AuthorizationGuard<Thing> {
 }
 ```
 
+## Ownership — no guard class needed
+
+For "a user manages only what they own", don't hand-write a guard:
+
+```java
+@RestlessEntity(basePath = "/events", denyAs = RestlessDenial.NOT_FOUND)
+@RestlessOwnedBy(field = "ownerId")
+public class Event { @RestlessFromPrincipal @Column(nullable = false) private UUID ownerId; ... }
+
+@RestlessEntity(basePath = "/events/{eventId}/guests",
+        parent = @RestlessParent(variable = "eventId", field = "eventId"), denyAs = RestlessDenial.NOT_FOUND)
+@RestlessOwnedBy(path = "eventId", via = Event.class, ownerField = "ownerId")
+public class Guest { @Column(nullable = false) private UUID eventId; ... }
+```
+
+- Lists are scoped in SQL (a subquery for `via`), every row is checked, a create under someone
+  else's parent is rolled back, a nested parent is checked once in `preCheck`.
+- The caller is `RestlessContext.principalId()`, from the `RestlessPrincipalIdResolver` bean
+  (default: the authenticated name; anonymous = none). No principal owns nothing. Override the
+  bean when owner columns hold a local user id; the value is converted to the field's type.
+- `@RestlessOwnedBy` and `authorizationGuard` can't be combined (compile error). Hand-wired:
+  `ownershipGuards.owned(Event.class, "ownerId")` / `ownedVia(Guest.class, "eventId", Event.class, "ownerId")`.
+- `denyAs = NOT_FOUND` makes every denial the same `404` a missing id gets — use it for user data.
+- Prove it with `RestlessOwnershipContract.of(mockMvc, path)...verify()` from
+  `spring-boot-restless-test`, outside a test-wide transaction.
+
 ## Cerbos-backed authorization (`spring-boot-restless-cerbos`)
 
 `CerbosAuthorizationGuard<E>` implements `AuthorizationGuard<E>` against a real Cerbos PDP —

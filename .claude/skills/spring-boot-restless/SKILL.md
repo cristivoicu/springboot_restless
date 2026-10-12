@@ -89,14 +89,22 @@ every fixed route live: `POST`/`GET`/`PUT`/`DELETE` by id, `GET list`/`` (page)/
 (startup `IllegalStateException`, not a silently wide-open route). See
 reference/authorization.md.
 
-## Not available on the codeless/generated tier
+## Actions, views and hooks on the generated tier
 
-`@RestlessEntity` has **no attribute** for these — needing one means hand-wiring that one
-resource on the manual tier (see reference/customization.md):
+Since 0.0.1 these no longer need the manual tier. List `@Component` beans on `@RestlessEntity`,
+and name each action or view with `@RestlessActionName("...")` (a missing or duplicate name fails
+startup):
 
-- Named custom read actions (`getCustomReadActions()`)
-- Write commands (`getCustomWriteActions()`) — see reference/bulk-and-write-commands.md
-- Named views (`getNamedViews()`)
+- `readActions` — `ReadAction` beans (`GET {basePath}/actions/{name}`, a page of rows)
+- `collectionActions` — `CollectionAction<E>` beans (`GET {basePath}/actions/{name}`, any value or
+  a `RestlessBinary`, handed the caller's visible rows as a `Specification`)
+- `writeActions` — `WriteAction` beans (`POST {basePath}/{id}/actions/{name}`) — see
+  reference/bulk-and-write-commands.md
+- `views` — `Mapper<Entity, ?>` beans (`GET {basePath}/{id}/{name}`), may return a `RestlessBinary`
+- `hooks` — `RestlessLifecycleHook<E>` beans (no name needed)
+
+The manual-tier equivalents are `getCustomReadActions()`, `getCollectionActions()`,
+`getCustomWriteActions()`, `getNamedViews()`, `getLifecycleHooks()`.
 
 ## Opt-in, one attribute/class away, on any tier
 
@@ -111,6 +119,17 @@ resource on the manual tier (see reference/customization.md):
 | Embed a related resource inline | `@RestlessEmbed` on a DTO field, client sends `?expand=name` |
 | Mount under a parent's path variable (`/events/{eventId}/guests`) | `parent = @RestlessParent(variable = "eventId", field = "eventId")` (flat column, or `"event.id"` for a `@ManyToOne`) |
 | Read path variables/request/`Authentication` in a data source or guard | `RestlessContext` — a context-aware `*DataSource` overload, or `RestlessContext.current()` anywhere (e.g. a guard's `preCheck`) |
+| Users manage only their own rows | `@RestlessOwnedBy(field = "ownerId")`, or via a parent `@RestlessOwnedBy(path = "eventId", via = Event.class, ownerField = "ownerId")` — replaces `authorizationGuard`; hand-wired: `RestlessOwnershipGuards.owned(...)`/`ownedVia(...)` |
+| Denied rows look like missing ones (`404`) | `denyAs = RestlessDenial.NOT_FOUND` (global: `restless.authorization.deny-as`) |
+| Owner/creator column set from the caller | `@RestlessFromPrincipal` on the entity field; never put that field in a create/update/patch model (compile error). Custom id: a `RestlessPrincipalIdResolver` bean |
+| Write-once field | `@RestlessImmutable(onUpdate = IGNORE \| REJECT)` |
+| Bulk create that keeps the good rows | `bulkMode = RestlessBulkMode.PARTIAL`, optional `bulkDedupe = <RestlessDedupeKey bean>` |
+| File upload on create | `multipartCreate = true` + a `MultipartFile` field on the create model |
+| Polymorphic entity | `@JsonTypeInfo` create model hierarchy, `@RestlessSubtype(EntitySubclass.class)` on each subtype |
+| One model for create and update | `groups = RestlessValidationGroups.OnCreate.class` on create-only constraints |
+| `GET {basePath}` as a plain array | `collectionGet = RestlessCollectionGet.LIST` (global: `restless.collection-get`) |
+| App-specific error JSON | A `RestlessErrorBodyFactory` bean |
+| Repository not named `{Entity}Repository` next to the entity | `repository = MyStore.class` |
 
 ## Common pitfalls
 
@@ -129,7 +148,11 @@ resource on the manual tier (see reference/customization.md):
   implements `AuthorizationGuard<Entity>` and delegates to it.
 - **`PATCH`/custom write actions/named views are checked against their own `AuthorizationGuard.Action`**
   (`PATCH`, `WRITE_ACTION`, `NAMED_VIEW`) — never inherited from `UPDATE`/`READ_ONE`. Granting one
-  doesn't silently grant the other.
+  doesn't silently grant the other. Collection actions use `CUSTOM_READ`, like read actions.
+- **Ownership and partial-bulk tests must not be `@Transactional` test-wide.** A denied create's
+  rollback and partial bulk's per-row commits are invisible inside one test transaction — use
+  fresh data per test instead. `RestlessOwnershipContract` (`spring-boot-restless-test`) checks an
+  owner/stranger matrix on every route in one call.
 
 ## Deeper reference (load on demand)
 

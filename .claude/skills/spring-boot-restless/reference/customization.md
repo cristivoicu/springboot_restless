@@ -17,6 +17,18 @@ class, never a parameterized type):
 | `operations` | A `RestlessOperation[]` subset | Every fixed route (`ALL_OPERATIONS`) |
 | `allowAll` | — (boolean) | `false` — startup fails fast with no guard configured |
 | `parent` | `@RestlessParent(variable = "...", field = "...")` — nests this resource under a parent path variable | Unset — flat, non-nested resource |
+| `denyAs` | `RestlessDenial.FORBIDDEN` / `NOT_FOUND` | `restless.authorization.deny-as` (itself `FORBIDDEN`) |
+| `readActions` / `collectionActions` / `writeActions` / `views` | `@Component` beans (`Class<?>[]`), each named with `@RestlessActionName` | None |
+| `hooks` | `RestlessLifecycleHook<Entity>` `@Component`s (`Class<?>[]`), run in order | None |
+| `multipartCreate` | — (boolean) | `false` — a multipart `POST` gets `415` |
+| `bulkMode` / `bulkDedupe` | `RestlessBulkMode.PARTIAL` / a `RestlessDedupeKey<Entity, CreateModel>` `@Component` | All-or-nothing bulk create, no dedupe |
+| `collectionGet` | `RestlessCollectionGet.LIST` / `PAGE` | `restless.collection-get` (itself `PAGE`) |
+| `repository` | A `SpecificationRepository<Entity, Id>` outside the naming convention | `{Entity}Repository` in the entity's package |
+
+Ownership is a separate annotation next to `@RestlessEntity`: `@RestlessOwnedBy(field = ...)` or
+`@RestlessOwnedBy(path = ..., via = ..., ownerField = ...)`. It replaces `authorizationGuard` —
+setting both is a compile error. Field-level `@RestlessFromPrincipal`/`@RestlessImmutable` work on
+every tier.
 
 Example, pointing several at once:
 

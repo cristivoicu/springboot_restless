@@ -1,7 +1,8 @@
 # spring-boot-restless-example
 
 A standalone Spring Boot application consuming `spring-boot-restless` exactly as an external
-project would: real entities (`Employee`, `Department`, `Project`, `ProjectAssignment`), a real
+project would: real entities (`Employee`, `Department`, `Project`, `ProjectAssignment`, `Task`,
+`Notebook`, `Note`, `Attachment`, `Shape`), a real
 Cerbos PDP, a real Keycloak realm issuing JWTs, an in-memory H2 database. Every capability the
 framework offers is demonstrated somewhere in this app — this document is a map of what's where
 and how to exercise it. For how the *framework itself* works, see the [root README](../README.md);
@@ -41,6 +42,11 @@ section — the curl examples below assume you already have a token, exactly as 
 | `Department` | Manual, defaults | `/departments` | reflective defaults, PATCH, soft delete |
 | `Employee` | Manual, hand-written | `/employees` | custom CUD logic, embed, custom read action, **write commands**, **filter DSL (`RestlessSpecifications`)**, named view, field masking, DTO-aware Cerbos attributes, optimistic concurrency |
 | `ProjectAssignment` | Compile-time generated | `/project-assignments` | many-to-many bridge, bulk create at scale, restricted operation set |
+| `Task` | Compile-time generated | `/projects/{projectId}/tasks` | nested resource (`@RestlessParent`, association form), parent checked once in `preCheck` |
+| `Notebook` | Compile-time generated | `/notebooks` | **declarative ownership** (`@RestlessOwnedBy`), `denyAs = NOT_FOUND`, `@RestlessFromPrincipal`, `@RestlessImmutable(REJECT)`, collection action, write action, lifecycle hook |
+| `Note` | Compile-time generated | `/notebooks/{notebookId}/notes` | ownership via the parent notebook, **partial bulk create** with deduplication |
+| `Attachment` | Compile-time generated + custom create | `/notebooks/{notebookId}/attachments` | **multipart upload**, binary named view (`RestlessBinary`), collection action, `collectionGet = LIST` |
+| `Shape` | Compile-time generated | `/shapes` | **polymorphic create** (`@RestlessSubtype`), validation groups, repository in another package |
 
 ## Feature walkthrough
 
@@ -283,6 +289,70 @@ curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: applic
   http://localhost:8081/project-assignments/bulk | jq
 ```
 
+### Ownership — `Notebook`, `Note`
+
+Every notebook belongs to whoever created it; no guard class exists for it. `/notebooks/**` needs
+any authenticated user - no Cerbos policy involved. The owner stored in `ownerUsername` is the
+caller's authentication name, which for a Keycloak token is its `sub` claim.
+
+```bash
+# Create - the owner always comes from the token, never from the body.
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"title":"Ideas","code":"NB-1"}' http://localhost:8081/notebooks | jq
+
+# Another user's notebook answers exactly like a missing one: 404.
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $OTHER_TOKEN" http://localhost:8081/notebooks/1
+
+# code is @RestlessImmutable(onUpdate = REJECT): changing it is a 400, resending it is fine.
+curl -s -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"title":"Ideas","code":"NB-2"}' http://localhost:8081/notebooks/1 | jq
+
+# Collection action over the caller's own notebooks, and a write action.
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/notebooks/actions/stats | jq
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' \
+  http://localhost:8081/notebooks/1/actions/stamp | jq
+```
+
+`Note` is owned through its notebook (`@RestlessOwnedBy(path = "notebookId", via = Notebook.class, ...)`)
+and uses partial bulk create: good rows are created, bad ones reported by index, duplicates (same
+text, ignoring case and spaces) skipped unless `?dedupe=false`.
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '[{"text":"Call Ana"},{"text":""},{"text":"call ana "}]' \
+  http://localhost:8081/notebooks/1/notes/bulk | jq
+# {"created":1,"skipped":1,"errors":[{"index":1,"message":"text: must not be blank"}],"items":[...]}
+```
+
+`NotebookAuditHook` records every notebook create/update/delete - see `NotebookActionsAndFilesTest`.
+
+### Files — `Attachment`
+
+Upload with multipart, read the bytes back through the `content` named view:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -F file=@diagram.png \
+  http://localhost:8081/notebooks/1/attachments | jq
+curl -s -H "Authorization: Bearer $TOKEN" -o diagram-copy.png \
+  http://localhost:8081/notebooks/1/attachments/1/content
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/notebooks/1/attachments/actions/total-size | jq
+```
+
+`collectionGet = LIST`, so `GET /notebooks/1/attachments` is a plain JSON array. There's no update
+route: an attachment is replaced, not edited.
+
+### Polymorphism and validation groups — `Shape`
+
+One `ShapeModel` serves create and update; its `kind` picks the subtype, and the subtype's
+`@RestlessSubtype` picks the entity subclass. `name` is required only on create
+(`RestlessValidationGroups.OnCreate`). The repository is `shape/store/ShapeStore`, named via
+`repository = ShapeStore.class`. `/shapes` is unguarded demo data.
+
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"kind":"circle","name":"Wheel","radius":2.5}' http://localhost:8081/shapes | jq
+```
+
 ### OpenAPI / Swagger
 
 Every route above — hand-written and dynamically-registered alike — is fully documented at
@@ -297,7 +367,9 @@ hand-written or dynamic.
 separately — this module is the one place in the reactor meant to look like a real external
 consumer, so it's also the one place that demonstrates the BOM. `DepartmentDefaultCudTest` uses
 `spring-boot-restless-test`'s `RestlessErrorAssertions`/`RestlessPageAssertions` instead of
-hand-rolled `jsonPath` chains for the standard error/page shapes.
+hand-rolled `jsonPath` chains for the standard error/page shapes, and `PhaseFiveFeaturesTest` uses
+its `RestlessOwnershipContract` to check `Notebook`'s and `Note`'s ownership on every route in one
+call each.
 
 ## Demo accounts
 

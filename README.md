@@ -81,12 +81,20 @@ business rules, the framework steps out of the way cleanly instead of fighting y
   plans translated into JPA `Specification`s) and field-level masking (`@CerbosHiddenField`,
   applied automatically on single-entity responses) against a real PDP, fail-**closed** by
   design.
+- **Declarative ownership** — `@RestlessOwnedBy` turns "a user manages only what they own" into
+  one annotation: lists scoped in SQL, every row checked, owner columns filled from the caller
+  (`@RestlessFromPrincipal`), fields locked after create (`@RestlessImmutable`), and denials that
+  can look exactly like a missing id (`denyAs = NOT_FOUND`).
 - **Bulk operations on every resource, unconditionally** — bulk create/update/delete, all
   transactional and fail-fast (every row loaded and guard-checked in one batched call before
-  anything is written).
+  anything is written); bulk create can instead keep the good rows, report the bad ones and skip
+  duplicates (`bulkMode = PARTIAL`).
 - **Write commands for real domain transitions** — named, intent-carrying mutations
   (`POST {basePath}/{id}/actions/{name}`) for illegal-transition prevention and multi-step domain
   logic a full-replace `PUT` has no vocabulary to express.
+- **Actions, files and hooks without a controller** — collection actions (summaries, exports),
+  binary responses (`RestlessBinary`), multipart upload and lifecycle hooks, all declared on
+  `@RestlessEntity` and all under the same authorization as CRUD.
 - **A filter DSL with zero extra code** — `SearchDto` fields suffixed `Gte`/`Lte`/`Gt`/`Lt`/`Like`/
   `ILike`/`StartsWith`/`Ne`/`In` filter with that operator instead of plain equality, reflected
   automatically.
@@ -212,6 +220,16 @@ restless:
     # false: 404 it there too, same as a row that was never there. A write on a soft-deleted
     # row (update/patch/deleteById/a write action) always 404s, regardless of this setting.
     include-in-single-read: true
+  authorization:
+    # What a denied caller gets on resources that don't set denyAs: forbidden (403) or
+    # not-found (404, indistinguishable from a missing id).
+    deny-as: forbidden
+  immutable:
+    # What @RestlessImmutable(onUpdate = DEFAULT) does when an update tries to change the field:
+    # ignore (keep the stored value silently) or reject (400).
+    on-update: ignore
+  # What a plain GET {basePath} returns on resources that don't set collectionGet: page or list.
+  collection-get: page
 
 # Only read if spring-boot-restless-cerbos is on the classpath.
 cerbos:
@@ -231,6 +249,9 @@ cerbos:
 | `restless.page.max-size` | `int` | `2000` | Maximum client-supplied `size` on `GET {basePath}`/`.../overview`/`.../select/async`/a named read action - a request over this is rejected `400`, not silently clamped. |
 | `restless.bulk.max-size` | `int` | `1000` | Maximum items in a single `createBulk`/`updateBulk`/`deleteAll` request - over this is rejected `400` before any item is processed. |
 | `restless.soft-delete.include-in-single-read` | `boolean` | `true` | Whether `findOne`/a named view still returns an already-soft-deleted row (`true`) or 404s it too (`false`). A write on a soft-deleted row always 404s either way. |
+| `restless.authorization.deny-as` | `forbidden` \| `not-found` | `forbidden` | Default denial shape for resources whose `denyAs` is `DEFAULT`. `not-found` answers a denied row exactly like a missing one. |
+| `restless.immutable.on-update` | `ignore` \| `reject` | `ignore` | What `@RestlessImmutable(onUpdate = DEFAULT)` does when an update/patch tries to change the field. |
+| `restless.collection-get` | `page` \| `list` | `page` | What `GET {basePath}` returns for resources whose `collectionGet` is `DEFAULT`. With `list`, pages move to `{basePath}/page`. |
 | `cerbos.client.target` | `String` | `localhost:3593` | Cerbos PDP address (`host:port`), gRPC. |
 | `cerbos.client.plaintext` | `boolean` | `true` | Whether the gRPC channel to the PDP is unencrypted. |
 | `cerbos.client.timeout` | `Duration` | `3s` | Deadline for a single `check`/`plan` RPC before the guard fails closed. |
@@ -433,6 +454,10 @@ Every bulk write is one real transaction — all-or-nothing, not best-effort. Bu
 additionally load every target in one `findAllById` query and `canAccess`-check all of them in one
 batched `canAccessAll` call **before** writing anything, so a batch never partially applies
 because item #7 of 10 turned out to be denied.
+
+That's the default (`bulkMode = ALL_OR_NOTHING`). For imports where some rows are expected to be
+bad, `bulkMode = PARTIAL` creates each row in its own transaction and reports the rest — see
+[Bulk import, polymorphism, validation groups, error shape](#bulk-import-polymorphism-validation-groups-error-shape).
 
 ```bash
 curl -X PUT -H "Content-Type: application/json" \
@@ -639,29 +664,62 @@ public class Note { ... }
   (`restless.immutable.on-update`).
 - **Who is the caller** - a `RestlessPrincipalIdResolver` bean (default: the authenticated name),
   available everywhere as `RestlessContext.principalId()`. Return a local user id if that's what
-  owner columns hold.
+  owner columns hold:
+
+```java
+@Bean
+RestlessPrincipalIdResolver principalIdResolver(CurrentUserService users) {
+    return context -> context.authentication() == null ? null : users.require().getId();
+}
+```
+
+On a hand-wired resource, build the same guard from the `RestlessOwnershipGuards` bean instead of
+the annotation: `ownershipGuards.owned(Event.class, "ownerId")` or
+`ownershipGuards.ownedVia(Guest.class, "eventId", Event.class, "ownerId")`. Field paths are checked
+when the guard is built, so a typo fails startup. `@RestlessOwnedBy` together with
+`authorizationGuard = ...` is a compile error.
 
 ### Actions, files and lifecycle hooks on the generated tier
 
 ```java
+@RestlessEntity(basePath = "/notebooks", ...,
+        collectionActions = NotebookStatsAction.class,     // GET /notebooks/actions/stats
+        writeActions = NotebookStampAction.class,          // POST /notebooks/{id}/actions/stamp
+        hooks = NotebookAuditHook.class)
+
 @RestlessEntity(basePath = "/notebooks/{notebookId}/attachments", ...,
-        multipartCreate = true,                        // POST also takes multipart/form-data
-        views = AttachmentContentView.class,           // GET .../{id}/content -> RestlessBinary
-        collectionActions = AttachmentTotalSizeAction.class, // GET .../actions/total-size
-        hooks = AttachmentAuditHook.class)
+        multipartCreate = true,                            // POST also takes multipart/form-data
+        views = AttachmentContentView.class,               // GET .../{id}/content -> RestlessBinary
+        collectionActions = AttachmentTotalSizeAction.class) // GET .../actions/total-size
+
+@Component
+@RestlessActionName("stats")
+public class NotebookStatsAction implements CollectionAction<Notebook> {
+    private final NotebookRepository repository;
+    ...
+    public Object execute(Specification<Notebook> visibleRows, RestlessContext context) {
+        return Map.of("count", repository.count(visibleRows)); // only ever the caller's own rows
+    }
+}
 ```
 
-- Action and view beans are named with `@RestlessActionName("...")`; `readActions`,
-  `collectionActions`, `writeActions` and `views` all take bean classes.
+- Action, view and hook beans are Spring beans listed by class. Actions and views are named with
+  `@RestlessActionName("...")`; a missing or duplicate name fails startup. `readActions`,
+  `collectionActions`, `writeActions`, `views` and `hooks` all take bean classes. Hand-wired
+  resources override `getCollectionActions()`/`getLifecycleHooks()`/`acceptsMultipartCreate()`
+  instead.
 - **`CollectionAction<E>`** - a read over the whole collection that isn't a page of rows (a summary,
   an export, a download link). It receives the caller's visible rows as a `Specification`.
 - **`RestlessBinary`** - return it from a view, write action or collection action to send a PDF,
-  ZIP or image; written straight to the response inside the route's transaction.
+  ZIP or image; written straight to the response inside the route's transaction:
+  `RestlessBinary.of("application/pdf", out -> renderer.render(event, out)).filename("chart.pdf").inline()`.
+  Also `of(type, byte[])` and `of(type, Resource)`.
 - **`multipartCreate`** - form fields and file parts bound onto the create model
   (`MultipartFile file`), validated like JSON; a JSON-only resource answers `415`.
 - **`RestlessLifecycleHook<E>`** - `afterCreate`, `beforeUpdate`/`afterUpdate`,
   `beforeDelete`/`afterDelete`, inside the write's transaction and only after authorization
-  succeeded; bulk routes call them per row.
+  succeeded; bulk routes call them per row. An exception from a hook rolls the write back - but
+  side effects outside the database (object storage, messages) can't be, so do those last.
 
 ### Bulk import, polymorphism, validation groups, error shape
 
@@ -670,6 +728,16 @@ public class Note { ... }
   duplicates of rows the caller can already see (or of earlier rows in the batch) unless
   `?dedupe=false`. Each row has its own transaction; an authorization denial still aborts the
   request. Response: `RestlessBulkResult {created, skipped, errors[{index, message}], items}`.
+  A `RestlessDedupeKey<E, C>` bean maps both a create model and an existing row to a key; equal
+  keys are duplicates.
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '[{"text":"buy milk"},{"text":""},{"text":"Buy milk "}]' \
+  http://localhost:8081/notebooks/1/notes/bulk
+# {"created":1,"skipped":1,"errors":[{"index":1,"message":"text: must not be blank"}],"items":[...]}
+```
+
 - **Polymorphic create** - put `@RestlessSubtype(Circle.class)` on each `@JsonTypeInfo` create model
   subtype; the default create data source instantiates that entity subclass.
 - **Validation groups** - one model for create and update:
@@ -831,10 +899,24 @@ protected AuthorizationGuard<Task> getAuthorizationGuard() {
 | Add partial update (`PATCH`) | `patchDataSource = ...` / override `getPatchDataSource()` | Any |
 | Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`ILike`/`StartsWith`/`Ne`/`In`) | Any |
 | Return a stale concurrent write as `409`, add `ETag`/`If-Match`/`If-None-Match` | `@jakarta.persistence.Version` on the entity (automatic once added) | Any |
-| Add a filtered read beyond `SearchDto` | `getCustomReadActions()` | Hand-wired only |
-| Add a domain-meaningful mutation ("promote", "cancel") | `getCustomWriteActions()` — see [Write commands](#feature-guide) | Hand-wired only |
-| Expose a different response shape of the same entity | `getNamedViews()` | Hand-wired only |
+| Add a filtered read beyond `SearchDto` | `readActions = ...` / `getCustomReadActions()` | Any |
+| Add a summary/export/download over the caller's rows | `collectionActions = ...` / `getCollectionActions()` (`CollectionAction<E>`) | Any |
+| Add a domain-meaningful mutation ("promote", "cancel") | `writeActions = ...` / `getCustomWriteActions()` — see [Write commands](#feature-guide) | Any |
+| Expose a different response shape of the same entity | `views = ...` / `getNamedViews()` | Any |
+| Return a PDF, image or ZIP instead of JSON | Return `RestlessBinary` from a view or action | Any |
+| Accept file uploads on create | `multipartCreate = true` / `acceptsMultipartCreate()`, `MultipartFile` field on the create model | Any |
+| Run side effects around writes | `hooks = ...` / `getLifecycleHooks()` (`RestlessLifecycleHook<E>`) | Any |
+| Let users manage only their own rows | `@RestlessOwnedBy` / `RestlessOwnershipGuards` | Any |
+| Hide other people's rows behind `404` | `denyAs = NOT_FOUND` / `restless.authorization.deny-as` | Any / Global |
+| Set a field from the caller, never from the body | `@RestlessFromPrincipal` (+ a `RestlessPrincipalIdResolver` bean if needed) | Any |
+| Make a field write-once | `@RestlessImmutable` | Any |
 | Create/update/delete many rows in one request | `POST`/`PUT {basePath}/bulk`, `POST {basePath}/bulk-delete` | Any, unconditional |
+| Keep the good rows of a bulk create | `bulkMode = PARTIAL`, optionally `bulkDedupe = ...` | Any |
+| Create subclasses of a polymorphic entity | `@RestlessSubtype` on each `@JsonTypeInfo` create model subtype | Any |
+| Share one model between create and update | `RestlessValidationGroups.OnCreate`/`OnUpdate`/`OnPatch` on constraints | Any |
+| Make `GET {basePath}` a plain array | `collectionGet = LIST` / `restless.collection-get` | Any / Global |
+| Use the application's own error body | A `RestlessErrorBodyFactory` bean | Global |
+| Keep repositories in another package | `repository = ...` on `@RestlessEntity` | Generated |
 | Soft-delete instead of hard-delete | Implement `SoftDeletable`, `deleteDataSource = DefaultSoftDeleteDataSource` | Any |
 | Keep a soft-deleted row readable/unreadable by id | `restless.soft-delete.include-in-single-read` (default `true`) | Global |
 | Add `createdDate`/`lastModifiedDate` | Extend `AbstractAuditableEntity` + `@EnableJpaAuditing` | Any |
@@ -907,9 +989,10 @@ all-or-nothing wrapping — see [Roadmap](#roadmap).
 **What this doesn't try to solve**: domain events (a command's natural companion is "and then
 publish `EmployeePromoted`" — the dispatch point right after `WriteAction#execute` returns
 successfully, still inside the transaction, is exactly where an `ApplicationEventPublisher`/
-transactional-outbox write would go, worth designing for even before it's built) and compile-time
-(`@RestlessEntity`) support (prove the shape hand-wired first, same path custom read actions
-themselves took).
+transactional-outbox write would go, worth designing for even before it's built). Compile-time
+(`@RestlessEntity`) support was deliberately left for later - prove the shape hand-wired first -
+and has since shipped as `writeActions = ...`. `RestlessLifecycleHook#afterUpdate` is now a usable
+place to publish an event from, inside the same transaction.
 
 ### Keyset (cursor) pagination — proposed, not implemented
 
@@ -951,9 +1034,8 @@ priority-ordered backlog with design notes, not a commitment.
 
 **Next up:**
 
-1. **[Write commands](#write-commands)** — ✅ done (hand-wired tier).
-   `@RestlessEntity`/annotation-processor support remains open — see
-   [Design Rationale](#design-rationale)'s "what this doesn't try to solve" note.
+1. **[Write commands](#write-commands)** — ✅ done, on both tiers
+   (`@RestlessEntity(writeActions = ...)` since 0.0.1).
 2. **[Filter DSL](#filter-dsl)** — ✅ done. Operator-suffix convention over the existing
    `SearchDto` reflection loop, plus `RestlessSpecifications` — see
    [Design Rationale](#design-rationale) for why this shape won over an RSQL query string.
@@ -1002,7 +1084,13 @@ prioritized first:
 - `AuthorizationGuard<E>` and its hook points (`preCheck`/`scope`/`canAccess`/
   `canAccessAfterWrite`/`canAccessAll`/`postProcessResponse`).
 - The `@Restless*` annotation set: `@RestlessEntity`, `@RestlessResource`, `@RestlessEmbed`,
-  `@RestlessMapperExclude`, `@CerbosHiddenField`.
+  `@RestlessMapperExclude`, `@RestlessParent`, `@RestlessOwnedBy`, `@RestlessFromPrincipal`,
+  `@RestlessImmutable`, `@RestlessSubtype`, `@RestlessActionName`, `@CerbosHiddenField`.
+- The per-resource extension interfaces: `ReadAction`, `CollectionAction`, `WriteAction`,
+  `RestlessLifecycleHook`, `RestlessDedupeKey`, and the `RestlessBinary`/`RestlessBulkResult`
+  response types.
+- The application-wide beans: `RestlessPrincipalIdResolver`, `RestlessOwnershipGuards`,
+  `RestlessErrorBodyFactory`.
 - The `*DataSource` base classes (`CreateDataSource`, `ReadDataSource`, `UpdateDataSource`,
   `DeleteDataSource`, `PatchDataSource`) and their `Default*DataSource` implementations.
 - `Mapper<E, D>`, `SearchDto`/`AbstractSearchDto`, `SoftDeletable`, `AbstractAuditableEntity`.
@@ -1160,6 +1248,52 @@ above for what stability guarantees actually apply before 1.0.
 ### [0.0.1] - 2026-10-11
 
 **Added**
+
+- **Declarative ownership and server-set fields.** See
+  [Ownership, denials and server-set fields](#ownership-denials-and-server-set-fields).
+  - `@RestlessOwnedBy` (direct: `field = "ownerId"`; via a parent: `path`/`via`/`ownerField`)
+    wires an `OwnershipAuthorizationGuard` built by the new `RestlessOwnershipGuards` bean: lists
+    scoped in SQL (a subquery for the via shape), every single row checked, a create under
+    someone else's parent rolled back, a nested parent checked once in `preCheck`. Fails closed
+    with no principal. Paths are validated at compile time and again at startup.
+  - `denyAs` on `@RestlessEntity`/`@RestlessResource` (`RestlessDenial.FORBIDDEN`/`NOT_FOUND`),
+    global default `restless.authorization.deny-as`. `NOT_FOUND` makes a denied row answer
+    exactly like a missing id, on every route including bulk.
+  - `@RestlessFromPrincipal` - set from the caller on create, immutable afterwards; a
+    create/update/patch model declaring the same field is a compile error. Create with no
+    principal is a `401`.
+  - `@RestlessImmutable(onUpdate = IGNORE | REJECT)`, global default `restless.immutable.on-update`.
+  - `RestlessPrincipalIdResolver` bean (default: the authenticated name, anonymous counts as
+    none), exposed as `RestlessContext.principalId()`.
+- **Actions, files and lifecycle hooks on the generated tier.** See
+  [Actions, files and lifecycle hooks](#actions-files-and-lifecycle-hooks-on-the-generated-tier).
+  - `@RestlessEntity` gains `readActions`, `collectionActions`, `writeActions`, `views` and
+    `hooks` (bean classes), with `@RestlessActionName` naming each action/view - write commands
+    and named views no longer need the hand-wired tier.
+  - `CollectionAction<E>` - `GET {basePath}/actions/{name}`, handed the caller's visible rows as a
+    `Specification`.
+  - `RestlessBinary` - a non-JSON body (PDF, image, ZIP) from a view or action, streamed inside
+    the route's transaction.
+  - `multipartCreate` - `POST {basePath}` also accepts `multipart/form-data`, bound onto the
+    create model (`MultipartFile` fields) and validated like JSON; otherwise `415`.
+  - `RestlessLifecycleHook<E>` - `afterCreate`, `beforeUpdate`/`afterUpdate`,
+    `beforeDelete`/`afterDelete`, inside the write's transaction, after authorization.
+- **Bulk import, polymorphism, validation groups, error shape.** See
+  [Bulk import, polymorphism, validation groups, error shape](#bulk-import-polymorphism-validation-groups-error-shape).
+  - `bulkMode = PARTIAL` (`RestlessBulkMode`) with an optional `RestlessDedupeKey` bean
+    (`bulkDedupe`): per-row transactions, a `RestlessBulkResult` response, `?dedupe=false` to opt
+    out. Authorization denials still abort the request.
+  - `collectionGet = LIST` (`RestlessCollectionGet`), global default `restless.collection-get`.
+  - `@RestlessSubtype` for polymorphic create through `DefaultCreateDataSource`.
+  - `RestlessValidationGroups.OnCreate`/`OnUpdate`/`OnPatch`, applied on top of `Default`.
+  - `RestlessErrorBodyFactory` - replace the `ProblemDetail` body on every generated route.
+  - `@RestlessEntity(repository = ...)` - a repository outside the `{Entity}Repository` convention.
+  - `RestlessOwnershipContract` in `spring-boot-restless-test` - verifies an owner/stranger
+    ownership contract across every route in one call.
+- **`example`**: `Notebook` (direct ownership, a collection action, a write action, a hook), `Note`
+  (owned via its notebook, partial bulk with dedupe), `Attachment` (multipart upload, binary
+  view, list mode) and `Shape` (polymorphism, validation groups, custom repository), each with
+  end-to-end tests.
 
 - **Nested (parent-scoped) resources and `RestlessContext`.** Two related additions, both driven
   by a real consumer integration (backend-nunti) that had to flatten `/api/events/{eventId}/guests`
@@ -1446,6 +1580,15 @@ above for what stability guarantees actually apply before 1.0.
 
 **Changed**
 
+- **`RestlessExceptionHandler`'s handler methods now return `ResponseEntity<Object>`** (was
+  `ResponseEntity<ProblemDetail>`), so a `RestlessErrorBodyFactory` can supply a different body
+  type. Source-incompatible for a subclass overriding them or code reading `getBody()` as a
+  `ProblemDetail` without a cast; the default body is still a `ProblemDetail`.
+- **`DefaultCreateDataSource` writes server-managed fields before the `INSERT`.** A nested
+  resource's parent field and `@RestlessFromPrincipal` fields are now set on the entity before
+  `save`, not only re-applied afterwards - so they can be `NOT NULL` columns. (`example`'s
+  `Task.project` is now mandatory to prove it.) The handler still re-applies them after any data
+  source, as before.
 - **Error responses are now RFC 9457 `application/problem+json`**
   (`org.springframework.http.ProblemDetail`), not a bespoke
   `{timestamp, status, error, message, path, details}` JSON shape. The old `ErrorResponse` record
@@ -1475,6 +1618,12 @@ above for what stability guarantees actually apply before 1.0.
 
 **Fixed**
 
+- **A `CreateDataSource` overriding `createAll(List)` was silently bypassed on bulk create.** The
+  handler always calls the context-aware `createAll(List, RestlessContext)`, whose default looped
+  the single-item `create` - so a batched, validate-everything-first override never ran. The
+  request's own transaction still rolled back on a bad row, but inside an enclosing transaction
+  (a `@Transactional` test, a calling service) the earlier good rows stayed visible. The default now delegates to an overridden `createAll(List)`. Caught by
+  `example`'s `ProjectAssignmentTest`.
 - **`@Id` declared on a shared `@MappedSuperclass` (e.g. a project-wide `BaseEntity`) failed
   compilation** - `RestlessEntityProcessor` only ever looked at the annotated entity's own
   declared fields, so an entity whose `@Id` actually lived on its superclass hit "has no field
