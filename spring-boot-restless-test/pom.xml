@@ -8,7 +8,7 @@
         <version>4.1.1</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
-    <groupId>ro.cristivoicu</groupId>
+    <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless-test</artifactId>
     <version>0.0.1</version>
     <name>spring-boot-restless-test</name>
@@ -47,7 +47,7 @@
         <!-- The framework itself - ErrorResponse/PageableResponse are the two shapes these
              assertions describe. -->
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless</artifactId>
             <version>0.0.1</version>
         </dependency>

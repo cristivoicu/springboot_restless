@@ -8,7 +8,7 @@
         <version>4.1.1</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
-    <groupId>ro.cristivoicu</groupId>
+    <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless</artifactId>
     <version>0.0.1</version>
     <name>spring-boot-restless</name>
@@ -73,7 +73,7 @@
         <!-- @RestlessEntity has SOURCE retention (compile-time only, see its javadoc), so
              provided scope is enough - it never needs to be present at runtime. -->
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless-processor</artifactId>
             <version>0.0.1</version>
             <scope>provided</scope>
@@ -156,7 +156,7 @@
                             <artifactId>lombok</artifactId>
                         </path>
                         <path>
-                            <groupId>ro.cristivoicu</groupId>
+                            <groupId>io.github.cristivoicu</groupId>
                             <artifactId>spring-boot-restless-processor</artifactId>
                             <version>0.0.1</version>
                         </path>

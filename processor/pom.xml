@@ -4,7 +4,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>ro.cristivoicu</groupId>
+        <groupId>io.github.cristivoicu</groupId>
         <artifactId>spring-boot-restless-reactor</artifactId>
         <version>0.0.1</version>
     </parent>

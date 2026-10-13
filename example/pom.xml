@@ -8,7 +8,7 @@
         <version>4.1.1</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
-    <groupId>ro.cristivoicu</groupId>
+    <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless-example</artifactId>
     <version>0.0.1</version>
     <name>spring-boot-restless-example</name>
@@ -23,12 +23,12 @@
     <!-- Imported, not hand-pinned per dependency below - example is the one place in this
          reactor meant to look like a real external consumer, so it's also the one place that
          demonstrates importing spring-boot-restless-dependencies instead of repeating
-         "0.0.1" on every ro.cristivoicu dependency by hand (see the root README's
+         "0.0.1" on every io.github.cristivoicu dependency by hand (see the root README's
          Cerbos-dependency step for the same snippet). -->
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>ro.cristivoicu</groupId>
+                <groupId>io.github.cristivoicu</groupId>
                 <artifactId>spring-boot-restless-dependencies</artifactId>
                 <version>0.0.1</version>
                 <type>pom</type>
@@ -40,13 +40,13 @@
     <dependencies>
         <!-- The framework itself - version resolved via the BOM import above. -->
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless</artifactId>
         </dependency>
 
         <!-- The Cerbos-backed AuthorizationGuard, wired into EmployeeRestlessResource below. -->
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless-cerbos</artifactId>
         </dependency>
 
@@ -99,7 +99,7 @@
         <!-- provided, not transitive from the "app" dependency - each module that has its own
              @RestlessEntity-annotated sources needs its own compile-time reference. -->
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless-processor</artifactId>
             <version>0.0.1</version>
             <scope>provided</scope>
@@ -134,7 +134,7 @@
         <!-- RestlessErrorAssertions/RestlessPageAssertions - version resolved via the BOM import
              above, same as spring-boot-restless/spring-boot-restless-cerbos. -->
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless-test</artifactId>
             <scope>test</scope>
         </dependency>
@@ -190,7 +190,7 @@
                             <artifactId>lombok</artifactId>
                         </path>
                         <path>
-                            <groupId>ro.cristivoicu</groupId>
+                            <groupId>io.github.cristivoicu</groupId>
                             <artifactId>spring-boot-restless-processor</artifactId>
                             <version>0.0.1</version>
                         </path>

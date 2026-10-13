@@ -107,7 +107,7 @@ authorization rules live as policy-as-code (YAML), not Java `if`s.
   `scope()` catches that and fails closed (an always-deny `Specification`, logged at WARN) rather
   than surfacing a 500.
 
-Dependency: `ro.cristivoicu:spring-boot-restless-cerbos` (or import the
+Dependency: `io.github.cristivoicu:spring-boot-restless-cerbos` (or import the
 `spring-boot-restless-dependencies` BOM and drop versions).
 
 Policy shape (one YAML file per resource kind):

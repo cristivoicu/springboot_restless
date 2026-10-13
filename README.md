@@ -138,14 +138,14 @@ Then declare the dependency exactly as you would any other library.
 
 ```xml
 <dependency>
-    <groupId>ro.cristivoicu</groupId>
+    <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless</artifactId>
     <version>0.0.1</version>
 </dependency>
 
 <!-- Optional: compile-time codegen from @RestlessEntity -->
 <dependency>
-    <groupId>ro.cristivoicu</groupId>
+    <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless-processor</artifactId>
     <version>0.0.1</version>
     <scope>provided</scope>
@@ -153,7 +153,7 @@ Then declare the dependency exactly as you would any other library.
 
 <!-- Optional: Cerbos-backed AuthorizationGuard + field masking -->
 <dependency>
-    <groupId>ro.cristivoicu</groupId>
+    <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless-cerbos</artifactId>
     <version>0.0.1</version>
 </dependency>
@@ -165,7 +165,7 @@ Or import the BOM once and drop the version from every `spring-boot-restless*` d
 <dependencyManagement>
     <dependencies>
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless-dependencies</artifactId>
             <version>0.0.1</version>
             <type>pom</type>
@@ -179,11 +179,11 @@ Or import the BOM once and drop the version from every `spring-boot-restless*` d
 
 ```kotlin
 dependencies {
-    implementation("ro.cristivoicu:spring-boot-restless:0.0.1")
-    annotationProcessor("ro.cristivoicu:spring-boot-restless-processor:0.0.1") // optional
+    implementation("io.github.cristivoicu:spring-boot-restless:0.0.1")
+    annotationProcessor("io.github.cristivoicu:spring-boot-restless-processor:0.0.1") // optional
 
-    implementation("ro.cristivoicu:spring-boot-restless-cerbos:0.0.1") // optional
-    testImplementation("ro.cristivoicu:spring-boot-restless-test:0.0.1") // optional
+    implementation("io.github.cristivoicu:spring-boot-restless-cerbos:0.0.1") // optional
+    testImplementation("io.github.cristivoicu:spring-boot-restless-test:0.0.1") // optional
 }
 ```
 
@@ -191,11 +191,11 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'ro.cristivoicu:spring-boot-restless:0.0.1'
-    annotationProcessor 'ro.cristivoicu:spring-boot-restless-processor:0.0.1' // optional
+    implementation 'io.github.cristivoicu:spring-boot-restless:0.0.1'
+    annotationProcessor 'io.github.cristivoicu:spring-boot-restless-processor:0.0.1' // optional
 
-    implementation 'ro.cristivoicu:spring-boot-restless-cerbos:0.0.1' // optional
-    testImplementation 'ro.cristivoicu:spring-boot-restless-test:0.0.1' // optional
+    implementation 'io.github.cristivoicu:spring-boot-restless-cerbos:0.0.1' // optional
+    testImplementation 'io.github.cristivoicu:spring-boot-restless-test:0.0.1' // optional
 }
 ```
 
@@ -1180,7 +1180,8 @@ GPG signatures and the `central-publishing-maven-plugin`. `example` is never pub
 
 One-time setup:
 
-1. Verify the `ro.cristivoicu` namespace on the Central Portal and generate a user token.
+1. Sign in to the Central Portal with GitHub (that verifies the `io.github.cristivoicu`
+   namespace automatically) and generate a user token.
 2. Put the token in `~/.m2/settings.xml` under `<server><id>central</id>...</server>`.
 3. Create a GPG key (`brew install gnupg`, `gpg --full-generate-key`) and upload it:
    `gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>`.

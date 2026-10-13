@@ -8,7 +8,7 @@
         <version>4.1.1</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
-    <groupId>ro.cristivoicu</groupId>
+    <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless-cerbos</artifactId>
     <version>0.0.1</version>
     <name>spring-boot-restless-cerbos</name>
@@ -44,7 +44,7 @@
     <dependencies>
         <!-- The framework itself - CerbosAuthorizationGuard implements its AuthorizationGuard<E>. -->
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless</artifactId>
             <version>0.0.1</version>
         </dependency>

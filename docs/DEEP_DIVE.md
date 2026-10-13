@@ -686,7 +686,7 @@ sequenceDiagram
 
 ```xml
 <dependency>
-    <groupId>ro.cristivoicu</groupId>
+    <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless-cerbos</artifactId>
     <version>0.0.1</version>
 </dependency>
@@ -699,7 +699,7 @@ declare (`spring-boot-restless`, `spring-boot-restless-cerbos`, `spring-boot-res
 <dependencyManagement>
     <dependencies>
         <dependency>
-            <groupId>ro.cristivoicu</groupId>
+            <groupId>io.github.cristivoicu</groupId>
             <artifactId>spring-boot-restless-dependencies</artifactId>
             <version>0.0.1</version>
             <type>pom</type>
