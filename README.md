@@ -1171,6 +1171,31 @@ test bed).
 **Reporting bugs vs. security issues:** security vulnerabilities go through
 [Security Policy](#security-policy) below, not a public issue.
 
+### Publishing a release
+
+Releases go to Maven Central through the [Central Portal](https://central.sonatype.com). Every
+published module (the reactor pom, `processor`, `app`, `cerbos`, `spring-boot-restless-test`,
+`spring-boot-restless-dependencies`) has a `release` profile that adds sources and javadoc jars,
+GPG signatures and the `central-publishing-maven-plugin`. `example` is never published.
+
+One-time setup:
+
+1. Verify the `ro.cristivoicu` namespace on the Central Portal and generate a user token.
+2. Put the token in `~/.m2/settings.xml` under `<server><id>central</id>...</server>`.
+3. Create a GPG key (`brew install gnupg`, `gpg --full-generate-key`) and upload it:
+   `gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>`.
+
+Per release:
+
+```bash
+./mvnw -P release -pl '!example' -Dgpg.skip -DskipTests verify   # dry run, no signing
+./mvnw -P release -pl '!example' deploy                          # sign and upload
+```
+
+The upload is validated but not published (`autoPublish` is `false`). Check it under
+*Deployments* on the portal, click *Publish*, then tag the commit (`git tag v0.0.1`). A published
+version can never be changed or deleted.
+
 ## Code of Conduct
 
 Adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.

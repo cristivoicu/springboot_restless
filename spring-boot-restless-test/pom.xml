@@ -18,6 +18,26 @@
         test-scoped module - other projects' *tests* depend on this at test scope, so its own
         MockMvc/webmvc-test dependency below is compile scope on purpose.
     </description>
+    <url>https://github.com/cristivoicu/springboot_restless</url>
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <developers>
+        <developer>
+            <name>Cristian Voicu</name>
+            <email>mariancristianvoicu@gmail.com</email>
+        </developer>
+    </developers>
+    <scm>
+        <url>https://github.com/cristivoicu/springboot_restless</url>
+        <connection>scm:git:https://github.com/cristivoicu/springboot_restless.git</connection>
+        <developerConnection>scm:git:https://github.com/cristivoicu/springboot_restless.git</developerConnection>
+        <tag>HEAD</tag>
+    </scm>
 
     <properties>
         <java.version>17</java.version>
@@ -89,4 +109,72 @@
             </plugin>
         </plugins>
     </build>
+
+    <!-- Maven Central publishing - see the README's "Publishing a release" section.
+         ./mvnw -P release -pl '!example' deploy -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <!-- Central requires a sources and a javadoc jar next to every jar. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.12.0</version>
+                        <configuration>
+                            <doclint>none</doclint>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.11.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <!-- Uploaded and validated, then published by hand from
+                                 central.sonatype.com - a release can never be deleted. -->
+                            <autoPublish>false</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
