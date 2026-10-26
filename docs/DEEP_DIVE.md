@@ -1080,7 +1080,7 @@ can't be independently gated).
 
 (Bulk delete is `POST .../bulk-delete`, not `DELETE {basePath}` with a body — RFC 9110 gives a
 `DELETE` request body no defined semantics, and proxies/CDNs/`fetch()` are known to drop it; see
-the root [README.md's Changelog section](../README.md#changelog)'s "Changed" entries for when
+the root [README.md's Changelog section](../CHANGELOG.md)'s "Changed" entries for when
 this moved.)
 
 ### All-or-nothing, not best-effort

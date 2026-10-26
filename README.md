@@ -1,6 +1,7 @@
 # spring-boot-restless
 
-**Annotation-driven, DDD-friendly REST CRUD for Spring Boot — generate the boilerplate, hand-write the authorization.**
+**Annotation-driven REST CRUD for Spring Boot. The library generates the controller, repository and
+mapper plumbing; you write the entity, its DTOs and the authorization rules.**
 
 [![CI](https://github.com/cristivoicu/springboot_restless/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cristivoicu/springboot_restless/actions/workflows/ci.yml)
 [![Maven Central](https://img.shields.io/badge/Maven%20Central-0.0.1--SNAPSHOT-orange?logo=apachemaven&logoColor=white)](https://central.sonatype.com/)
@@ -8,131 +9,142 @@
 [![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-brightgreen?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 
-> **Status:** pre-1.0 (`0.0.1`). Not yet published to Maven Central — build and install locally (see [Installation](#installation)). See [Versioning and API Stability](#versioning-and-api-stability) for what stability guarantees apply before `1.0`.
->
-> **Looking for more depth?** This README is a concise reference. For a full tutorial-depth
-> walkthrough of every mechanism — with sequence diagrams, the three-tier decision framework, and
-> worked examples for each feature below — see [`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md).
->
-> **Using [Claude Code](https://claude.com/claude-code)?** This repo ships a
-> [`spring-boot-restless` Agent Skill](.claude/skills/spring-boot-restless/) that teaches it this
-> framework's conventions (entity tiers, authorization/Cerbos wiring, write commands, bulk
-> operations, the filter DSL). Copy `.claude/skills/spring-boot-restless/` into a consumer
-> project's own `.claude/skills/` to get the same scaffolding help there.
+> **Status:** pre-1.0 (`0.0.1`), not yet published to Maven Central. Build and install it locally
+> (see [Installation](#installation)). See [Versioning and API stability](#versioning-and-api-stability)
+> for what that means for compatibility.
+
+This README documents every public component: each annotation and its attributes, each interface and
+its methods, each base class, configuration property and HTTP route, with an example of when and how
+to use it. Further reading:
+
+- [`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md): long-form tutorials with sequence diagrams.
+- [`example/README.md`](example/README.md): a runnable demo app that uses every feature, including
+  a Cerbos + Keycloak setup.
+- [`CHANGELOG.md`](CHANGELOG.md): release history.
+- [`.claude/skills/spring-boot-restless/`](.claude/skills/spring-boot-restless/): an Agent Skill for
+  [Claude Code](https://claude.com/claude-code) that knows these conventions. Copy it into a consumer
+  project's `.claude/skills/` to use it there.
+
+All types live under the `ro.cristivoicu.springbootrestless` package. Package names in this document
+are relative to it, so `annotation.RestlessEntity` means
+`ro.cristivoicu.springbootrestless.annotation.RestlessEntity`.
 
 ---
 
 ## Table of contents
 
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Quick Start](#quick-start)
-- [Feature Guide](#feature-guide)
-- [Advanced Usage](#advanced-usage)
-- [Design Rationale](#design-rationale)
-- [Roadmap](#roadmap)
-- [Versioning and API Stability](#versioning-and-api-stability)
-- [Contributing](#contributing)
-- [Code of Conduct](#code-of-conduct)
-- [Security Policy](#security-policy)
-- [Changelog](#changelog)
-- [License](#license)
+**Getting started**
+
+1. [Overview](#overview)
+2. [Modules and artifacts](#modules-and-artifacts)
+3. [Requirements](#requirements)
+4. [Installation](#installation)
+5. [Quick start](#quick-start)
+6. [Choosing a tier](#choosing-a-tier)
+7. [How a request is processed](#how-a-request-is-processed)
+
+**Reference**
+
+8. [HTTP API reference](#http-api-reference)
+9. [Annotations](#annotations)
+10. [Enums](#enums)
+11. [Models and DTO contracts](#models-and-dto-contracts)
+12. [Repositories and data sources](#repositories-and-data-sources)
+13. [Mapping](#mapping)
+14. [`RestlessResourceHandler`: the manual tier](#restlessresourcehandler-the-manual-tier)
+15. [Filtering](#filtering)
+16. [Authorization](#authorization)
+17. [`RestlessContext`](#restlesscontext)
+18. [Actions, views, files and hooks](#actions-views-files-and-hooks)
+19. [Bulk operations](#bulk-operations)
+20. [Nested resources](#nested-resources)
+21. [Embedding related resources](#embedding-related-resources)
+22. [Concurrency, soft delete, auditing and versioning](#concurrency-soft-delete-auditing-and-versioning)
+23. [Errors](#errors)
+24. [Configuration properties](#configuration-properties)
+25. [Auto-configured beans](#auto-configured-beans)
+26. [OpenAPI and observability](#openapi-and-observability)
+27. [Cerbos module](#cerbos-module)
+28. [Test module](#test-module)
+29. [Hand-subclassed controllers (legacy tier)](#hand-subclassed-controllers-legacy-tier)
+30. [Internal types](#internal-types)
+
+**Guides and project**
+
+31. [Cookbook: "I want to..."](#cookbook-i-want-to)
+32. [Design rationale](#design-rationale)
+33. [Roadmap](#roadmap)
+34. [Versioning and API stability](#versioning-and-api-stability)
+35. [Contributing](#contributing)
+36. [Code of Conduct](#code-of-conduct)
+37. [Security policy](#security-policy)
+38. [License](#license)
+
+---
 
 ## Overview
 
-Every Spring Boot application with a relational domain model ends up writing the same shape of
-code, over and over, per entity: a `@RestController`, a `JpaRepository`, a request/response
-mapper, and the CRUD glue that wires them together. That boilerplate is not where an
-application's real value lives — its value lives in the business rules that govern *who* can do
-*what* to *which* row, and *which fields* they're allowed to see when they do.
+Most Spring Boot services with a relational model repeat the same code for every entity: a
+`@RestController`, a `JpaRepository`, a mapper, and the CRUD glue between them. That code isn't
+where the application's value is. The value is in the rules about who may do what to which row, and
+which fields they may see.
 
-**spring-boot-restless** removes the first kind of code and makes room for the second. Annotate
-an entity, hand-write its four DTOs, and get a complete, versioned, paginated REST resource
-registered at startup — no hand-subclassed controller, no repository interface, no mapper class.
-What the framework deliberately does **not** generate is response shape (`Mapper<Entity, Dto>`)
-or authorization (`AuthorizationGuard<E>`): those stay first-class, hand-written concerns, because
-they're exactly the two seams where an application's actual rules have to live. An optional
-[Cerbos](https://www.cerbos.dev/) integration backs that authorization seam with real
-policy-as-code (YAML), evaluated against a real PDP, including row-level scoping and field-level
-masking.
+spring-boot-restless removes the repetitive part. You annotate an entity and write its DTOs, and the
+library registers a full REST resource at startup: create, read (one, list, page), update, patch,
+delete, bulk variants, filtering, sorting, validation, ETags and RFC 9457 errors.
 
-The result: for the majority of entities in a typical service — the ones with no special CRUD
-logic — the only code written by hand is domain-meaningful. For the minority that need real
-business rules, the framework steps out of the way cleanly instead of fighting you.
+Two things stay hand-written on purpose:
 
-## Key Features
+- **Response shape.** You always write the DTO class. The library can generate the code that copies
+  fields onto it, but it never invents a DTO from the entity, so it can't leak fields by accident.
+- **Authorization.** Every route goes through an `AuthorizationGuard<E>` that you provide (or a
+  declarative ownership rule, or Cerbos policies). A resource with no guard fails startup unless you
+  opt out explicitly with `allowAll = true`.
 
-- **Zero-boilerplate, genuinely codeless CRUD** — an entity plus four DTOs (`CreateModel`,
-  `UpdateModel`, `SearchDto`, `Dto`) is the entire surface area for a standard resource; a
-  compile-time annotation processor generates the repository, a mapper (one explicit
-  `dto.setX(source.getX())` per matched field, not reflection), and the resource glue class.
-- **Three levels of control, chosen per entity, not globally** — fully generated, generated with
-  one or two hand-written overrides (a custom `*DataSource`, a real guard), or a fully manual
-  `RestlessResourceHandler` subclass for entities with genuinely custom logic. See the
-  [tier decision diagram](#which-tier-does-an-entity-need) below.
-- **Authorization as a framework-native, first-class seam** — `AuthorizationGuard<E>`'s hook
-  points (`preCheck` / `scope` / `canAccess`, plus a post-write check, a batched bulk check, and a
-  response-shaping hook) sit on every route. No Spring Security dependency in the base library;
-  plug in whatever principal source your own stack already populates.
-- **Optional Cerbos-backed authorization** — policy-as-code row-level scoping (via Cerbos query
-  plans translated into JPA `Specification`s) and field-level masking (`@CerbosHiddenField`,
-  applied automatically on single-entity responses) against a real PDP, fail-**closed** by
-  design.
-- **Declarative ownership** — `@RestlessOwnedBy` turns "a user manages only what they own" into
-  one annotation: lists scoped in SQL, every row checked, owner columns filled from the caller
-  (`@RestlessFromPrincipal`), fields locked after create (`@RestlessImmutable`), and denials that
-  can look exactly like a missing id (`denyAs = NOT_FOUND`).
-- **Bulk operations on every resource, unconditionally** — bulk create/update/delete, all
-  transactional and fail-fast (every row loaded and guard-checked in one batched call before
-  anything is written); bulk create can instead keep the good rows, report the bad ones and skip
-  duplicates (`bulkMode = PARTIAL`).
-- **Write commands for real domain transitions** — named, intent-carrying mutations
-  (`POST {basePath}/{id}/actions/{name}`) for illegal-transition prevention and multi-step domain
-  logic a full-replace `PUT` has no vocabulary to express.
-- **Actions, files and hooks without a controller** — collection actions (summaries, exports),
-  binary responses (`RestlessBinary`), multipart upload and lifecycle hooks, all declared on
-  `@RestlessEntity` and all under the same authorization as CRUD.
-- **A filter DSL with zero extra code** — `SearchDto` fields suffixed `Gte`/`Lte`/`Gt`/`Lt`/`Like`/
-  `ILike`/`StartsWith`/`Ne`/`In` filter with that operator instead of plain equality, reflected
-  automatically.
-- **Fully synchronous, thread-safe by construction** — one stateless `RestlessResourceHandler`
-  Spring bean per resource, no mutable shared state; every request-scoped value is a method
-  parameter or a local, never a field.
-- **RFC 9457-compliant error responses**, automatic OpenAPI/Swagger documentation, conditional
-  requests + optimistic concurrency (`@Version` + `ETag`/`If-Match`/`If-None-Match`), soft delete,
-  and JPA auditing — all opt-in, all with minimal or zero extra code.
+When an entity needs custom logic, you override one piece (a data source, a guard, a mapper) or
+hand-write the whole resource class. The library doesn't force the same level of control on every
+entity.
+
+---
+
+## Modules and artifacts
+
+| Artifact | Maven scope | Contents | When you need it |
+|---|---|---|---|
+| `spring-boot-restless` | `compile` | The runtime: `RestlessResourceHandler`, data sources, guards, registrar, error handling, OpenAPI, auto-configuration. | Always. |
+| `spring-boot-restless-processor` | `provided` / `annotationProcessor` | The `@RestlessEntity` annotation processor and its compile-time annotations (`@RestlessEntity`, `@RestlessOwnedBy`, `@RestlessMapperExclude`, ...). | When you use the generated tier (`@RestlessEntity`). Not needed at runtime. |
+| `spring-boot-restless-cerbos` | `compile` | `CerbosAuthorizationGuard`, field masking (`@CerbosHiddenField`), Cerbos client auto-configuration and health indicator. | When authorization rules live in Cerbos policies. |
+| `spring-boot-restless-test` | `test` | `RestlessErrorAssertions`, `RestlessPageAssertions`, `RestlessOwnershipContract` for MockMvc tests. | Optional, for tests. |
+| `spring-boot-restless-dependencies` | `import` (BOM) | Version alignment for all of the above. | Optional; lets you omit versions. |
+
+In this repository the runtime artifact is built by the `app` module. `example` is a demo application
+that is never published.
+
+---
 
 ## Requirements
 
 | Component | Version |
 |---|---|
-| Java (shipped library — `app`/`processor`/`cerbos`/`spring-boot-restless-test`) | 17+ |
-| Java (building the full reactor, including the `example` module) | 25+ |
+| Java, for the published library (`app`, `processor`, `cerbos`, `spring-boot-restless-test`) | 17+ |
+| Java, for building the whole reactor (the `example` module targets Java 25) | 25+ |
 | Spring Boot | 4.1.x |
-| Build tool | Maven 3.9+ (a wrapper, `./mvnw`, is bundled) |
-| Persistence | Spring Data JPA (a relational database with a `Specification`-capable `JpaRepository`) |
-| Authorization backend (optional) | [Cerbos](https://www.cerbos.dev/) PDP, via `spring-boot-restless-cerbos` |
+| Build tool | Maven 3.9+ (`./mvnw` is included) or Gradle |
+| Persistence | Spring Data JPA with a relational database |
+| Optional: authorization backend | A [Cerbos](https://www.cerbos.dev/) PDP, for `spring-boot-restless-cerbos` |
+| Optional: Spring Security | Needed for `RestlessContext.authentication()`, the default principal resolver and the Cerbos principal resolver. The core library does not require it. |
 
-No other infrastructure is required for the base library — the optional `cerbos` module is the
-only piece with an external runtime dependency (a running Cerbos PDP). The `example` module
-(demo/tutorial code, never shipped) targets Java 25 and is free to use newer language features;
-the library you actually depend on only ever requires 17.
+---
 
 ## Installation
 
-The project isn't published to Maven Central yet (still `0.0.1` — see the status note
-above). Build and install it into your local repository first:
+The library isn't on Maven Central yet. Build and install it into your local Maven repository first:
 
 ```bash
 git clone https://github.com/cristivoicu/springboot_restless.git
 cd springboot_restless
 ./mvnw install
 ```
-
-Then declare the dependency exactly as you would any other library.
 
 ### Maven
 
@@ -143,7 +155,7 @@ Then declare the dependency exactly as you would any other library.
     <version>0.0.1</version>
 </dependency>
 
-<!-- Optional: compile-time codegen from @RestlessEntity -->
+<!-- Optional: compile-time code generation from @RestlessEntity -->
 <dependency>
     <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless-processor</artifactId>
@@ -151,15 +163,23 @@ Then declare the dependency exactly as you would any other library.
     <scope>provided</scope>
 </dependency>
 
-<!-- Optional: Cerbos-backed AuthorizationGuard + field masking -->
+<!-- Optional: Cerbos-backed authorization and field masking -->
 <dependency>
     <groupId>io.github.cristivoicu</groupId>
     <artifactId>spring-boot-restless-cerbos</artifactId>
     <version>0.0.1</version>
 </dependency>
+
+<!-- Optional: test helpers -->
+<dependency>
+    <groupId>io.github.cristivoicu</groupId>
+    <artifactId>spring-boot-restless-test</artifactId>
+    <version>0.0.1</version>
+    <scope>test</scope>
+</dependency>
 ```
 
-Or import the BOM once and drop the version from every `spring-boot-restless*` dependency:
+To manage all versions in one place, import the BOM and drop `<version>` from each dependency:
 
 ```xml
 <dependencyManagement>
@@ -181,9 +201,10 @@ Or import the BOM once and drop the version from every `spring-boot-restless*` d
 dependencies {
     implementation("io.github.cristivoicu:spring-boot-restless:0.0.1")
     annotationProcessor("io.github.cristivoicu:spring-boot-restless-processor:0.0.1") // optional
+    compileOnly("io.github.cristivoicu:spring-boot-restless-processor:0.0.1")         // for the annotations
 
-    implementation("io.github.cristivoicu:spring-boot-restless-cerbos:0.0.1") // optional
-    testImplementation("io.github.cristivoicu:spring-boot-restless-test:0.0.1") // optional
+    implementation("io.github.cristivoicu:spring-boot-restless-cerbos:0.0.1")        // optional
+    testImplementation("io.github.cristivoicu:spring-boot-restless-test:0.0.1")      // optional
 }
 ```
 
@@ -193,478 +214,1191 @@ dependencies {
 dependencies {
     implementation 'io.github.cristivoicu:spring-boot-restless:0.0.1'
     annotationProcessor 'io.github.cristivoicu:spring-boot-restless-processor:0.0.1' // optional
+    compileOnly 'io.github.cristivoicu:spring-boot-restless-processor:0.0.1'         // for the annotations
 
-    implementation 'io.github.cristivoicu:spring-boot-restless-cerbos:0.0.1' // optional
-    testImplementation 'io.github.cristivoicu:spring-boot-restless-test:0.0.1' // optional
+    implementation 'io.github.cristivoicu:spring-boot-restless-cerbos:0.0.1'        // optional
+    testImplementation 'io.github.cristivoicu:spring-boot-restless-test:0.0.1'      // optional
 }
 ```
 
-No `@ComponentScan`/`@Import` needed beyond that — every framework infrastructure bean
-(`RestlessRegistrar`, exception handling, OpenAPI customization, the Cerbos client) is registered
-automatically via Spring Boot's own auto-configuration mechanism the moment the jar is on the
-classpath.
+No `@ComponentScan` or `@Import` is needed. Every infrastructure bean is registered through Spring
+Boot auto-configuration as soon as the jar is on the classpath (see
+[Auto-configured beans](#auto-configured-beans)).
 
-## Configuration
+---
 
-All properties are optional; every one below shows its default. None are required to get a
-working resource.
+## Quick start
 
-```yaml
-restless:
-  list:
-    # Hard cap on GET {basePath}/list (unpaginated read). A response that hits the cap carries
-    # the response header X-Restless-List-Truncated: true.
-    max-size: 10000
-  soft-delete:
-    # true (default): findOne/a named view still return an already-soft-deleted row by id.
-    # false: 404 it there too, same as a row that was never there. A write on a soft-deleted
-    # row (update/patch/deleteById/a write action) always 404s, regardless of this setting.
-    include-in-single-read: true
-  authorization:
-    # What a denied caller gets on resources that don't set denyAs: forbidden (403) or
-    # not-found (404, indistinguishable from a missing id).
-    deny-as: forbidden
-  immutable:
-    # What @RestlessImmutable(onUpdate = DEFAULT) does when an update tries to change the field:
-    # ignore (keep the stored value silently) or reject (400).
-    on-update: ignore
-  # What a plain GET {basePath} returns on resources that don't set collectionGet: page or list.
-  collection-get: page
+This builds a complete `/skills` resource with no hand-written controller, repository or mapper.
 
-# Only read if spring-boot-restless-cerbos is on the classpath.
-cerbos:
-  client:
-    # host:port of a running Cerbos PDP.
-    target: localhost:3593
-    # Use a plaintext (non-TLS) gRPC channel - set to false against a PDP with TLS enabled.
-    plaintext: true
-    # gRPC deadline applied to every check()/plan() call. A PDP that doesn't answer within this
-    # window is treated as unreachable - the guard fails CLOSED (denies), never open.
-    timeout: 3s
-```
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `restless.list.max-size` | `int` | `10000` | Maximum rows returned by the unpaginated `GET {basePath}/list` route. |
-| `restless.page.max-size` | `int` | `2000` | Maximum client-supplied `size` on `GET {basePath}`/`.../overview`/`.../select/async`/a named read action - a request over this is rejected `400`, not silently clamped. |
-| `restless.bulk.max-size` | `int` | `1000` | Maximum items in a single `createBulk`/`updateBulk`/`deleteAll` request - over this is rejected `400` before any item is processed. |
-| `restless.soft-delete.include-in-single-read` | `boolean` | `true` | Whether `findOne`/a named view still returns an already-soft-deleted row (`true`) or 404s it too (`false`). A write on a soft-deleted row always 404s either way. |
-| `restless.authorization.deny-as` | `forbidden` \| `not-found` | `forbidden` | Default denial shape for resources whose `denyAs` is `DEFAULT`. `not-found` answers a denied row exactly like a missing one. |
-| `restless.immutable.on-update` | `ignore` \| `reject` | `ignore` | What `@RestlessImmutable(onUpdate = DEFAULT)` does when an update/patch tries to change the field. |
-| `restless.collection-get` | `page` \| `list` | `page` | What `GET {basePath}` returns for resources whose `collectionGet` is `DEFAULT`. With `list`, pages move to `{basePath}/page`. |
-| `cerbos.client.target` | `String` | `localhost:3593` | Cerbos PDP address (`host:port`), gRPC. |
-| `cerbos.client.plaintext` | `boolean` | `true` | Whether the gRPC channel to the PDP is unencrypted. |
-| `cerbos.client.timeout` | `Duration` | `3s` | Deadline for a single `check`/`plan` RPC before the guard fails closed. |
-
-No properties are needed to enable/disable a route, a bulk operation, or a write command — those
-are declared per resource in Java (`@RestlessEntity`'s attributes, or overriding a
-`RestlessResourceHandler` method), not via `application.yml`. See the
-[customization cheat sheet](#advanced-usage) below for where each of those lives.
-
-## Quick Start
-
-The core usage pattern is not "inject a bean and call a method" — it's "declare an entity and its
-DTOs, and the framework registers a live Spring MVC resource for you." This is the library's
-defining feature: for a standard entity, no service, controller, or repository class is written
-by hand at all.
-
-### Which tier does an entity need?
-
-Three levels of control exist, chosen per entity — authorization alone is never a reason to leave
-the codeless/generated tier, since `authorizationGuard` wires a real guard into a generated
-resource too. What actually forces the manual tier is entity-specific CUD logic, or needing a
-custom read action / write command / named view, none of which `@RestlessEntity` has an attribute
-for today:
-
-```mermaid
-flowchart TD
-    Q1{"Entity-specific create/update/delete logic,<br/>or a custom read action needed?"}
-    Q1 -->|No| Codeless["<b>Codeless tier</b><br/>Entity + 4 DTOs only —<br/>everything else is generated"]
-    Q1 -->|Yes| Q2{"Is depending on the <code>processor</code><br/>module (compile-time codegen) acceptable?"}
-    Q2 -->|Yes| Generated["<b>Generated + override</b><br/>Same as codeless, but point one or two<br/>@RestlessEntity attributes<br/>(createDataSource, authorizationGuard, ...)<br/>at a hand-written class"]
-    Q2 -->|"No — or need a write command /<br/>named read action / named view"| Manual["<b>Manual tier</b><br/>Hand-wire a RestlessResourceHandler<br/>subclass directly"]
-```
-
-The walkthrough below builds the codeless tier; see [Advanced Usage](#advanced-usage) for
-overriding one verb and the fully manual shape.
-
-**1. Annotate the entity:**
+**1. Annotate the entity.**
 
 ```java
-import jakarta.persistence.*;
-import lombok.*;
-import ro.cristivoicu.springbootrestless.annotation.RestlessEntity;
-
 @Entity
-@Getter @Setter @NoArgsConstructor @AllArgsConstructor
-@RestlessEntity(basePath = "/tasks", allowAll = true) // allowAll=true: no guard yet, see Advanced Usage
-public class Task {
+@Getter @Setter @NoArgsConstructor
+@RestlessEntity(basePath = "/skills", allowAll = true) // allowAll: no guard yet, see Authorization
+public class Skill {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    private String title;
-    private boolean done;
-}
-```
-
-**2. Write its four DTOs, in the same package:**
-
-```java
-public class TaskCreateModel implements CreateModel {
-    @NotBlank private String title;
-    private boolean done;
-    // + Lombok @Getter @Setter
-}
-
-public class TaskUpdateModel implements UpdateModel {
-    @NotBlank private String title;
-    private boolean done;
-}
-
-public class TaskSearchDto extends AbstractSearchDto {
-    private String title; // equality filter, zero extra code
-}
-
-public class TaskDto implements EntityDto {
-    private Long id;
-    private String title;
-    private boolean done;
-}
-```
-
-**3. Build.** `RestlessEntityProcessor` (the `spring-boot-restless-processor` annotation
-processor) generates `TaskRepository`, a `TaskMapper` (one explicit setter call per matched
-field), and `TaskRestlessResource` from just the code above. At application startup, `RestlessRegistrar` finds the generated resource and
-registers every route live against a real Spring Data JPA repository:
-
-```java
-@SpringBootApplication
-public class DemoApplication {
-    public static void main(String[] args) {
-        SpringApplication.run(DemoApplication.class, args);
-    }
-}
-```
-
-That's it — no `@RestController`, no `@Service`, no `TaskRepository` written by hand. The
-following endpoints are live immediately:
-
-| Verb | Route | Behavior |
-|---|---|---|
-| `POST` | `/tasks` | Create one (`201 Created` + `Location`) |
-| `POST` | `/tasks/bulk` | Bulk create (all-or-nothing) |
-| `GET` | `/tasks/{id}` | Read one |
-| `GET` | `/tasks` | Paged read |
-| `GET` | `/tasks/list` | Unpaginated read (capped by `restless.list.max-size`) |
-| `PUT` | `/tasks/{id}` | Full replace |
-| `PUT` | `/tasks/bulk` | Bulk update, keyed by id |
-| `DELETE` | `/tasks/{id}` | Delete one |
-| `POST` | `/tasks/bulk-delete` | Bulk delete |
-| `GET` | `/tasks?titleLike=foo&sort=title,asc` | Filter DSL + multi-field sort |
-
-## Feature Guide
-
-Everything below works on any resource, any tier (codeless, generated-with-overrides, or fully
-manual), unless a subsection says otherwise. See [`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md) for the
-full tutorial version of each — diagrams, request-flow walkthroughs, and worked, runnable
-examples from the `example` module.
-
-### Write commands
-
-CRUD's fixed verbs (`create`/`update`/`patch`/`delete`) are shaped around *fields*, not
-*transitions* — a full-replace `PUT` can set a field to any value at all, including an illegal
-one, because "replace these fields" has no vocabulary for "this is only a legal move from certain
-prior states." A **write command** is a named, intent-carrying mutation where the server, not the
-client, decides what's legal:
-
-```
-POST {basePath}/{id}/actions/{name}
-```
-
-Declared per resource via `getCustomWriteActions()` (hand-wired tier only today — see the cheat
-sheet below):
-
-```java
-public interface WriteAction<E, Req extends WriteActionRequest, Resp> {
-    Class<Req> getRequestType();
-    Class<Resp> getResponseType();
-
-    // Runs against an already-loaded, already-guard-checked entity and a validated request body,
-    // inside one real transaction.
-    Resp execute(E entity, Req request) throws Exception;
-}
-```
-
-```java
-@Override
-public Map<String, WriteAction<Employee, ?, ?>> getCustomWriteActions() {
-    return Map.of(
-            "promote", new WriteAction<Employee, PromoteRequest, EmployeeDto>() {
-                @Override public Class<PromoteRequest> getRequestType() { return PromoteRequest.class; }
-                @Override public Class<EmployeeDto> getResponseType() { return EmployeeDto.class; }
-
-                @Override
-                public EmployeeDto execute(Employee entity, PromoteRequest request) {
-                    JobTitle newTitle = request.getNewJobTitle();
-                    if (!newTitle.isPromotionFrom(entity.getJobTitle())) {
-                        throw new ResponseStatusException(HttpStatus.CONFLICT,
-                                "'" + newTitle + "' is not a promotion from '" + entity.getJobTitle() + "'");
-                    }
-                    entity.setJobTitle(newTitle);
-                    return mapper.map(repository.save(entity));
-                }
-            }
-    );
-}
-```
-
-```bash
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"newJobTitle":"ENGINEER"}' http://localhost:8081/employees/1/actions/promote
-```
-
-What happens under the hood, per request: `preCheck(WRITE_ACTION, "promote")` → read + validate
-the request body → open a transaction → load the entity → `canAccess(WRITE_ACTION, "promote",
-entity)` → `execute(...)` → commit → `200 OK`. A guard denial or a `ResponseStatusException`
-thrown from `execute` (illegal-transition prevention needs nothing else) rolls the whole
-transaction back. `execute` bypasses `Mapper` entirely, both directions — its request/response
-shape is whatever the action author decides, the same "response shape is always hand-written"
-boundary `Mapper` itself states.
-
-**Use it for:** a transition with real invariants (`promote`'s career-ladder check), a
-business-rule cap that depends on the row's *current* state (`giveRaise`'s 20%-per-raise cap), or
-append-only mutation of a collection the update model deliberately never exposes
-(`addCertification`). **Don't use it for:** a plain field-level replace (that's what `PUT`/`PATCH`
-already are) or bulk mutation (no `BulkWriteAction` exists yet — one call is one entity).
-
-### Bulk operations
-
-Every resource gets three bulk routes for free — no opt-in, riding on the same
-`CreateDataSource`/`UpdateDataSource`/`DeleteDataSource` every resource already has:
-
-| Verb | Route | Body | Response |
-|---|---|---|---|
-| `POST` | `{basePath}/bulk` | JSON array of `CreateModel` | `200`, array of created DTOs |
-| `PUT` | `{basePath}/bulk` | JSON object keyed by id — `{"1": {...}, "2": {...}}` | `200`, array of updated DTOs |
-| `POST` | `{basePath}/bulk-delete` | `{"ids": ["1", "2", "3"]}` | `204 No Content` |
-
-Every bulk write is one real transaction — all-or-nothing, not best-effort. Bulk update/delete
-additionally load every target in one `findAllById` query and `canAccess`-check all of them in one
-batched `canAccessAll` call **before** writing anything, so a batch never partially applies
-because item #7 of 10 turned out to be denied.
-
-That's the default (`bulkMode = ALL_OR_NOTHING`). For imports where some rows are expected to be
-bad, `bulkMode = PARTIAL` creates each row in its own transaction and reports the rest — see
-[Bulk import, polymorphism, validation groups, error shape](#bulk-import-polymorphism-validation-groups-error-shape).
-
-```bash
-curl -X PUT -H "Content-Type: application/json" \
-  -d '{"1": {"title":"Ship it","done":true}, "2": {"title":"Write docs","done":false}}' \
-  http://localhost:8081/tasks/bulk
-```
-
-### Filter DSL
-
-A `SearchDto` field suffixed with a recognized operator filters with that operator instead of
-plain equality — zero extra code, reflected over automatically:
-
-| Suffix | Operator | Example |
-|---|---|---|
-| `Gte` / `Lte` / `Gt` / `Lt` | `>=` / `<=` / `>` / `<` | `?salaryGte=100000` |
-| `Like` | contains-match (escaped - see below) | `?titleLike=urgent` |
-| `ILike` | case-insensitive contains-match | `?titleILike=urgent` |
-| `StartsWith` | prefix match, no leading wildcard (index-friendly) | `?titleStartsWith=URG` |
-| `Ne` | not-equal | `?statusNe=CLOSED` |
-| `In` | membership (repeatable param) | `?statusIn=OPEN&statusIn=PENDING` |
-
-`Like`/`ILike`/`StartsWith` escape a literal `%`/`_`/`\` in the search term before building the
-pattern, so a value containing one of those three characters is matched literally, not as a SQL
-wildcard. Every field/operator combination is validated once at startup (not per request) - an
-equality field naming no real entity property, an operator the resolved property's type doesn't
-support, `In` on a non-`Collection` field, and a primitive filter field (it can never represent
-"the client didn't send this") all fail fast there. A suffixed field whose *full* name is itself a
-real entity property (e.g. `checkIn`) is treated as plain equality on that property, not the
-suffix - only once neither the full name nor the base resolves does startup fail.
-
-Combine with multi-field sort, Spring Data's own convention: `?sort=lastName,asc&sort=firstName,asc`,
-or a single `?sort=lastName,asc` for one field. A leading `-` is also accepted as shorthand for
-descending (`?sort=-lastName`, same convention GitHub's and many other REST APIs' own sort
-parameters use). For anything beyond these operators (joins, boolean OR, cross-field logic),
-override `getSpecification()` — `RestlessSpecifications` is a small fluent builder for that escape
-hatch.
-
-### Partial updates (`PATCH`)
-
-Entirely opt-in, unlike the four mandatory CUD verbs — no `PATCH` route is registered until one is
-provided:
-
-```java
-@RestlessEntity(basePath = "/tasks", patchDataSource = DefaultPatchDataSource.class)
-```
-
-`null` on a `PatchModel` field means "not sent," not "clear it" — a full `PUT` is still how a
-client explicitly nulls a field. Checked against its own `Action.PATCH`, not inherited from
-`Action.UPDATE`, so granting full-replace access never silently grants partial-update access too.
-
-### Soft delete
-
-```java
-public class Task implements SoftDeletable { /* ... */ }
-```
-
-```java
-@RestlessEntity(basePath = "/tasks", deleteDataSource = DefaultSoftDeleteDataSource.class)
-```
-
-Flags a `deleted` column instead of removing the row; automatically excluded from
-`findList`/`findPage*`/custom-read results. Still fetchable directly by id (`findOne`/a named
-view) unless `restless.soft-delete.include-in-single-read=false`, in which case it 404s there
-too. A write (`update`/`patch`/`deleteById`/a named write action) on an already-soft-deleted row
-always 404s, regardless of that setting.
-
-### Optimistic concurrency
-
-```java
-@Version
-private Long version;
-```
-
-That's the entire change — a stale concurrent write already gets a `409` automatically. Every
-single-resource response (`GET`/`POST`/`PUT`/`PATCH`) carries a strong `ETag` derived from it;
-send that value back as `If-Match: "<version>"` (or `*`, or a comma-separated list of
-candidates) on a single-item `PUT`/`PATCH`/`DELETE`/write action to opt further into a
-precondition check (`412` on a stale value, checked before any write is attempted - strong
-comparison, so a weak `W/"..."` validator never satisfies it). `GET` with a matching
-`If-None-Match` short-circuits to `304` with no body.
-
-### Auditing
-
-```java
-public class Task extends AbstractAuditableEntity { /* ... */ }
-```
-
-Populates `createdDate`/`lastModifiedDate` automatically via Spring Data JPA's own auditing —
-add `@EnableJpaAuditing` on your `@SpringBootApplication` class, same as any Spring Data JPA app.
-
-### API versioning
-
-```java
-@RestlessEntity(basePath = "/tasks", version = "1")
-```
-
-Forwards onto Spring Framework's own `RequestMappingInfo.Builder.version(...)` for every route
-this resource registers — real routing, not just a stored string. *How* a request's version is
-resolved (header, path segment, query param) is a separate, app-wide `ApiVersionConfigurer` bean.
-
-### Related-resource embedding
-
-```java
-public class TaskDto implements EntityDto {
-    @RestlessEmbed(resource = ProjectRestlessResource.class, sourceField = "projectId", targetField = "id")
-    private ProjectDto project;
-}
-```
-
-`GET /tasks/{id}?expand=project` populates the field through *that* resource's own
-`AuthorizationGuard` — an unreadable relation reads as empty/`null`, never a `403`, so it never
-fails the outer response.
-
-### RestlessContext (per-request context)
-
-A per-request object carrying resolved path variables, the `HttpServletRequest`, the current
-`Authentication` (nullable, `Object`-typed), and the `AuthorizationGuard.Action`/custom action
-name being checked - available to a data source as an extra constructor-compatible argument, or
-anywhere else via the static accessor:
-
-```java
-public class GuestCreateDataSource extends CreateDataSource<Guest, UUID, GuestCreateModel> {
-    @Override
-    public Guest create(GuestCreateModel model, RestlessContext ctx) {
-        UUID eventId = ctx.pathVariable("eventId", UUID.class);
-        // ... entity-specific logic that actually needs the request ...
-    }
-}
-```
-
-```java
-// Anywhere - a guard's own preCheck, say (see "Nested (parent-scoped) resources" below):
-UUID eventId = RestlessContext.current().pathVariable("eventId", UUID.class);
-```
-
-Every `*DataSource` verb's context-aware overload defaults to the existing non-context one, so a
-data source that never needs the request doesn't have to know this exists at all.
-
-### Nested (parent-scoped) resources
-
-```java
-@RestlessEntity(basePath = "/events/{eventId}/guests",
-        parent = @RestlessParent(variable = "eventId", field = "eventId"))
-public class Guest {
-    @Id private UUID id;
-    private UUID eventId;   // flat scalar FK - the common case
-    // ... or: @ManyToOne private Event event;  with field = "event.id"
     private String name;
 }
 ```
 
-- **Routing**: every fixed/bulk/PATCH/named-action route registers under the templated path.
-  Duplicate-basePath detection treats `/a/{x}/b` and `/a/{y}/b` as the same route.
-- **Create**: the parent id is written from the path *after* the create model is applied - a
-  body-supplied value for the same field is always overwritten, never honored.
-- **Reads**: a `parentField = :pathValue` predicate is auto-ANDed onto every filter, before the
-  guard's own `scope()` - a client can't see another parent's rows no matter what they send.
-- **Single-row writes/reads** (`GET`/`PUT`/`PATCH`/`DELETE`/a named action) for a row under a
-  *different* parent `404`s, same as a row that never existed.
-- **Bulk update/delete**: even one foreign-parent target fails the *whole* batch with `404`,
-  nothing written.
-- **Update/patch can never move a row** to a different parent - protected like `@Id`.
-- **An unconvertible path value is a clean `400`.**
-- OpenAPI documents the parent path parameter, with the right schema type, on every route.
-- `@RestlessEmbed` and soft delete keep working unchanged.
-
-**Migrating a flat resource (parent id in the body) to nested:** drop the parent-id field from
-the create/update models and search DTO (it's never read from the body again), add `parent =
-@RestlessParent(...)` and change `basePath` to the templated form, and point every client at
-`/events/{eventId}/guests` instead of `/guests` with `eventId` in the query string/body. Any
-hand-written `*DataSource` that only existed to inject/validate the parent id (e.g. a
-`GuestCreateDataSource` that copied a body `eventId` onto the entity, or an `OwnedByEventGuard`
-whose only job was the same per-row check `RestlessResourceHandler` now does automatically) can
-usually be deleted outright - see the previous changelog entry's `example` reference for a
-real one.
-
-### Ownership, denials and server-set fields
-
-"A user manages only what they own" is declarative - no guard class:
+**2. Write four DTOs in the same package, following the naming convention.**
 
 ```java
+@Getter @Setter
+public class SkillCreateModel implements CreateModel {
+    @NotBlank private String name;
+}
+
+@Getter @Setter
+public class SkillUpdateModel implements UpdateModel {
+    @NotBlank private String name;
+}
+
+@Getter @Setter
+public class SkillSearchDto extends AbstractSearchDto {
+    private String name;          // ?name=Java          -> name = 'Java'
+    private String nameILike;     // ?nameILike=jav      -> lower(name) like '%jav%'
+}
+
+@Getter @Setter @NoArgsConstructor
+public class SkillDto implements EntityDto {
+    private Long id;
+    private String name;
+}
+```
+
+**3. Build and run.** At compile time `RestlessEntityProcessor` generates `SkillRepository` (if you
+don't have one), `SkillMapper` (if you don't have one) and `SkillRestlessResource`. At startup
+`RestlessRegistrar` registers these routes:
+
+| Method | Path | Result |
+|---|---|---|
+| `POST` | `/skills` | Create one. `201 Created` with `Location`. |
+| `POST` | `/skills/bulk` | Create many in one transaction. |
+| `GET` | `/skills/{id}` | Read one. |
+| `GET` | `/skills?page=0&size=20&sort=name,asc` | Read a page. |
+| `GET` | `/skills/list` | Read every row (capped by `restless.list.max-size`). |
+| `GET` | `/skills/overview` | Page through the overview mapper. |
+| `GET` | `/skills/select/async` | Page through the select mapper. |
+| `PUT` | `/skills/{id}` | Full update. |
+| `PUT` | `/skills/bulk` | Update many, keyed by id. |
+| `DELETE` | `/skills/{id}` | Delete one. `204 No Content`. |
+| `POST` | `/skills/bulk-delete` | Delete many. `204 No Content`. |
+
+```bash
+curl -X POST localhost:8080/skills -H 'Content-Type: application/json' -d '{"name":"Java"}'
+curl 'localhost:8080/skills?nameILike=jav&sort=-name'
+```
+
+Before you ship it, replace `allowAll = true` with a real guard. See [Authorization](#authorization).
+
+---
+
+## Choosing a tier
+
+You choose per entity how much to hand-write. All three tiers produce the same routes and behavior.
+
+| Tier | What you write | Use it when |
+|---|---|---|
+| **Generated** | Entity with `@RestlessEntity` + DTOs. | Default CRUD is enough. Authorization, ownership, actions, views, hooks, bulk modes and PATCH can all be declared on the annotation. |
+| **Generated with overrides** | Same, plus one or more hand-written beans referenced from the annotation (`createDataSource`, `mapper`, `authorizationGuard`, ...). | One verb needs custom logic, for example looking up a related entity on create. |
+| **Manual** | A `@Component @RestlessResource` class extending `RestlessResourceHandler<E, K>`. | You don't want the annotation processor, you need different mappers per projection (entity/overview/select), you need a custom `getSpecification`, or you want full control in Java. |
+
+```mermaid
+flowchart TD
+    Q1{"Is default create/update/delete<br/>behavior enough?"}
+    Q1 -->|Yes| Q0{"Need different mappers for overview/select,<br/>or a hand-written getSpecification()?"}
+    Q1 -->|No| Q2{"Can the custom logic live in one<br/>*DataSource / Mapper / guard bean?"}
+    Q0 -->|No| Gen["<b>Generated</b><br/>@RestlessEntity + DTOs"]
+    Q0 -->|Yes| Manual["<b>Manual</b><br/>extend RestlessResourceHandler"]
+    Q2 -->|Yes| Over["<b>Generated with overrides</b><br/>@RestlessEntity(createDataSource = ..., ...)"]
+    Q2 -->|No| Manual
+```
+
+---
+
+## How a request is processed
+
+Every route is a method on `RestlessResourceHandler`. For a single-row write (`PUT /{id}`), the order
+is:
+
+1. Build a [`RestlessContext`](#restlesscontext) (path variables, principal, action) and make it
+   available through `RestlessContext.current()`.
+2. `AuthorizationGuard.preCheck(...)`: may this caller attempt this action at all? Denied means
+   `403`/`404` (see [`RestlessDenial`](#restlessdenial)) before any database access.
+3. Read and validate the body (Bean Validation, with [validation groups](#restlessvalidationgroups)).
+4. Open a transaction. Load the row; a missing row, a soft-deleted row or a row under another parent
+   is `404`.
+5. `AuthorizationGuard.canAccess(...)` on the loaded row, then the `If-Match` check (`412` on
+   mismatch).
+6. `@RestlessImmutable(onUpdate = REJECT)` check, lifecycle hooks `beforeUpdate`, then the update
+   data source.
+7. Server-managed fields are restored: the [parent field](#nested-resources),
+   [`@RestlessFromPrincipal`](#restlessfromprincipal) and [`@RestlessImmutable`](#restlessimmutable)
+   fields.
+8. `AuthorizationGuard.canAccessAfterWrite(...)` on the changed row, so a caller can't move a row
+   somewhere they aren't allowed.
+9. Lifecycle hooks `afterUpdate`, flush, map to the DTO, `postProcessResponse(...)` (for example
+   Cerbos field masking), set `ETag`, commit.
+
+Any exception rolls the transaction back and becomes an RFC 9457 error response (see
+[Errors](#errors)). Reads follow the same idea: `preCheck`, then `scope(...)` is ANDed into the query
+so lists only contain rows the caller may see.
+
+---
+
+## HTTP API reference
+
+### Routes
+
+`{basePath}` is the resource's `basePath`. A route exists only if the corresponding operation is
+enabled (see [`RestlessOperation`](#restlessoperation) and `getEnabledOperations()`).
+
+| Method | Path | Handler | Guard action | Success response |
+|---|---|---|---|---|
+| `POST` | `{basePath}` | `create` | `CREATE` | `201` + `Location` + `ETag`, body: entity DTO |
+| `POST` | `{basePath}/bulk` | `createBulk` | `CREATE` | `200`, body: array of DTOs, or `RestlessBulkResult` in `PARTIAL` mode |
+| `GET` | `{basePath}/{id}` | `findOne` | `READ_ONE` | `200` + `ETag` (or `304`), body: entity DTO |
+| `GET` | `{basePath}` | `findPage` | `READ_PAGE` | `200`, body: `PageableResponse` of entity DTOs |
+| `GET` | `{basePath}/list` | `findList` | `READ_LIST` | `200`, body: array of overview DTOs |
+| `GET` | `{basePath}/overview` | `findPageOverview` | `READ_PAGE_OVERVIEW` | `200`, body: `PageableResponse` of overview DTOs |
+| `GET` | `{basePath}/select/async` | `findPageSelect` | `READ_PAGE_SELECT` | `200`, body: `PageableResponse` of select DTOs |
+| `PUT` | `{basePath}/{id}` | `update` | `UPDATE` | `200` + `ETag`, body: entity DTO |
+| `PUT` | `{basePath}/bulk` | `updateBulk` | `UPDATE` | `200`, body: array of DTOs |
+| `PATCH` | `{basePath}/{id}` | `patch` | `PATCH` | `200` + `ETag`. Only if a patch data source is configured. |
+| `DELETE` | `{basePath}/{id}` | `deleteById` | `DELETE_ONE` | `204` |
+| `POST` | `{basePath}/bulk-delete` | `deleteAll` | `DELETE_ALL` | `204` |
+| `GET` | `{basePath}/actions/{name}` | `customRead` | `CUSTOM_READ` | `200`, body: `PageableResponse` (a [`ReadAction`](#readactione-r)) |
+| `GET` | `{basePath}/actions/{name}` | `collectionAction` | `CUSTOM_READ` | `200`, any JSON or a binary (a [`CollectionAction`](#collectionactione)) |
+| `GET` | `{basePath}/{id}/{name}` | `namedView` | `NAMED_VIEW` | `200`, a view's DTO or binary (a [named view](#named-views)) |
+| `POST` | `{basePath}/{id}/actions/{name}` | `writeAction` | `WRITE_ACTION` | `200`, the action's response (a [`WriteAction`](#writeactione-req-resp)) |
+
+With `collectionGet = LIST`, `GET {basePath}` returns the plain array, the page moves to
+`GET {basePath}/page`, and `/list` keeps working.
+
+Bulk-delete uses `POST` rather than `DELETE` with a body, because proxies and clients may drop a
+`DELETE` body.
+
+### Request bodies
+
+| Route | Body |
+|---|---|
+| `POST {basePath}` | One create model as JSON. With `multipartCreate`, also `multipart/form-data`. |
+| `POST {basePath}/bulk` | JSON array of create models. |
+| `PUT {basePath}/{id}` | One update model. |
+| `PUT {basePath}/bulk` | JSON object keyed by id: `{"1": {...}, "2": {...}}`. |
+| `PATCH {basePath}/{id}` | One patch model; `null`/missing fields are left alone. |
+| `POST {basePath}/bulk-delete` | A delete model, by default `{"ids": ["1", "2"]}`. |
+| `POST {basePath}/{id}/actions/{name}` | The write action's request type. |
+
+### Query parameters
+
+| Parameter | Routes | Meaning |
+|---|---|---|
+| `page` | paged reads, read actions | Zero-based page index. Default `0`. |
+| `size` | paged reads, read actions | Page size. Default `20`. Above `restless.page.max-size` is `400`. |
+| `sort` | every collection read | Repeatable. `name`, `name,desc` or `-name`. Default `id,asc`. Unknown properties are `400`. |
+| any `SearchDto` field | collection reads | Filter. See [Filtering](#filtering). |
+| `expand` | `GET /{id}`, named views | Comma-separated names of [`@RestlessEmbed`](#restlessembed) fields to populate. |
+| `dedupe` | `POST /bulk` in `PARTIAL` mode | `false` turns off duplicate skipping for this request. |
+
+### Headers
+
+| Header | Direction | Meaning |
+|---|---|---|
+| `ETag` | response | `"<version>"` on single-row responses, when the entity has a `@Version` field. |
+| `If-None-Match` | request | On `GET /{id}`: `304 Not Modified` when it matches the current ETag. |
+| `If-Match` | request | On `PUT`/`PATCH`/`DELETE` of one row and on write actions: `412` when it doesn't match. |
+| `Location` | response | On `201` from create: the URL of the new row. |
+| `X-Restless-List-Truncated` | response | `true` when `GET /list` hit `restless.list.max-size`. |
+| `Content-Disposition` | response | Set on [`RestlessBinary`](#restlessbinary) responses. |
+
+### Status codes
+
+| Status | When |
+|---|---|
+| `200` / `201` / `204` | Success, see the route table. |
+| `304` | `If-None-Match` matched. |
+| `400` | Validation failed, malformed JSON, an id or path variable that doesn't convert, unknown sort property, page/bulk size over the cap, `@RestlessImmutable(onUpdate = REJECT)` field changed. |
+| `401` | A create needs a principal (`@RestlessFromPrincipal`) and there is none. |
+| `403` | Denied by the guard, with `denyAs = FORBIDDEN` (the default). |
+| `404` | Missing row, soft-deleted row on a write, row under another parent, or denied with `denyAs = NOT_FOUND`. |
+| `409` | Optimistic-lock conflict on save, or a database constraint violation. |
+| `412` | `If-Match` didn't match. |
+| `415` | Multipart body sent to a resource without `multipartCreate`. |
+| `500` | Unexpected error or a misconfiguration (details are logged, not returned). |
+
+---
+
+## Annotations
+
+Annotations come from two artifacts:
+
+- **Compile-time** (`spring-boot-restless-processor`, `SOURCE` retention): `@RestlessEntity`,
+  `@RestlessOwnedBy`, `@RestlessMapperExclude`, and the compile-time copies of `@RestlessParent` and
+  the enums. They are gone after compilation; the processor turns them into generated code.
+- **Runtime** (`spring-boot-restless`, `RUNTIME` retention): `@RestlessResource`, `@RestlessParent`,
+  `@RestlessFromPrincipal`, `@RestlessImmutable`, `@RestlessSubtype`, `@RestlessActionName`,
+  `@RestlessEmbed`. `@CerbosHiddenField` comes from the Cerbos module.
+
+Some annotations and enums (`RestlessParent`, `RestlessDenial`, `RestlessBulkMode`,
+`RestlessCollectionGet`) exist in both artifacts with identical shape, because the processor can't
+depend on the runtime module. You use the same import either way; the processor copies the
+compile-time values onto the generated `@RestlessResource`.
+
+### `@RestlessEntity`
+
+**Artifact:** processor. **Target:** the JPA entity class.
+
+Generates a `{Entity}RestlessResource` bean for the entity at compile time. Use it for any entity
+whose resource can be described declaratively, which is most of them.
+
+**Naming convention.** Unless overridden by an attribute, the processor looks for these classes in
+the entity's package:
+
+| Class | Required | Notes |
+|---|---|---|
+| `{Entity}CreateModel` | Yes | Implements `CreateModel`. |
+| `{Entity}UpdateModel` | Yes | Implements `UpdateModel`. Still required when `UPDATE` is excluded from `operations`. |
+| `{Entity}SearchDto` | Yes | Implements `SearchDto`, usually extends `AbstractSearchDto`. |
+| `{Entity}Dto` | Yes, unless you write `{Entity}Mapper` | The response DTO. |
+| `{Entity}Mapper` | No | If missing, generated: one `dto.setX(entity.getX())` per field with the same name and type. |
+| `{Entity}Repository` | No | If missing, generated as `SpecificationRepository<Entity, Id>`. |
+
+**Attributes**
+
+| Attribute | Type | Default | Meaning |
+|---|---|---|---|
+| `basePath` | `String` | required | URL path, for example `"/employees"` or `"/projects/{projectId}/tasks"`. Must be unique across resources. |
+| `createModel` | `Class<?>` | `{Entity}CreateModel` | Create model class, when it doesn't follow the convention. |
+| `updateModel` | `Class<?>` | `{Entity}UpdateModel` | Update model class. Can be the same class as `createModel`. |
+| `searchDto` | `Class<?>` | `{Entity}SearchDto` | Search DTO class. |
+| `dto` | `Class<?>` | `{Entity}Dto` | Response DTO used by the generated mapper. |
+| `mapper` | `Class<?>` | `{Entity}Mapper` or generated | A hand-written `Mapper<Entity, ?>` `@Component`. |
+| `repository` | `Class<?>` | `{Entity}Repository` or generated | A repository elsewhere. Must extend `SpecificationRepository<Entity, Id>`. |
+| `createDataSource` | `Class<?>` | `DefaultCreateDataSource` | A hand-written `CreateDataSource` `@Component`. |
+| `readDataSource` | `Class<?>` | `DefaultReadDataSource` | A hand-written `ReadDataSource` `@Component`. |
+| `updateDataSource` | `Class<?>` | `DefaultUpdateDataSource` | A hand-written `UpdateDataSource` `@Component`. |
+| `deleteDataSource` | `Class<?>` | `DefaultDeleteDataSource` | A hand-written `DeleteDataSource` `@Component`, or `DefaultSoftDeleteDataSource` subclass. |
+| `patchDataSource` | `Class<?>` | none (no `PATCH` route) | A `PatchDataSource` `@Component`. Setting it adds `PATCH {basePath}/{id}`. |
+| `authorizationGuard` | `Class<?>` | none | An `AuthorizationGuard<Entity>` `@Component`. Can't be combined with `@RestlessOwnedBy`. |
+| `allowAll` | `boolean` | `false` | `true` lets the resource start without a guard. Without a guard and without this, startup fails. |
+| `operations` | `RestlessOperation[]` | all nine | Which fixed routes to register. |
+| `version` | `String` | `""` | API version for every route, as in `@RequestMapping(version = ...)`. |
+| `parent` | `@RestlessParent` | not nested | Makes the resource nested under a parent path variable. |
+| `denyAs` | `RestlessDenial` | `DEFAULT` | `403` or `404` for denied callers. |
+| `readActions` | `Class<?>[]` | `{}` | `ReadAction` beans, each at `GET {basePath}/actions/{name}`. |
+| `collectionActions` | `Class<?>[]` | `{}` | `CollectionAction` beans, each at `GET {basePath}/actions/{name}`. |
+| `writeActions` | `Class<?>[]` | `{}` | `WriteAction` beans, each at `POST {basePath}/{id}/actions/{name}`. |
+| `views` | `Class<?>[]` | `{}` | `Mapper<Entity, ?>` beans, each at `GET {basePath}/{id}/{name}`. |
+| `hooks` | `Class<?>[]` | `{}` | `RestlessLifecycleHook<Entity>` beans, run in this order. |
+| `multipartCreate` | `boolean` | `false` | `POST {basePath}` also accepts `multipart/form-data`. |
+| `bulkMode` | `RestlessBulkMode` | `DEFAULT` (all-or-nothing) | How bulk create treats bad rows. |
+| `bulkDedupe` | `Class<?>` | none | A `RestlessDedupeKey<Entity, CreateModel>` bean for `PARTIAL` bulk create. |
+| `collectionGet` | `RestlessCollectionGet` | `DEFAULT` (page) | Whether `GET {basePath}` returns a page or a plain array. |
+
+Every bean referenced from an attribute (data sources, guard, actions, views, hooks, dedupe key) must
+be a Spring bean (`@Component`). The generated resource receives it through constructor injection.
+Each action and view bean needs [`@RestlessActionName`](#restlessactionname).
+
+`Class<?>` attributes can't name a parameterized type. To use a generic class such as
+`DefaultPatchDataSource<E, K, P>`, make a small named subclass:
+
+```java
+@Component
+class DepartmentPatchDataSource extends DefaultPatchDataSource<Department, Long, DepartmentPatchModel> {
+    DepartmentPatchDataSource(DepartmentRepository repository) {
+        super(repository, DepartmentPatchModel.class);
+    }
+}
+```
+
+**Compile-time checks.** The processor fails the build when:
+
+- the entity has no `@Id` field, or a convention class is missing;
+- `parent` sets only one of `variable`/`field`, the variable isn't in `basePath`, or the field doesn't
+  exist or can't be converted from a path variable;
+- a create, update or patch model declares a field named like a protected entity field (`@Id`,
+  `@Version`, `@CreatedDate`, `@LastModifiedDate`, `deleted` on a `SoftDeletable`) or a
+  `@RestlessFromPrincipal` field;
+- a patch model has a primitive field (it can't represent "not sent");
+- `@RestlessOwnedBy` is combined with `authorizationGuard`, or names a property that doesn't exist.
+
+**Example: generated with overrides**
+
+```java
+@Entity
+@RestlessEntity(basePath = "/projects",
+        createDataSource = ProjectCreateDataSource.class,      // custom create logic
+        authorizationGuard = ProjectAuthorizationGuardBean.class,
+        version = "1.0")
+public class Project extends AbstractAuditableEntity { ... }
+```
+
+**Example: read-only resource**
+
+```java
+@RestlessEntity(basePath = "/countries", allowAll = true,
+        operations = {RestlessOperation.READ_ONE, RestlessOperation.READ_LIST, RestlessOperation.READ_PAGE})
+public class Country { ... }
+```
+
+### `@RestlessResource`
+
+**Artifact:** runtime. **Target:** a class extending `RestlessResourceHandler`.
+
+Marks a resource bean for route registration. You write it yourself on the manual tier; on the
+generated tier the processor puts it on the generated class. Never put it on the entity.
+
+| Attribute | Type | Default | Meaning |
+|---|---|---|---|
+| `basePath` | `String` | required | URL path. |
+| `version` | `String` | `""` | API version for every route. See [API versioning](#api-versioning). |
+| `allowAll` | `boolean` | `false` | Allow startup without an `AuthorizationGuard` override. |
+| `parent` | `@RestlessParent` | not nested | See [Nested resources](#nested-resources). |
+| `denyAs` | `RestlessDenial` | `DEFAULT` | `403` or `404` for denied callers. |
+| `bulkMode` | `RestlessBulkMode` | `DEFAULT` | How bulk create treats bad rows. |
+| `collectionGet` | `RestlessCollectionGet` | `DEFAULT` | Page or plain array on `GET {basePath}`. |
+
+Things that `@RestlessEntity` declares as attributes (actions, views, hooks, PATCH, multipart, dedupe,
+operations) are declared on the manual tier by overriding methods of `RestlessResourceHandler`.
+
+```java
+@Component
+@RestlessResource(basePath = "/departments", denyAs = RestlessDenial.NOT_FOUND)
+public class DepartmentRestlessResource extends RestlessResourceHandler<Department, Long> { ... }
+```
+
+### `@RestlessParent`
+
+**Artifact:** both. **Target:** used only as the `parent` attribute of `@RestlessEntity` or
+`@RestlessResource`.
+
+Nests a resource under a parent, for example `/projects/{projectId}/tasks`. Every operation is then
+limited to the parent named in the URL. See [Nested resources](#nested-resources) for the full
+behavior.
+
+| Attribute | Type | Default | Meaning |
+|---|---|---|---|
+| `variable` | `String` | `""` | Path variable in `basePath` that holds the parent id. |
+| `field` | `String` | `""` | Entity property holding the parent id: a plain column (`"notebookId"`) or one association hop to its id (`"project.id"`). |
+
+Both empty means not nested. Use it when the child only makes sense inside its parent and URLs should
+say so.
+
+```java
+// Plain foreign-key column
+@RestlessEntity(basePath = "/notebooks/{notebookId}/notes",
+        parent = @RestlessParent(variable = "notebookId", field = "notebookId"))
+public class Note { @Column(nullable = false) private Long notebookId; ... }
+
+// @ManyToOne association
+@RestlessEntity(basePath = "/projects/{projectId}/tasks",
+        parent = @RestlessParent(variable = "projectId", field = "project.id"))
+public class Task { @ManyToOne(optional = false) private Project project; ... }
+```
+
+`@RestlessParent` only limits rows to the parent in the URL. It does not check that the caller may
+access that parent; use a guard or `@RestlessOwnedBy(path = ..., via = ...)` for that.
+
+### `@RestlessOwnedBy`
+
+**Artifact:** processor. **Target:** an entity that also has `@RestlessEntity`.
+
+Declares "a user manages only what they own" and makes the generated resource use an
+[`OwnershipAuthorizationGuard`](#restlessownershipguards-and-ownershipauthorizationguard). Lists are
+filtered in SQL, every single row is checked, and a create pointing at someone else's parent is
+rolled back.
+
+Set **either** `field` (direct ownership) **or** `path` + `via` + `ownerField` (ownership through a
+parent):
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `field` | `String` | Direct: the owner property on this entity, e.g. `"ownerId"` or `"owner.id"`. |
+| `path` | `String` | Via a parent: the property on this entity holding the parent's id, e.g. `"notebookId"`. |
+| `via` | `Class<?>` | Via a parent: the parent entity class. |
+| `ownerField` | `String` | Via a parent: the owner property on the parent. |
+
+The owner value is compared with the caller's id from the
+[`RestlessPrincipalIdResolver`](#restlessprincipalidresolver) bean, converted to the owner field's
+type. No principal means no access.
+
+```java
+// The row stores its owner
 @RestlessEntity(basePath = "/notebooks", denyAs = RestlessDenial.NOT_FOUND)
 @RestlessOwnedBy(field = "ownerUsername")
 public class Notebook {
-    @RestlessFromPrincipal @Column(nullable = false) private String ownerUsername; // set from the caller, never from a body
-    @RestlessImmutable(onUpdate = RestlessImmutable.OnChange.REJECT) private String code; // 400 if an update changes it
+    @RestlessFromPrincipal @Column(nullable = false) private String ownerUsername;
+    ...
 }
 
+// The row belongs to a parent that stores the owner
 @RestlessEntity(basePath = "/notebooks/{notebookId}/notes",
-        parent = @RestlessParent(variable = "notebookId", field = "notebookId"), denyAs = RestlessDenial.NOT_FOUND)
+        parent = @RestlessParent(variable = "notebookId", field = "notebookId"),
+        denyAs = RestlessDenial.NOT_FOUND)
 @RestlessOwnedBy(path = "notebookId", via = Notebook.class, ownerField = "ownerUsername")
 public class Note { ... }
 ```
 
-- **`@RestlessOwnedBy`** builds an ownership guard (`RestlessOwnershipGuards`): lists are scoped in
-  SQL (a subquery for the `via` shape), every single row is checked, a create pointing at someone
-  else's parent is rolled back. Nested under its own parent, the guard answers for the path's parent
-  once, in `preCheck`. No principal owns nothing (fail closed).
-- **`denyAs`** - `FORBIDDEN` (403, default) or `NOT_FOUND` (404, byte-identical to a missing id).
-  Global default: `restless.authorization.deny-as`.
-- **`@RestlessFromPrincipal`** - written from the caller on create (before the INSERT), immutable
-  afterwards, rejected at compile time if a create/update/patch model declares it.
-- **`@RestlessImmutable`** - set on create, never changed by update/patch; `IGNORE` or `REJECT`
-  (`restless.immutable.on-update`).
-- **Who is the caller** - a `RestlessPrincipalIdResolver` bean (default: the authenticated name),
-  available everywhere as `RestlessContext.principalId()`. Return a local user id if that's what
-  owner columns hold:
+Pair it with `@RestlessFromPrincipal` on the owner column so the owner comes from the token, and with
+`denyAs = NOT_FOUND` so other people's ids can't be probed. On the manual tier, use
+`RestlessOwnershipGuards` directly.
+
+### `@RestlessFromPrincipal`
+
+**Artifact:** runtime. **Target:** an entity field.
+
+A field the server fills from the caller on create and never lets change afterwards. Typical use: the
+owner column (`ownerId`, `createdBy`).
+
+- On create, it's set to `RestlessContext.principalId()` converted to the field type. No principal
+  means `401`; a row is never created with a `null` owner.
+- On update and patch, the stored value is restored, whatever the data source did.
+- A create, update or patch model may not declare a field with the same name (compile error on the
+  generated tier).
+
+```java
+@RestlessFromPrincipal
+@Column(nullable = false)
+private String ownerUsername;
+```
+
+### `@RestlessImmutable`
+
+**Artifact:** runtime. **Target:** an entity field.
+
+A field set on create that never changes: a contract number, a slug, the kind of a polymorphic row.
+
+| Attribute | Type | Default | Meaning |
+|---|---|---|---|
+| `onUpdate` | `RestlessImmutable.OnChange` | `DEFAULT` | What happens when an update or patch tries to change the value. |
+
+`OnChange` values: `IGNORE` (keep the stored value, no error), `REJECT` (`400` naming the field,
+nothing written), `DEFAULT` (use `restless.immutable.on-update`, which defaults to `ignore`).
+
+"Tries to change" means the body has a same-named property with a non-null value different from the
+stored one. `null` counts as not sent, so resending the same value or omitting it is always fine.
+
+```java
+@RestlessImmutable(onUpdate = RestlessImmutable.OnChange.REJECT)
+private String code;
+```
+
+### `@RestlessSubtype`
+
+**Artifact:** runtime. **Target:** a create model class.
+
+For a polymorphic entity hierarchy: tells `DefaultCreateDataSource` which entity subclass to
+instantiate for this create model subtype. Without it, the default data source instantiates the
+resource's entity type, which fails if that type is abstract.
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `value` | `Class<?>` | The entity subclass. Must extend the resource's entity type. |
+
+```java
+@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "kind")
+@JsonSubTypes({
+        @JsonSubTypes.Type(value = CircleModel.class, name = "circle"),
+        @JsonSubTypes.Type(value = SquareModel.class, name = "square")})
+public abstract class ShapeModel implements CreateModel, UpdateModel {
+    @NotBlank(groups = RestlessValidationGroups.OnCreate.class) private String name;
+}
+
+@RestlessSubtype(Circle.class)
+public class CircleModel extends ShapeModel { private Double radius; }
+```
+
+### `@RestlessActionName`
+
+**Artifact:** runtime. **Target:** a read action, collection action, write action or named view bean.
+
+The last path segment the bean is served at. Required on every such bean; a missing or duplicate name
+fails startup.
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `value` | `String` | The route name, e.g. `"stats"` gives `GET {basePath}/actions/stats`. |
+
+```java
+@Component
+@RestlessActionName("stats")
+public class NotebookStatsAction implements CollectionAction<Notebook> { ... }
+```
+
+### `@RestlessEmbed`
+
+**Artifact:** runtime. **Target:** a response DTO field.
+
+Fills the field from another resource when the client asks with `?expand=<name>`. The other resource's
+own guard and scope apply, so the embed never shows rows the caller couldn't read directly. A denied
+embed leaves the field empty instead of failing the request. See
+[Embedding related resources](#embedding-related-resources).
+
+| Attribute | Type | Default | Meaning |
+|---|---|---|---|
+| `resource` | `Class<? extends RestlessResourceHandler>` | required | The target resource bean class, e.g. `DepartmentRestlessResource.class`. |
+| `sourceField` | `String` | required | Property on **this** entity holding the join value. One association hop allowed (`"employee.id"`). |
+| `targetField` | `String` | required | Property on the target entity to match against. One association hop allowed. |
+| `many` | `boolean` | `false` | `false`: one DTO. `true`: a `List` of DTOs, unpaged. Only for small, bounded relations. |
+| `name` | `String` | field name | The `expand=` key. |
+
+```java
+public class EmployeeDto implements EntityDto {
+    private String departmentCode;
+
+    @RestlessEmbed(resource = DepartmentRestlessResource.class,
+            sourceField = "departmentCode", targetField = "code")
+    private DepartmentDto department;   // filled on GET /employees/7?expand=department
+}
+```
+
+### `@RestlessMapperExclude`
+
+**Artifact:** processor. **Target:** a response DTO field.
+
+Leaves the field out of the generated mapper, so it stays at its Java default (usually `null`). Use it
+for a DTO field that some other code fills, or that has a same-named entity field you don't want
+copied. It has no effect when you write `{Entity}Mapper` yourself.
+
+```java
+public class EmployeeDto implements EntityDto {
+    @RestlessMapperExclude
+    private String initials;   // computed elsewhere, never copied from the entity
+}
+```
+
+This is not access control: it applies to every caller. For per-caller hiding use
+[`@CerbosHiddenField`](#cerboshiddenfield-and-cerbosfieldmasker).
+
+### `@CerbosHiddenField`
+
+**Artifact:** cerbos. **Target:** a response DTO field (reference type only).
+
+Marks a field that a Cerbos policy can hide per caller. Documented in the
+[Cerbos module](#cerboshiddenfield-and-cerbosfieldmasker) section.
+
+---
+
+## Enums
+
+### `RestlessOperation`
+
+**Artifact:** processor. The fixed routes you can enable in `@RestlessEntity(operations = ...)`.
+
+| Value | Routes |
+|---|---|
+| `CREATE` | `POST {basePath}`, `POST {basePath}/bulk` |
+| `READ_ONE` | `GET {basePath}/{id}` |
+| `READ_LIST` | `GET {basePath}/list` |
+| `READ_PAGE` | `GET {basePath}` |
+| `READ_PAGE_OVERVIEW` | `GET {basePath}/overview` |
+| `READ_PAGE_SELECT` | `GET {basePath}/select/async` |
+| `UPDATE` | `PUT {basePath}/{id}`, `PUT {basePath}/bulk` |
+| `DELETE_ONE` | `DELETE {basePath}/{id}` |
+| `DELETE_ALL` | `POST {basePath}/bulk-delete` |
+
+`PATCH`, actions and views aren't in this list; they exist when you configure them. On the manual
+tier, override `getEnabledOperations()` with the equivalent `AuthorizationGuard.Action` values.
+
+### `RestlessDenial`
+
+What a caller gets when the guard denies them.
+
+| Value | Response |
+|---|---|
+| `DEFAULT` | Use `restless.authorization.deny-as` (default `forbidden`). |
+| `FORBIDDEN` | `403`. Says the row exists. Fine for internal tools. |
+| `NOT_FOUND` | `404`, identical to a missing id. Use it for user data, so ids can't be probed. |
+
+### `RestlessBulkMode`
+
+How `POST {basePath}/bulk` treats bad rows. See [Bulk operations](#bulk-operations).
+
+| Value | Behavior |
+|---|---|
+| `DEFAULT` | Same as `ALL_OR_NOTHING`. |
+| `ALL_OR_NOTHING` | One invalid or denied row fails the request; nothing is written. |
+| `PARTIAL` | Valid rows are created; invalid, rejected and duplicate rows are reported. Response is a `RestlessBulkResult`. An authorization denial or database failure still aborts everything. |
+
+### `RestlessCollectionGet`
+
+What a plain `GET {basePath}` returns.
+
+| Value | Behavior |
+|---|---|
+| `DEFAULT` | Use `restless.collection-get` (default `page`). |
+| `PAGE` | `GET {basePath}` is the page; the array is at `/list`. |
+| `LIST` | `GET {basePath}` is the array (capped); the page moves to `/page`; `/list` still works. |
+
+### `AuthorizationGuard.Action`
+
+The action passed to every guard hook. Use it in a guard to decide per operation.
+
+| Value | Route(s) |
+|---|---|
+| `CREATE` | create, bulk create |
+| `READ_ONE` | `GET /{id}` |
+| `READ_LIST` | `GET /list` |
+| `READ_PAGE` | `GET {basePath}` (or `/page`) |
+| `READ_PAGE_OVERVIEW` | `GET /overview` |
+| `READ_PAGE_SELECT` | `GET /select/async` |
+| `UPDATE` | `PUT /{id}`, `PUT /bulk` |
+| `PATCH` | `PATCH /{id}`. Not implied by `UPDATE`. |
+| `DELETE_ONE` | `DELETE /{id}` |
+| `DELETE_ALL` | `POST /bulk-delete` |
+| `CUSTOM_READ` | read actions and collection actions; the name is passed as `customActionName` |
+| `NAMED_VIEW` | named views; the name is passed as `customActionName`. Not implied by `READ_ONE`. |
+| `WRITE_ACTION` | write actions; the name is passed as `customActionName`. Not implied by `UPDATE`. |
+
+`RestlessResourceHandler.ALL_OPERATIONS` contains the nine fixed-route values (everything except
+`PATCH`, `CUSTOM_READ`, `NAMED_VIEW` and `WRITE_ACTION`).
+
+### `RestlessImmutable.OnChange`
+
+See [`@RestlessImmutable`](#restlessimmutable): `DEFAULT`, `IGNORE`, `REJECT`.
+
+---
+
+## Models and DTO contracts
+
+These are marker interfaces and base classes for the classes you write per entity. Package: `models`.
+
+| Type | Kind | You write | Used for |
+|---|---|---|---|
+| `CreateModel` | marker interface | `{Entity}CreateModel implements CreateModel` | Body of `POST {basePath}` and each item of `POST /bulk`. |
+| `UpdateModel` | marker interface | `{Entity}UpdateModel implements UpdateModel` | Body of `PUT /{id}` and each value of `PUT /bulk`. |
+| `PatchModel` | marker interface | `{Entity}PatchModel implements PatchModel` | Body of `PATCH /{id}`. |
+| `DeleteModel` | interface: `List<String> getIds()` | Rarely; use `DefaultDeleteModel` | Body of `POST /bulk-delete`. |
+| `DefaultDeleteModel` | class, `@NotEmpty List<String> ids` | Nothing | The default bulk-delete body: `{"ids": ["1","2"]}`. |
+| `SearchDto` | interface: `Pageable getPageable()` | `{Entity}SearchDto extends AbstractSearchDto` | Query parameters of collection reads. |
+| `AbstractSearchDto` | abstract class | Extend it | Adds `page`, `size`, `sort` and builds the `Pageable`. |
+| `EntityDto` | marker interface | `{Entity}Dto implements EntityDto` | The response DTO (optional marker; any class works). |
+| `WriteActionRequest` | marker interface | The request class of a write action | Body of `POST /{id}/actions/{name}`. |
+| `RestlessValidationGroups` | holder of `OnCreate`, `OnUpdate`, `OnPatch` | Use in constraint `groups` | Share one model between verbs. |
+| `PageableResponse<B>` | class | Nothing | Envelope of paged responses. |
+| `AbstractAuditableEntity` | `@MappedSuperclass` | Extend it | `createdDate` / `lastModifiedDate` auditing. |
+
+### `CreateModel`, `UpdateModel`, `PatchModel`
+
+The request body types. Fields are copied by name onto the entity by the default data sources
+(`BeanUtils.copyProperties`). Validation annotations (`@NotBlank`, `@Size`, ...) are checked before
+anything is written; a failure is `400` with the field errors.
+
+Protected entity fields are never copied from a body, even if a model happens to declare a same-named
+field: `@Id`, `@Version`, `@CreatedDate`, `@LastModifiedDate`, `@RestlessFromPrincipal` fields and
+`deleted` on a `SoftDeletable`. This prevents a client from overwriting an id or a version.
+
+Patch model fields must be reference types: `null` means "not sent, leave unchanged". To set a field to
+`null`, use `PUT`.
+
+```java
+@Getter @Setter
+public class DepartmentPatchModel implements PatchModel {
+    private String name;      // null = leave as is
+    private Integer budget;   // Integer, not int
+}
+```
+
+A create model can carry a `MultipartFile` field when the resource accepts multipart (see
+[Files](#binary-responses-and-file-upload)).
+
+### `RestlessValidationGroups`
+
+Bean Validation groups for a model shared between verbs. Create bodies are validated with
+`Default` + `OnCreate`, update bodies with `Default` + `OnUpdate`, patch bodies with `Default` +
+`OnPatch`. A constraint with no `groups` applies everywhere.
+
+Use it when create and update bodies are the same class but differ in what's required:
+
+```java
+public class ShapeModel implements CreateModel, UpdateModel {
+    @NotBlank(groups = RestlessValidationGroups.OnCreate.class)  // required to create, optional to update
+    private String name;
+}
+```
+
+### `SearchDto` and `AbstractSearchDto`
+
+`AbstractSearchDto` gives every search DTO these query parameters:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `page` | `0` | Zero-based page index. |
+| `size` | `20` | Page size, capped by `restless.page.max-size`. |
+| `sort` | `[]` → `id,asc` | Repeatable: `name`, `name,desc`, or `-name` for descending. |
+
+Every other field you declare becomes a filter. See [Filtering](#filtering).
+
+```java
+@Getter @Setter
+public class EmployeeSearchDto extends AbstractSearchDto {
+    private String lastName;          // ?lastName=Hopper
+    private BigDecimal salaryGte;     // ?salaryGte=100000
+    private List<JobTitle> titleIn;   // ?titleIn=ENGINEER&titleIn=MANAGER
+}
+```
+
+Implement `SearchDto` directly only if you need a different paging scheme; you then return your own
+`Pageable` from `getPageable()`.
+
+### `PageableResponse<B>`
+
+The body of every paged route:
+
+```json
+{ "totalPages": 5, "totalElements": 93, "pageSize": 20, "body": [ { "id": 1, "name": "..." } ] }
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPages` | `int` | Number of pages for this size. |
+| `totalElements` | `long` | Number of matching rows. |
+| `pageSize` | `int` | The page size used. |
+| `body` | `B` (a `List` of DTOs) | The rows on this page. |
+
+### `AbstractAuditableEntity`
+
+A `@MappedSuperclass` with `Instant createdDate` (`@CreatedDate`) and `Instant lastModifiedDate`
+(`@LastModifiedDate`), filled by Spring Data JPA auditing. You must also put `@EnableJpaAuditing` on a
+configuration class; the library doesn't enable it for you. Both fields are protected from request
+bodies.
+
+```java
+@Entity
+public class Project extends AbstractAuditableEntity { ... }
+
+@SpringBootApplication
+@EnableJpaAuditing
+public class App { ... }
+```
+
+For `createdBy`/`lastModifiedBy`, add your own `AuditorAware` bean and fields, or use
+[`@RestlessFromPrincipal`](#restlessfromprincipal).
+
+### `SoftDeletable`
+
+Package `datasource`. Implement it on an entity that should be flagged instead of removed on delete:
+
+```java
+public interface SoftDeletable {
+    boolean isDeleted();
+    void setDeleted(boolean deleted);
+}
+```
+
+The entity needs a real persistent field named exactly `deleted`. See
+[Soft delete](#soft-delete) for the full behavior.
+
+---
+
+## Repositories and data sources
+
+### `SpecificationRepository<E, K>`
+
+Package `repository`. Your repository interface extends it:
+
+```java
+public interface DepartmentRepository extends SpecificationRepository<Department, Long> {
+    Optional<Department> findByCode(String code);
+}
+```
+
+It extends `JpaRepository<E, K>` and `JpaSpecificationExecutor<E>` and is annotated `@NoRepositoryBean`.
+On the generated tier the processor creates `{Entity}Repository` for you if it doesn't exist.
+
+### Data source classes
+
+A data source does the persistence work for one verb. The handler calls it inside its transaction,
+after authorization. Every data source extends `DataSource<E, K>`, which holds the
+`specificationRepository` and has a `flush()` method the handler calls before mapping.
+
+Each verb has two method variants: a plain one and one that also receives the
+[`RestlessContext`](#restlesscontext). The handler always calls the context variant, whose default
+delegates to the plain one. Override the plain one for simple logic; override the context variant
+when you need path variables or the principal.
+
+| Base class | Package | Abstract methods | Overridable defaults |
+|---|---|---|---|
+| `CreateDataSource<E, K, C extends CreateModel>` | `controller.create` | `E create(C)` | `create(C, ctx)`, `createAll(List<C>)`, `createAll(List<C>, ctx)` |
+| `ReadDataSource<E, K, R extends SearchDto>` | `controller.read` | `findAll(Specification, Pageable)`, `findAll(Specification)`, `findOne(Specification, K)`, `findOne(K)` | `findAllById(Collection<K>)` and the `ctx` variants of all |
+| `UpdateDataSource<E, K, U extends UpdateModel>` | `controller.update` | `E update(K, U)` | `update(K, U, ctx)`, `updateAll(Map<K, U>)`, `updateAll(Map<K, U>, ctx)` |
+| `PatchDataSource<E, K, P extends PatchModel>` | `controller.patch` | `E patch(K, P)` | `patch(K, P, ctx)` |
+| `DeleteDataSource<E, K, D extends DeleteModel>` | `controller.delete` | `deleteById(K)`, `deleteAll(D)` | `deleteById(K, ctx)`, `deleteAll(D, ctx)` |
+
+The bulk methods (`createAll`, `updateAll`, `findAllById`) loop the single-item method by default, so
+you get bulk support for free. Override them only for a different strategy, such as one batched
+`saveAll`.
+
+Return the saved entity from `create`, `update` and `patch`. Throw
+`ResponseStatusException(HttpStatus.NOT_FOUND, ...)` for a missing row, or any other
+`ResponseStatusException` for a domain error.
+
+### Default implementations
+
+Package `datasource.defaults`. These cover the "no custom logic" case and are what the generated tier
+uses unless you override a verb.
+
+| Class | Constructor | Behavior |
+|---|---|---|
+| `DefaultCreateDataSource<E, K, C>` | `(repository, Class<E> entityType, Class<C> modelType)` | Instantiates the entity (or the [`@RestlessSubtype`](#restlesssubtype)), copies matching properties from the model, writes server fields (parent, principal), saves. |
+| `DefaultReadDataSource<E, K, R>` | `(repository, Class<R> searchDtoType)` | Delegates to the repository. `findAllById` is one query. |
+| `DefaultUpdateDataSource<E, K, U>` | `(repository, Class<U> modelType)` | Loads by id (`404` if missing), copies matching properties, saves. |
+| `DefaultPatchDataSource<E, K, P>` | `(repository, Class<P> modelType)` | Like update, but skips properties that are `null` on the patch model. |
+| `DefaultDeleteDataSource<E, K>` | `(repository, Class<K> idType)` or `(repository, idType, ConversionService)` | Deletes by id; bulk-deletes each id from `DefaultDeleteModel`. |
+| `DefaultSoftDeleteDataSource<E extends SoftDeletable, K>` | same as `DefaultDeleteDataSource` | Sets `deleted = true` and saves instead of deleting. |
+
+Pass the application's `ConversionService` to the three-argument delete constructors if your id type
+needs a custom `Converter`; the two-argument form uses Spring's default conversions only.
+
+All defaults implement `TypedDataSource<D>` (`Class<D> getDtoType()`), which tells the handler the
+model type, since generic types of directly-constructed objects can't be read by reflection. A
+hand-written subclass with concrete type arguments doesn't need it.
+
+### Writing your own data source
+
+Use one when a verb needs more than a field copy: computing a value, looking up a related entity,
+calling another service.
+
+```java
+@Component
+public class ProjectCreateDataSource extends CreateDataSource<Project, Long, ProjectCreateModel> {
+
+    private final EmployeeRepository employees;
+
+    public ProjectCreateDataSource(ProjectRepository repository, EmployeeRepository employees) {
+        super(repository);
+        this.employees = employees;
+    }
+
+    @Override
+    public Project create(ProjectCreateModel model) {
+        throw new UnsupportedOperationException("the context variant is used");
+    }
+
+    @Override
+    public Project create(ProjectCreateModel model, RestlessContext context) {
+        Project project = new Project();
+        project.setName(model.getName());
+        project.setEmployee(employees.findById(model.getEmployeeId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown employee")));
+        context.applyServerFieldsTo(project);   // parent id + @RestlessFromPrincipal, before save
+        return specificationRepository.save(project);
+    }
+}
+```
+
+Then reference it: `@RestlessEntity(createDataSource = ProjectCreateDataSource.class)`, or return it
+from `getCreateDataSource()` on the manual tier.
+
+Call `context.applyServerFieldsTo(entity)` before `save` in a hand-written create. The handler writes
+those fields again after your method returns, so skipping it is never a security problem, but a
+`NOT NULL` parent or owner column would reject the `INSERT`.
+
+---
+
+## Mapping
+
+### `Mapper<E, D>`
+
+Package `mapper`. Turns an entity into a response DTO.
+
+```java
+public interface Mapper<E, D> {
+    D map(E source);
+    default List<D> map(List<E> source) { ... }   // maps each element
+}
+```
+
+The library uses mappers for:
+
+| Mapper | Used by |
+|---|---|
+| entity mapper (`getEntityMapper()`) | `GET /{id}`, `GET {basePath}` (page), create, update, patch, bulk responses |
+| overview mapper (`getOverviewMapper()`) | `GET /list`, `GET /overview`, read actions |
+| select mapper (`getSelectMapper()`) | `GET /select/async` |
+| named views | `GET /{id}/{name}`, one mapper per view |
+
+On the generated tier all three projections use the same mapper. When `{Entity}Mapper` doesn't
+exist, the processor generates one that calls `dto.setX(source.getX())` for every DTO property with a
+matching entity getter of the same type, skipping [`@RestlessMapperExclude`](#restlessmapperexclude)
+fields.
+
+Write your own mapper when the DTO needs computed, renamed or nested values:
+
+```java
+@Component
+public class EmployeeMapper implements Mapper<Employee, EmployeeDto> {
+    @Override
+    public EmployeeDto map(Employee e) {
+        EmployeeDto dto = new EmployeeDto();
+        dto.setId(e.getId());
+        dto.setFullName(e.getFirstName() + " " + e.getLastName());
+        return dto;
+    }
+}
+```
+
+Mappers run inside the request's read-only (or write) transaction, so lazy associations can be read.
+
+---
+
+## `RestlessResourceHandler`: the manual tier
+
+Package `resource`. `RestlessResourceHandler<E, K>` is the class every resource extends, generated or
+hand-written. `E` is the entity type, `K` the id type. You extend it directly when you want full control
+in Java; annotate the subclass with `@Component` and [`@RestlessResource`](#restlessresource).
+
+### Methods you implement or override
+
+| Method | Required | Default | Purpose |
+|---|---|---|---|
+| `ReadDataSource<E, K, ?> getReadDataSource()` | **yes** | – | Reads. |
+| `Mapper<E, ?> getEntityMapper()` | **yes** | – | Single-row and page DTO. |
+| `Mapper<E, ?> getOverviewMapper()` | **yes** | – | List/overview DTO. |
+| `Mapper<E, ?> getSelectMapper()` | **yes** | – | Select DTO. |
+| `CreateDataSource<E, K, ?> getCreateDataSource()` | if `CREATE` enabled | throws | Creates. |
+| `UpdateDataSource<E, K, ?> getUpdateDataSource()` | if `UPDATE` enabled | throws | Updates. |
+| `DeleteDataSource<E, K, ?> getDeleteDataSource()` | if `DELETE_*` enabled | throws | Deletes. |
+| `Optional<PatchDataSource<E, K, ?>> getPatchDataSource()` | no | empty (no `PATCH` route) | Partial updates. `public`. |
+| `AuthorizationGuard<E> getAuthorizationGuard()` | no | `allowAll()` | Authorization. Without an override, set `allowAll = true` or startup fails. |
+| `Set<Action> getEnabledOperations()` | no | `ALL_OPERATIONS` | Which fixed routes exist. `public`. |
+| `Specification<E> getSpecification(SearchDto)` | no | suffix filter DSL | The filter for collection reads. |
+| `Map<String, ReadAction<E, ?>> getCustomReadActions()` | no | empty | Named filtered reads. `public`. |
+| `Map<String, CollectionAction<E>> getCollectionActions()` | no | empty | Named summaries/exports. `public`. |
+| `Map<String, WriteAction<E, ?, ?>> getCustomWriteActions()` | no | empty | Named commands. `public`. |
+| `Map<String, Mapper<E, ?>> getNamedViews()` | no | empty | Alternate single-row shapes. `public`. |
+| `List<RestlessLifecycleHook<E>> getLifecycleHooks()` | no | empty | Side effects around writes. |
+| `boolean acceptsMultipartCreate()` | no | `false` | Accept `multipart/form-data` on create. `public`. |
+| `RestlessDedupeKey<E, ?> getBulkDeduplicator()` | no | `null` | Duplicate detection in `PARTIAL` bulk create. `public`. |
+
+Methods marked `public` must stay `public` when overridden, because the registrar calls them from
+another package. `getAuthorizationGuard()` is called once at startup and the result is cached, so it
+may build the guard there.
+
+The handler methods themselves (`create`, `findOne`, `update`, ...) are `final`. Customize behavior
+through the methods above, not by overriding routes.
+
+### Constants and read-only accessors
+
+| Member | Meaning |
+|---|---|
+| `ALL_OPERATIONS` | The nine fixed-route actions. |
+| `DEFAULT_MAX_LIST_SIZE` = `10_000` | Default for `restless.list.max-size`. |
+| `DEFAULT_MAX_PAGE_SIZE` = `2_000` | Default for `restless.page.max-size`. |
+| `DEFAULT_MAX_BULK_SIZE` = `1_000` | Default for `restless.bulk.max-size`. |
+| `getMetadata()` | The resolved [`ResourceMetadata`](#internal-types). |
+| `getCollectionGet()`, `getBulkMode()` | The resolved modes (never `DEFAULT`). |
+| `hasExplicitAuthorizationGuard()` | Whether a guard other than `allowAll()` is configured. |
+| `findEmbeddedList(...)`, `findEmbeddedOne(...)` | Used by `@RestlessEmbed` resolution to read through this resource's guard. |
+
+### Full example
+
+```java
+@Component
+@RestlessResource(basePath = "/departments")
+public class DepartmentRestlessResource extends RestlessResourceHandler<Department, Long> {
+
+    private final CreateDataSource<Department, Long, DepartmentCreateModel> createDataSource;
+    private final ReadDataSource<Department, Long, DepartmentSearchDto> readDataSource;
+    private final UpdateDataSource<Department, Long, DepartmentUpdateModel> updateDataSource;
+    private final DeleteDataSource<Department, Long, ?> deleteDataSource;
+    private final PatchDataSource<Department, Long, DepartmentPatchModel> patchDataSource;
+    private final DepartmentMapper mapper;
+    private final CerbosBlockingClient cerbosClient;
+
+    public DepartmentRestlessResource(DepartmentRepository repository, DepartmentMapper mapper,
+                                      CerbosBlockingClient cerbosClient) {
+        this.createDataSource = new DefaultCreateDataSource<>(repository, Department.class, DepartmentCreateModel.class);
+        this.readDataSource = new DefaultReadDataSource<>(repository, DepartmentSearchDto.class);
+        this.updateDataSource = new DefaultUpdateDataSource<>(repository, DepartmentUpdateModel.class);
+        this.deleteDataSource = new DefaultSoftDeleteDataSource<>(repository, Long.class);
+        this.patchDataSource = new DefaultPatchDataSource<>(repository, DepartmentPatchModel.class);
+        this.mapper = mapper;
+        this.cerbosClient = cerbosClient;
+    }
+
+    @Override protected CreateDataSource<Department, Long, ?> getCreateDataSource() { return createDataSource; }
+    @Override protected ReadDataSource<Department, Long, ?> getReadDataSource() { return readDataSource; }
+    @Override protected UpdateDataSource<Department, Long, ?> getUpdateDataSource() { return updateDataSource; }
+    @Override protected DeleteDataSource<Department, Long, ?> getDeleteDataSource() { return deleteDataSource; }
+    @Override protected Mapper<Department, ?> getEntityMapper() { return mapper; }
+    @Override protected Mapper<Department, ?> getOverviewMapper() { return mapper; }
+    @Override protected Mapper<Department, ?> getSelectMapper() { return mapper; }
+
+    @Override
+    public Optional<PatchDataSource<Department, Long, ?>> getPatchDataSource() {
+        return Optional.of(patchDataSource);
+    }
+
+    @Override
+    protected AuthorizationGuard<Department> getAuthorizationGuard() {
+        return new CerbosAuthorizationGuard<>(cerbosClient, "department", Department::getId,
+                CerbosResourceAttributesMapper.none());
+    }
+}
+```
+
+A read-only resource only needs the read data source, the three mappers, and:
+
+```java
+@Override
+public Set<AuthorizationGuard.Action> getEnabledOperations() {
+    return Set.of(Action.READ_ONE, Action.READ_LIST, Action.READ_PAGE);
+}
+```
+
+---
+
+## Filtering
+
+### Default filter (suffix DSL)
+
+Unless you override `getSpecification`, each non-null field of the search DTO becomes a condition,
+and all conditions are ANDed. Blank strings and empty collections count as not set. The field name
+decides the operator:
+
+| Field name suffix | Operator | Entity field type | Example field | Query |
+|---|---|---|---|---|
+| none | `=` | any | `lastName` | `?lastName=Hopper` |
+| `Ne` | `<>` | any | `statusNe` | `?statusNe=ARCHIVED` |
+| `Gt` | `>` | `Comparable` (numbers, dates, ...) | `ageGt` | `?ageGt=30` |
+| `Gte` | `>=` | `Comparable` | `createdDateGte` | `?createdDateGte=2026-01-01T00:00:00Z` |
+| `Lt` | `<` | `Comparable` | `ageLt` | `?ageLt=65` |
+| `Lte` | `<=` | `Comparable` | `salaryLte` | `?salaryLte=90000` |
+| `Like` | `like '%v%'` | `String` | `nameLike` | `?nameLike=ann` |
+| `ILike` | case-insensitive `like '%v%'` | `String` | `nameILike` | `?nameILike=ANN` |
+| `StartsWith` | `like 'v%'` (can use an index) | `String` | `codeStartsWith` | `?codeStartsWith=EU` |
+| `In` | `in (...)` | any; the DTO field must be a `Collection` | `statusIn` | `?statusIn=A&statusIn=B` |
+
+`%` and `_` in `Like`/`ILike`/`StartsWith` values are escaped, so they match literally.
+
+Everything is checked once at startup. These fail startup with a message naming the field: a
+primitive search field, a field that names no entity property, an operator the entity field's type
+doesn't support, and `In` on a non-collection field. Search fields must be wrapper types (`Integer`,
+not `int`) so "not set" is possible.
+
+The `FilterOperator` enum (package `filter`) holds these operators. You don't use it directly unless
+you build your own filter logic on top of the same convention.
+
+### Custom filter: `getSpecification` and `RestlessSpecifications`
+
+Override `getSpecification` on the manual tier for anything the suffix convention can't express: OR
+conditions, joins, cross-field logic. `RestlessSpecifications<E>` (package `filter`) is a small
+null-safe builder: a `null` or blank value adds nothing.
+
+| Method | Condition |
+|---|---|
+| `eq(property, value)` / `ne(property, value)` | `=` / `<>` |
+| `like(property, pattern)` | `like pattern`, your own `%` wildcards |
+| `gt`, `gte`, `lt`, `lte(property, value)` | comparisons |
+| `between(property, from, to)` | only when both bounds are set |
+| `in(property, values)` | `in (...)` |
+| `ownedBy(ownerProperty, principalId)` | `= principalId`; a `null` principal matches nothing |
+| `ownedVia(linkProperty, parentType, parentIdProperty, parentOwnerProperty, principalId)` | link points at a parent owned by the principal (subquery); `null` matches nothing |
+| `build()` | the combined `Specification<E>`; no conditions = match all |
+
+```java
+@Override
+protected Specification<Employee> getSpecification(SearchDto searchDto) {
+    EmployeeSearchDto s = (EmployeeSearchDto) searchDto;
+    return RestlessSpecifications.<Employee>builder()
+            .eq("departmentCode", s.getDepartmentCode())
+            .like("email", s.getEmailDomain() == null ? null : "%@" + s.getEmailDomain())
+            .between("salary", s.getMinSalary(), s.getMaxSalary())
+            .build();
+}
+```
+
+Overriding `getSpecification` turns off the startup validation of the search DTO, since your code
+decides what the fields mean. For one extra query next to the default filter, a
+[`ReadAction`](#readactione-r) is usually simpler.
+
+---
+
+## Authorization
+
+Every resource has exactly one `AuthorizationGuard<E>`. Sources, from least to most custom:
+
+| Option | How | Use when |
+|---|---|---|
+| None | `allowAll = true` | Public lookup data, demos. Must be explicit, or startup fails. |
+| Ownership | `@RestlessOwnedBy`, or `RestlessOwnershipGuards` | Users manage only their own rows. |
+| Cerbos | `CerbosAuthorizationGuard` | Rules live in Cerbos YAML policies (roles, attributes, field masking). |
+| Hand-written | your own `AuthorizationGuard<E>` | Anything else. |
+
+### `AuthorizationGuard<E>`
+
+Package `authorization`. All methods have permissive defaults; override what you need. No Spring
+Security dependency: read the caller from the `HttpServletRequest`, from
+`RestlessContext.current()`, or from `SecurityContextHolder`.
+
+| Method | When it runs | Return | Use it for |
+|---|---|---|---|
+| `boolean preCheck(Action action, String customActionName, HttpServletRequest request)` | First, on every route, before any database access. | `false` denies. | Role checks: "may this caller do this at all?" |
+| `Specification<E> scope(Action action, String customActionName, HttpServletRequest request)` | On every collection read, read action, collection action, bulk-by-filter and embed. | Extra condition ANDed into the query; `null` = no restriction. | Row-level visibility: "only rows in my department". |
+| `boolean canAccess(Action action, HttpServletRequest request, E entity)` | After loading one row (read, update, patch, delete), and after creating one. | `false` denies (a create is rolled back). | Per-row checks. |
+| `boolean canAccess(Action action, String customActionName, HttpServletRequest request, E entity)` | Same, for named views and write actions. | Defaults to the three-argument form. | Deciding per view or action name. |
+| `boolean canAccessAfterWrite(Action action, String customActionName, HttpServletRequest request, E after)` | After an update or patch, on the changed row. | `false` denies, the write is rolled back. | Stop a caller from moving a row out of their own scope. Defaults to `canAccess`. |
+| `boolean canAccessAll(Action action, HttpServletRequest request, List<E> entities)` | Bulk update and bulk delete, on every target row. | `false` denies the whole batch. | Batch the check (one policy call). Defaults to looping `canAccess`. |
+| `<D> D postProcessResponse(Action action, String customActionName, HttpServletRequest request, E entity, D dto)` | After mapping each single-row response. | The DTO to send. | Hide fields per caller. Default returns the DTO unchanged. |
+| `static <E> AuthorizationGuard<E> allowAll()` | – | The shared no-op guard. | The default; counts as "no guard". |
+
+A denial is `403` or `404` depending on [`denyAs`](#restlessdenial), and is counted in the
+`restless.authorization.denials` metric.
+
+```java
+@Component
+public class TaskAuthorizationGuardBean implements AuthorizationGuard<Task> {
+
+    @Override
+    public boolean preCheck(Action action, String name, HttpServletRequest request) {
+        return request.isUserInRole("MEMBER")
+                || (action == Action.READ_ONE || action == Action.READ_PAGE);
+    }
+
+    @Override
+    public Specification<Task> scope(Action action, String name, HttpServletRequest request) {
+        String user = request.getUserPrincipal().getName();
+        return (root, query, cb) -> cb.equal(root.get("assignee"), user);
+    }
+
+    @Override
+    public boolean canAccess(Action action, HttpServletRequest request, Task task) {
+        return task.getAssignee().equals(request.getUserPrincipal().getName());
+    }
+}
+```
+
+Wire it with `@RestlessEntity(authorizationGuard = TaskAuthorizationGuardBean.class)`, or return it
+from `getAuthorizationGuard()`. `authorizationGuard` names one concrete class, so to reuse a generic
+guard such as `CerbosAuthorizationGuard<E>` on the generated tier, write a small named
+`@Component` that implements `AuthorizationGuard<YourEntity>` and delegates to it (see
+`ProjectAuthorizationGuardBean` in `example`).
+
+### `RestlessPrincipalIdResolver`
+
+Package `authorization`. Decides "who is calling" as the id stored in owner columns. Used by
+`RestlessContext.principalId()`, `@RestlessFromPrincipal` and ownership guards.
+
+```java
+@FunctionalInterface
+public interface RestlessPrincipalIdResolver {
+    Object resolve(RestlessContext context);   // null = no principal
+    RestlessPrincipalIdResolver AUTHENTICATION_NAME = ...;
+}
+```
+
+The default bean is `AUTHENTICATION_NAME`: the authenticated principal's name (the JWT `sub` for a
+resource server, the username for form login); anonymous counts as none. Register your own bean when
+owner columns store something else, for example a local user id:
 
 ```java
 @Bean
@@ -673,515 +1407,1081 @@ RestlessPrincipalIdResolver principalIdResolver(CurrentUserService users) {
 }
 ```
 
-On a hand-wired resource, build the same guard from the `RestlessOwnershipGuards` bean instead of
-the annotation: `ownershipGuards.owned(Event.class, "ownerId")` or
-`ownershipGuards.ownedVia(Guest.class, "eventId", Event.class, "ownerId")`. Field paths are checked
-when the guard is built, so a typo fails startup. `@RestlessOwnedBy` together with
-`authorizationGuard = ...` is a compile error.
+The returned value is converted to the owner field's type with the application's
+`ConversionService`, so a `String` subject can fill a `UUID` column. It's called at most once per
+request.
 
-### Actions, files and lifecycle hooks on the generated tier
+### `RestlessOwnershipGuards` and `OwnershipAuthorizationGuard`
+
+Package `authorization.ownership`. `RestlessOwnershipGuards` is an auto-configured bean that builds
+ownership guards. `@RestlessOwnedBy` uses it on the generated tier; on the manual tier call it
+yourself:
+
+| Method | Builds a guard that allows rows where... |
+|---|---|
+| `owned(Class<E> entityType, String ownerPath)` | `ownerPath` on the row equals the caller's id. |
+| `ownedVia(Class<E> entityType, String linkPath, Class<?> parentType, String parentOwnerPath)` | `linkPath` on the row points at a `parentType` row whose `parentOwnerPath` equals the caller's id. |
 
 ```java
-@RestlessEntity(basePath = "/notebooks", ...,
-        collectionActions = NotebookStatsAction.class,     // GET /notebooks/actions/stats
-        writeActions = NotebookStampAction.class,          // POST /notebooks/{id}/actions/stamp
-        hooks = NotebookAuditHook.class)
+@Override
+protected AuthorizationGuard<Event> getAuthorizationGuard() {
+    return ownershipGuards.owned(Event.class, "ownerId");
+}
+```
 
-@RestlessEntity(basePath = "/notebooks/{notebookId}/attachments", ...,
-        multipartCreate = true,                            // POST also takes multipart/form-data
-        views = AttachmentContentView.class,               // GET .../{id}/content -> RestlessBinary
-        collectionActions = AttachmentTotalSizeAction.class) // GET .../actions/total-size
+Paths are checked when the guard is built, so a typo fails startup. The resulting
+`OwnershipAuthorizationGuard`:
 
+- denies everything when there is no principal, or it doesn't convert to the owner type;
+- `scope`: filters lists in SQL (a subquery for the via form);
+- `canAccess`: checks each loaded or newly created row, so a create under someone else's parent is
+  rolled back;
+- on a nested resource whose parent field is the ownership link, checks the parent from the URL once
+  in `preCheck`, before anything is read;
+- caches each parent's ownership for the rest of the request.
+
+---
+
+## `RestlessContext`
+
+Package `resource`. Per-request information, built before `preCheck` and available:
+
+- as a parameter of the `*(..., RestlessContext)` data source methods, collection actions and hooks;
+- anywhere on the request thread through `RestlessContext.current()` (for guards and mappers).
+
+| Method | Returns |
+|---|---|
+| `static RestlessContext current()` | The context of the current request, or `null` outside one. |
+| `Map<String, String> pathVariables()` | Raw path variables of the matched route. |
+| `<T> T pathVariable(String name, Class<T> type)` | One path variable converted to `type`; `null` if absent; `400` if it doesn't convert. |
+| `HttpServletRequest request()` | The servlet request. |
+| `Object authentication()` | Spring Security's `Authentication`, or `null`. Typed `Object` so the core has no Spring Security dependency; cast it yourself. |
+| `AuthorizationGuard.Action action()` | The action being performed. |
+| `String customActionName()` | The action or view name, or `null` for fixed routes. |
+| `Object principalId()` | The caller's id from `RestlessPrincipalIdResolver`, cached; `null` if none. |
+| `<T> T principalId(Class<T> type)` | The same, converted; `null` if absent or not convertible. |
+| `String parentField()` | The `@RestlessParent` field (`"project.id"`), or `null` when not nested. |
+| `Object parentValue()` | The parent id from the URL, converted; `null` when not nested. |
+| `void applyParentTo(Object entity)` | Writes the parent id onto a new entity. |
+| `void applyServerFieldsTo(Object entity)` | `applyParentTo` plus every `@RestlessFromPrincipal` field. Call it in a custom create before `save`. |
+
+```java
+@Override
+public boolean preCheck(Action action, String name, HttpServletRequest request) {
+    RestlessContext ctx = RestlessContext.current();
+    Long projectId = ctx.pathVariable("projectId", Long.class);
+    return projectId == null || projectMembership.isMember(projectId, ctx.principalId());
+}
+```
+
+---
+
+## Actions, views, files and hooks
+
+All of these go through the same authorization as CRUD. On the generated tier list the beans in the
+matching `@RestlessEntity` attribute and give each one a [`@RestlessActionName`](#restlessactionname).
+On the manual tier return them from the matching method; `RestlessActions.byName(Object... beans)`
+turns annotated beans into the name-keyed map those methods return.
+
+| Kind | Interface | Route | Guard action | `@RestlessEntity` attribute | Manual-tier method |
+|---|---|---|---|---|---|
+| Read action | `ReadAction<E, R>` | `GET {basePath}/actions/{name}` | `CUSTOM_READ` | `readActions` | `getCustomReadActions()` |
+| Collection action | `CollectionAction<E>` | `GET {basePath}/actions/{name}` | `CUSTOM_READ` | `collectionActions` | `getCollectionActions()` |
+| Named view | `Mapper<E, ?>` | `GET {basePath}/{id}/{name}` | `NAMED_VIEW` | `views` | `getNamedViews()` |
+| Write action | `WriteAction<E, Req, Resp>` | `POST {basePath}/{id}/actions/{name}` | `WRITE_ACTION` | `writeActions` | `getCustomWriteActions()` |
+| Lifecycle hook | `RestlessLifecycleHook<E>` | – | – | `hooks` | `getLifecycleHooks()` |
+
+Read actions and collection actions share the `/actions/` namespace; the same name used for both
+fails startup.
+
+### `ReadAction<E, R>`
+
+A named, paged read with its own search DTO and query logic. Use it when a search needs parameters or
+logic the default filter can't express, and you want to keep the default filter as it is.
+
+```java
+public interface ReadAction<E, R extends SearchDto> {
+    Class<R> getSearchDtoType();
+    Specification<E> buildSpecification(R searchDto);
+}
+```
+
+The resulting specification is combined with the guard's `scope`, the parent filter and the
+soft-delete filter. The response is a `PageableResponse` mapped with the overview mapper.
+
+```java
+@Component
+@RestlessActionName("byEmailDomain")
+public class EmployeesByEmailDomain implements ReadAction<Employee, EmployeeEmailDomainSearchDto> {
+    public Class<EmployeeEmailDomainSearchDto> getSearchDtoType() { return EmployeeEmailDomainSearchDto.class; }
+
+    public Specification<Employee> buildSpecification(EmployeeEmailDomainSearchDto s) {
+        return (root, q, cb) -> cb.like(root.get("email"), "%@" + s.getDomain());
+    }
+}
+// GET /employees/actions/byEmailDomain?domain=example.com&page=0
+```
+
+### `CollectionAction<E>`
+
+A named read over the whole collection that isn't a page of rows: a count, a summary, an export, a
+download link.
+
+```java
+@FunctionalInterface
+public interface CollectionAction<E> {
+    Object execute(Specification<E> visibleRows, RestlessContext context) throws Exception;
+}
+```
+
+`visibleRows` already contains the guard's scope, the parent filter and the soft-delete filter. Use it
+with your repository, and the result can't include rows the caller couldn't list. Runs in a read-only
+transaction. Return any JSON-serializable value or a [`RestlessBinary`](#restlessbinary).
+
+```java
 @Component
 @RestlessActionName("stats")
 public class NotebookStatsAction implements CollectionAction<Notebook> {
     private final NotebookRepository repository;
-    ...
+    public NotebookStatsAction(NotebookRepository repository) { this.repository = repository; }
+
+    @Override
     public Object execute(Specification<Notebook> visibleRows, RestlessContext context) {
-        return Map.of("count", repository.count(visibleRows)); // only ever the caller's own rows
+        return Map.of("count", repository.count(visibleRows));
+    }
+}
+// GET /notebooks/actions/stats  ->  {"count": 3}
+```
+
+### Named views
+
+A named view is a `Mapper<E, ?>` that returns a different shape of one row, at
+`GET {basePath}/{id}/{name}`. Use it for a second representation of the same entity (a contact card,
+a billing summary, a PDF). The row is loaded, guard-checked with `NAMED_VIEW` and the view name,
+mapped, and supports `?expand=`. A view may return a `RestlessBinary`.
+
+```java
+@Component
+@RestlessActionName("contact")
+public class EmployeeContactMapper implements Mapper<Employee, EmployeeContactDto> {
+    public EmployeeContactDto map(Employee e) { return new EmployeeContactDto(e.getEmail(), e.getPhone()); }
+}
+// GET /employees/7/contact
+```
+
+### `WriteAction<E, Req, Resp>`
+
+A named command on one row, for a change that has a domain meaning beyond "replace these fields":
+promote, cancel, approve. Use it to enforce allowed transitions, which a plain `PUT` can't express.
+
+```java
+public interface WriteAction<E, Req extends WriteActionRequest, Resp> {
+    Class<Req> getRequestType();
+    Class<Resp> getResponseType();
+    Resp execute(E entity, Req request) throws Exception;
+}
+```
+
+The handler parses and validates the request body, opens a transaction, loads the row (`404` if
+missing, soft-deleted or under another parent), runs `canAccess(WRITE_ACTION, name, ...)` and the
+`If-Match` check, then calls `execute` with the managed entity. Changes to the entity are saved when
+the transaction commits. The return value is the response body (`200`), or a `RestlessBinary`.
+
+```java
+@Component
+@RestlessActionName("promote")
+public class PromoteEmployee implements WriteAction<Employee, PromoteRequest, EmployeeDto> {
+    private final EmployeeMapper mapper;
+    public PromoteEmployee(EmployeeMapper mapper) { this.mapper = mapper; }
+
+    public Class<PromoteRequest> getRequestType() { return PromoteRequest.class; }
+    public Class<EmployeeDto> getResponseType() { return EmployeeDto.class; }
+
+    public EmployeeDto execute(Employee employee, PromoteRequest request) {
+        if (!employee.getJobTitle().canBePromotedTo(request.getNewTitle())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Illegal promotion");
+        }
+        employee.setJobTitle(request.getNewTitle());
+        return mapper.map(employee);
+    }
+}
+// POST /employees/7/actions/promote   {"newTitle": "SENIOR_ENGINEER"}
+```
+
+Write actions don't run lifecycle hooks or `canAccessAfterWrite`; the action is responsible for its
+own rules.
+
+### Binary responses and file upload
+
+#### `RestlessBinary`
+
+Package `resource`. Return it from a named view, a write action or a collection action to send a
+non-JSON body (PDF, image, ZIP). It's written inside the route's transaction, after authorization.
+
+| Member | Meaning |
+|---|---|
+| `static of(String contentType, Writer writer)` | Body produced by `writer.writeTo(OutputStream)`. Best for large or generated content. |
+| `static of(String contentType, byte[] bytes)` | Body from bytes; sets `Content-Length`. |
+| `static of(String contentType, Resource resource)` | Body streamed from a Spring `Resource`. |
+| `filename(String)` | File name in `Content-Disposition`. |
+| `inline()` | Show in the browser instead of downloading (`Content-Disposition: inline`). |
+
+```java
+@Component
+@RestlessActionName("content")
+public class AttachmentContentView implements Mapper<Attachment, RestlessBinary> {
+    @Override
+    public RestlessBinary map(Attachment a) {
+        return RestlessBinary.of(a.getContentType(), a.getData()).filename(a.getFilename()).inline();
+    }
+}
+// GET /notebooks/1/attachments/5/content
+```
+
+#### Multipart create
+
+With `multipartCreate = true` (or `acceptsMultipartCreate()` returning `true`), `POST {basePath}`
+also accepts `multipart/form-data`. Form fields bind onto the create model by name, and a
+`MultipartFile` field receives the file part with the same name. The model is validated like a JSON
+body. Without the flag, a multipart request is `415`.
+
+```java
+@Getter @Setter
+public class AttachmentCreateModel implements CreateModel {
+    @NotNull private MultipartFile file;
+}
+// curl -F file=@report.pdf localhost:8080/notebooks/1/attachments
+```
+
+The default create data source can't turn a `MultipartFile` into entity columns, so pair it with a
+hand-written `createDataSource`.
+
+### `RestlessLifecycleHook<E>`
+
+Package `resource`. Side effects around writes that don't justify a whole data source: deleting
+stored files with the row, publishing an event, clearing a cache.
+
+| Method | When |
+|---|---|
+| `afterCreate(E created, RestlessContext ctx)` | After the row was created and authorized, before flush. Server fields are set. |
+| `beforeUpdate(E existing, RestlessContext ctx)` | Before the update or patch data source runs. |
+| `afterUpdate(E updated, RestlessContext ctx)` | After the update or patch was applied and authorized, before flush. |
+| `beforeDelete(E existing, RestlessContext ctx)` | Before the row is deleted; related data still exists. |
+| `afterDelete(E deleted, RestlessContext ctx)` | After the delete was flushed; the entity is detached. |
+
+All methods default to doing nothing. Hooks run inside the write's transaction and only for rows the
+caller was allowed to touch; an exception rolls the write back. Bulk routes call them once per row.
+Effects outside the database (object storage, messages) can't be rolled back, so do them last.
+
+```java
+@Component
+public class NotebookAuditHook implements RestlessLifecycleHook<Notebook> {
+    @Override
+    public void afterCreate(Notebook created, RestlessContext ctx) {
+        log.info("created {} by {}", created.getId(), created.getOwnerUsername());
+    }
+}
+// @RestlessEntity(..., hooks = NotebookAuditHook.class)
+```
+
+---
+
+## Bulk operations
+
+Every resource has bulk routes for the operations it enables:
+
+| Route | Body | Behavior |
+|---|---|---|
+| `POST {basePath}/bulk` | `[ {create model}, ... ]` | Creates every item. |
+| `PUT {basePath}/bulk` | `{ "id": {update model}, ... }` | Updates every listed id. |
+| `POST {basePath}/bulk-delete` | `{ "ids": ["1", "2"] }` | Deletes every listed id. |
+
+All three are limited by `restless.bulk.max-size` (default `1000`; more is `400` before anything is
+processed) and run in one transaction. Every item is validated first. For update and delete, every
+target row is loaded with one query and checked with one `canAccessAll` call before anything is
+written. A missing id, or one under another parent, fails the whole batch with `404`.
+
+### All-or-nothing (default)
+
+One invalid or denied row fails the request and nothing is written. The response is the array of
+created or updated DTOs.
+
+### Partial bulk create
+
+With `bulkMode = PARTIAL`, `POST /bulk` creates the valid rows and reports the rest. Each row has its
+own transaction. Invalid rows and rows a data source rejects are listed in `errors`; an authorization
+denial or a database failure still aborts the request.
+
+#### `RestlessBulkResult`
+
+```java
+public record RestlessBulkResult(int created, int skipped, List<RowError> errors, List<?> items) {
+    public record RowError(int index, String message) {}
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `created` | Number of rows created. |
+| `skipped` | Number of duplicates skipped (see below). |
+| `errors` | One entry per rejected row; `index` is its 0-based position in the request. |
+| `items` | DTOs of the created rows. |
+
+#### `RestlessDedupeKey<E, C>`
+
+Optional duplicate detection for partial bulk create. Two rows with equal keys are the same thing. A
+new row is skipped when its key matches an existing row the caller can see (under the same parent) or
+an earlier row in the same batch. Return `null` for "never a duplicate". `?dedupe=false` turns it off
+for one request.
+
+| Method | Returns |
+|---|---|
+| `Object keyOfModel(C model)` | The key of an incoming create model. |
+| `Object keyOfExisting(E existing)` | The key of a stored row. |
+
+```java
+@Component
+public class NoteTextKey implements RestlessDedupeKey<Note, NoteCreateModel> {
+    public Object keyOfModel(NoteCreateModel m) { return normalize(m.getText()); }
+    public Object keyOfExisting(Note n) { return normalize(n.getText()); }
+    private static String normalize(String t) { return t == null ? null : t.trim().toLowerCase(Locale.ROOT); }
+}
+// @RestlessEntity(..., bulkMode = RestlessBulkMode.PARTIAL, bulkDedupe = NoteTextKey.class)
+```
+
+```bash
+curl -X POST localhost:8080/notebooks/1/notes/bulk -H 'Content-Type: application/json' \
+  -d '[{"text":"buy milk"},{"text":""},{"text":"Buy milk "}]'
+# {"created":1,"skipped":1,"errors":[{"index":1,"message":"text: must not be blank"}],"items":[...]}
+```
+
+---
+
+## Nested resources
+
+Declared with [`@RestlessParent`](#restlessparent). The parent id in the URL limits every operation:
+
+| Operation | Behavior |
+|---|---|
+| Collection reads, read/collection actions, embeds | `WHERE <field> = <path value>` is added to the query. |
+| `GET`/`PUT`/`PATCH`/`DELETE /{id}`, write actions, named views | A row under another parent is `404`, same as missing. |
+| Create, bulk create | The parent id is taken from the URL and written onto the entity; a value in the body is overwritten. |
+| Update, patch | The parent field is reset from the URL after the data source runs, so a row can't move to another parent. |
+| Bulk update, bulk delete | Any id under another parent fails the whole batch with `404`. |
+
+The path value is converted to the parent field's type; a value that doesn't convert is `400`. For the
+association form (`"project.id"`), the entity gets a reference instance with only its id set, built by
+reflection.
+
+Checks: the processor validates `field` at compile time. At startup, a `variable` that doesn't appear
+as `{variable}` in `basePath` fails with an `IllegalStateException`, so a misconfigured route never
+runs unfiltered. The parent path parameter appears in the OpenAPI document.
+
+`@RestlessParent` doesn't check access to the parent itself. Combine it with a guard, or with
+`@RestlessOwnedBy(path = ..., via = ...)` which then checks the parent from the URL once per request.
+Inside a guard, `RestlessContext.current().parentValue()` returns the parent id.
+
+---
+
+## Embedding related resources
+
+[`@RestlessEmbed`](#restlessembed) fills a DTO field from another resource, on request, with
+`?expand=name1,name2`. It works on `GET /{id}` and named views.
+
+- The join is `target.<targetField> = source.<sourceField>`, read from the **entity**, not the DTO.
+- The target resource's `preCheck` and `scope` apply. A denial leaves the field `null` or an empty
+  list; it never fails the outer response. Two callers may therefore see different embedded data.
+- A `null` source value means nothing to embed; no query is run.
+- `many = true` returns every matching row without paging. For relations that can grow large, expose
+  the relation as its own resource instead.
+
+`RestlessEmbedResolver` (package `embed`) is the auto-configured bean that performs this after
+mapping. You don't call it yourself.
+
+---
+
+## Concurrency, soft delete, auditing and versioning
+
+### Optimistic concurrency and conditional requests
+
+Add a `@jakarta.persistence.Version` field to the entity. Then, with no other code:
+
+- single-row responses carry `ETag: "<version>"`;
+- `GET /{id}` with a matching `If-None-Match` returns `304`;
+- `PUT`/`PATCH`/`DELETE /{id}` and write actions with an `If-Match` that doesn't match return `412`
+  before anything is written (`*` always matches; weak `W/` tags never do);
+- two writes racing on the same row produce `409` for the loser.
+
+`If-Match` is optional; without it the write proceeds. Entities without `@Version` get no `ETag` and
+ignore `If-Match`.
+
+```bash
+curl -i localhost:8080/employees/7                 # ETag: "3"
+curl -X PUT -H 'If-Match: "3"' -H 'Content-Type: application/json' -d '{...}' localhost:8080/employees/7
+```
+
+### Soft delete
+
+1. Implement [`SoftDeletable`](#softdeletable) with a `boolean deleted` field.
+2. Use `DefaultSoftDeleteDataSource` as the delete data source
+   (`@RestlessEntity(deleteDataSource = ...)` needs a small named subclass, or return it from
+   `getDeleteDataSource()`).
+
+Then deletes set `deleted = true`; lists, pages, actions and embeds skip deleted rows; writes to a
+deleted row are `404`. `GET /{id}` and named views still return a deleted row unless
+`restless.soft-delete.include-in-single-read=false`.
+
+### Auditing
+
+Extend [`AbstractAuditableEntity`](#abstractauditableentity) and add `@EnableJpaAuditing`. The two
+timestamps are filled by Spring Data and protected from request bodies. Use them in filters:
+`createdDateGte`, `lastModifiedDateLt`.
+
+### API versioning
+
+Set `version` on `@RestlessEntity` or `@RestlessResource` (same syntax as
+`@RequestMapping(version = ...)`: `"1.0"`, `"2"`, or a baseline like `"1.5+"`). Every route of the
+resource is then mapped with that version. How the version is read from a request (header, path, query
+parameter, media type) is configured once by your application in a `WebMvcConfigurer`:
+
+```java
+@Configuration
+public class ApiVersionConfig implements WebMvcConfigurer {
+    @Override
+    public void configureApiVersioning(ApiVersionConfigurer configurer) {
+        configurer.useRequestHeader("API-Version").addSupportedVersions("1.0", "2.0");
     }
 }
 ```
 
-- Action, view and hook beans are Spring beans listed by class. Actions and views are named with
-  `@RestlessActionName("...")`; a missing or duplicate name fails startup. `readActions`,
-  `collectionActions`, `writeActions`, `views` and `hooks` all take bean classes. Hand-wired
-  resources override `getCollectionActions()`/`getLifecycleHooks()`/`acceptsMultipartCreate()`
-  instead.
-- **`CollectionAction<E>`** - a read over the whole collection that isn't a page of rows (a summary,
-  an export, a download link). It receives the caller's visible rows as a `Specification`.
-- **`RestlessBinary`** - return it from a view, write action or collection action to send a PDF,
-  ZIP or image; written straight to the response inside the route's transaction:
-  `RestlessBinary.of("application/pdf", out -> renderer.render(event, out)).filename("chart.pdf").inline()`.
-  Also `of(type, byte[])` and `of(type, Resource)`.
-- **`multipartCreate`** - form fields and file parts bound onto the create model
-  (`MultipartFile file`), validated like JSON; a JSON-only resource answers `415`.
-- **`RestlessLifecycleHook<E>`** - `afterCreate`, `beforeUpdate`/`afterUpdate`,
-  `beforeDelete`/`afterDelete`, inside the write's transaction and only after authorization
-  succeeded; bulk routes call them per row. An exception from a hook rolls the write back - but
-  side effects outside the database (object storage, messages) can't be, so do those last.
+List versions with `addSupportedVersions(...)`. `detectSupportedVersions(true)` can't see these routes,
+because they're registered after Spring's detection runs. Without a `version`, routes match any
+version.
 
-### Bulk import, polymorphism, validation groups, error shape
+---
 
-- **Partial bulk** - `@RestlessEntity(bulkMode = PARTIAL, bulkDedupe = NoteTextKey.class)`:
-  `POST {basePath}/bulk` creates the good rows, reports the bad ones by index, and skips
-  duplicates of rows the caller can already see (or of earlier rows in the batch) unless
-  `?dedupe=false`. Each row has its own transaction; an authorization denial still aborts the
-  request. Response: `RestlessBulkResult {created, skipped, errors[{index, message}], items}`.
-  A `RestlessDedupeKey<E, C>` bean maps both a create model and an existing row to a key; equal
-  keys are duplicates.
+## Errors
 
-```bash
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '[{"text":"buy milk"},{"text":""},{"text":"Buy milk "}]' \
-  http://localhost:8081/notebooks/1/notes/bulk
-# {"created":1,"skipped":1,"errors":[{"index":1,"message":"text: must not be blank"}],"items":[...]}
+### `RestlessExceptionHandler`
+
+Package `error`. An auto-configured `@RestControllerAdvice` that turns exceptions from library routes
+into RFC 9457 `application/problem+json` responses. It only handles beans that implement
+`RestlessErrorScope` (every `RestlessResourceHandler` and the legacy controller bases), so your own
+`@RestController`s keep their usual error handling. It has the lowest precedence: your own
+`@ControllerAdvice` for the same exception wins.
+
+| Exception | Status | `type` suffix |
+|---|---|---|
+| `ResponseStatusException` (thrown by the library or by your data source/action) | its status | the reason phrase, e.g. `not-found` |
+| `MethodArgumentNotValidException` (Bean Validation) | `400` | `validation-failed` |
+| `HttpMessageNotReadableException` (malformed JSON) | `400` | `malformed-request-body` |
+| `MethodArgumentTypeMismatchException` (bad id or parameter) | `400` | `type-mismatch` |
+| `OptimisticLockingFailureException` | `409` | `optimistic-lock-conflict` |
+| `DataIntegrityViolationException` (constraint violation) | `409` | `data-integrity-violation` |
+| any other `Exception` | `500` | `internal-server-error` |
+
+Body:
+
+```json
+{
+  "type": "https://github.com/cristivoicu/spring-boot-restless/problems/validation-failed",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "Validation failed",
+  "instance": "/skills",
+  "timestamp": "2026-10-26T09:15:00Z",
+  "errors": [ { "field": "name", "message": "must not be blank", "code": "NotBlank" } ]
+}
 ```
 
-- **Polymorphic create** - put `@RestlessSubtype(Circle.class)` on each `@JsonTypeInfo` create model
-  subtype; the default create data source instantiates that entity subclass.
-- **Validation groups** - one model for create and update:
-  `@NotBlank(groups = RestlessValidationGroups.OnCreate.class) String name` is required to create,
-  optional to update (`OnUpdate`, `OnPatch` exist too).
-- **List or page** - `collectionGet = LIST` (or `restless.collection-get=list` globally) makes
-  `GET {basePath}` the plain array; pages move to `{basePath}/page`, `/list` stays as an alias.
-- **Your own error body** - register a `RestlessErrorBodyFactory` bean and every generated route
-  answers with what it returns instead of a `ProblemDetail`.
-- **Repository elsewhere** - `@RestlessEntity(repository = ShapeStore.class)` instead of the
-  `{Entity}Repository`-next-to-the-entity convention.
-- **Ownership contract in one call** (`spring-boot-restless-test`):
+`errors` is present only for validation failures. For `409` and `500` the detail is generic; SQL
+messages and stack traces are logged, never returned.
+
+To report a domain error from your own code, throw `ResponseStatusException`:
+
+```java
+throw new ResponseStatusException(HttpStatus.CONFLICT, "Project is already closed");
+```
+
+### `RestlessFieldError`
+
+`record RestlessFieldError(String field, String message, String code)`: one entry of `errors`.
+`code` is the constraint name (`NotBlank`, `Max`, ...), so clients can react without parsing the
+message.
+
+### `RestlessErrorBodyFactory`
+
+If your application already has its own error format, register one bean and every library route
+answers with it instead of a `ProblemDetail`. Status codes and messages stay the library's.
+
+```java
+@FunctionalInterface
+public interface RestlessErrorBodyFactory {
+    Object body(HttpStatusCode status, String message, List<RestlessFieldError> fieldErrors, HttpServletRequest request);
+}
+```
+
+```java
+@Bean
+RestlessErrorBodyFactory apiErrors() {
+    return (status, message, fieldErrors, request) ->
+            new ApiError(status.value(), message, request.getRequestURI(), fieldErrors);
+}
+```
+
+### `RestlessErrorScope`
+
+Marker interface with no methods. It limits `RestlessExceptionHandler` to library beans. You don't
+implement it yourself.
+
+---
+
+## Configuration properties
+
+All properties are optional. Values shown are the defaults.
+
+```yaml
+restless:
+  list:
+    max-size: 10000              # cap on GET {basePath}/list; truncated responses get X-Restless-List-Truncated: true
+  page:
+    max-size: 2000               # max client-supplied ?size=; larger is 400
+  bulk:
+    max-size: 1000               # max items per bulk create/update/delete; larger is 400
+  soft-delete:
+    include-in-single-read: true # GET /{id} still returns a soft-deleted row (false: 404)
+  authorization:
+    deny-as: forbidden           # forbidden (403) | not-found (404) for resources with denyAs = DEFAULT
+  immutable:
+    on-update: ignore            # ignore | reject, for @RestlessImmutable(onUpdate = DEFAULT)
+  collection-get: page           # page | list, for resources with collectionGet = DEFAULT
+
+# Read only when spring-boot-restless-cerbos is on the classpath.
+cerbos:
+  client:
+    target: localhost:3593       # host:port of the Cerbos PDP (gRPC)
+    plaintext: true              # false for a TLS-enabled PDP
+    timeout: 3s                  # deadline per check/plan call; on timeout the guard denies
+```
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `restless.list.max-size` | `int` | `10000` | Maximum rows from `GET {basePath}/list`. A capped response carries `X-Restless-List-Truncated: true`. |
+| `restless.page.max-size` | `int` | `2000` | Maximum `size` on paged routes and read actions. Larger requests are `400`, not clamped. |
+| `restless.bulk.max-size` | `int` | `1000` | Maximum items in one bulk request. Larger requests are `400` before anything is processed. |
+| `restless.soft-delete.include-in-single-read` | `boolean` | `true` | Whether `GET /{id}` and named views return soft-deleted rows. Writes always `404`. |
+| `restless.authorization.deny-as` | `forbidden` \| `not-found` | `forbidden` | Denial status for resources whose `denyAs` is `DEFAULT`. |
+| `restless.immutable.on-update` | `ignore` \| `reject` | `ignore` | Behavior of `@RestlessImmutable(onUpdate = DEFAULT)`. |
+| `restless.collection-get` | `page` \| `list` | `page` | `GET {basePath}` behavior for resources whose `collectionGet` is `DEFAULT`. |
+| `cerbos.client.target` | `String` | `localhost:3593` | Cerbos PDP address. |
+| `cerbos.client.plaintext` | `boolean` | `true` | Use an unencrypted gRPC channel. |
+| `cerbos.client.timeout` | `Duration` | `3s` | Deadline for one PDP call before the guard fails closed. |
+
+These are bound to `RestlessProperties` (package `autoconfigure`). Routes, operations, actions and
+modes per resource are configured in Java, not in properties.
+
+---
+
+## Auto-configured beans
+
+`RestlessAutoConfiguration` (and `CerbosAutoConfiguration` in the Cerbos module) register these beans.
+Every one is `@ConditionalOnMissingBean`: define your own bean of the same type to replace it.
+
+| Bean | Condition | Purpose | Replace it to... |
+|---|---|---|---|
+| `RestlessRegistrar` | always | Finds `@RestlessResource` beans at startup and registers their routes. | (internal; don't) |
+| `RestlessExceptionHandler` | always | RFC 9457 errors. Uses a `RestlessErrorBodyFactory` bean if present. | change error handling entirely |
+| `RestlessPrincipalIdResolver` | always | `AUTHENTICATION_NAME`. | map the caller to a different id |
+| `RestlessOwnershipGuards` | always | Builds ownership guards. | (rarely) |
+| `RestlessEmbedResolver` | always | Resolves `?expand=`. | (rarely) |
+| `RestlessAuthorizationMetrics` | Micrometer on classpath | Denial counter. | (rarely) |
+| `RestlessOpenApiCustomizer` | springdoc on classpath | Documents generated routes. | (rarely) |
+| `CerbosBlockingClient` | Cerbos module | gRPC client from `cerbos.client.*`. | configure TLS or other client options |
+| `CerbosHealthIndicator` | Cerbos module + Actuator | PDP reachability in `/actuator/health`. | (rarely) |
+
+---
+
+## OpenAPI and observability
+
+### OpenAPI / Swagger
+
+Add `springdoc-openapi-starter-webmvc-ui` to the classpath. Every library route, generated or
+hand-wired, including bulk routes, actions, views and the parent path parameter, appears at
+`/v3/api-docs` and `/swagger-ui.html` with request and response schemas. Use springdoc's `@Schema`
+on DTO fields for descriptions and examples. `RestlessOpenApiCustomizer` does this; it needs no
+configuration.
+
+### Metrics
+
+With Micrometer on the classpath (for example via `spring-boot-starter-actuator`), every guard denial
+increments the counter `restless.authorization.denials` with tags `resource` (entity name), `action`
+(the `Action`) and `hook` (`preCheck` or `canAccess`). Request timings come from Spring Boot's own
+`http.server.requests`, since library routes are ordinary Spring MVC mappings.
+
+### Health
+
+With the Cerbos module and Actuator, `CerbosHealthIndicator` reports whether the PDP answers.
+
+---
+
+## Cerbos module
+
+Artifact `spring-boot-restless-cerbos`, package `cerbos`. It backs `AuthorizationGuard` with
+[Cerbos](https://www.cerbos.dev/) policies. Use it when authorization depends on roles and attributes
+that should be editable as policy files rather than Java code.
+
+Setup:
+
+1. Add the dependency and set `cerbos.client.target`.
+2. Write a resource policy (YAML) for the entity, using the action names below.
+3. Configure Spring Security (for example an OAuth2 resource server); the module reads the caller from
+   `SecurityContextHolder`.
+4. Wire a `CerbosAuthorizationGuard` into the resource.
+
+### `CerbosAuthorizationGuard<E>`
+
+An `AuthorizationGuard<E>` that asks the PDP:
+
+| Hook | Cerbos call |
+|---|---|
+| `preCheck` | `check` against a placeholder resource with no id and no attributes. |
+| `canAccess` | `check` against the loaded entity's id and attributes. |
+| `canAccessAll` | one `batch` call for every row. |
+| `scope` | `plan` (query plan), translated into a JPA `Specification`. Always-allowed adds nothing; always-denied matches nothing. |
+| `postProcessResponse` | `check` with outputs, to null [`@CerbosHiddenField`](#cerboshiddenfield-and-cerbosfieldmasker) fields on single-row responses. |
+
+It fails closed: if the PDP is unreachable or slower than `cerbos.client.timeout`, checks deny, scope
+matches nothing, and hidden fields are all masked.
+
+**Constructors**
+
+| Parameters | Use when |
+|---|---|
+| `(client, resourceKind, idExtractor, attributesMapper)` | The common case. |
+| `(..., attributesMapper, actionNaming)` | Your policy uses different action names. |
+| `(..., attributesMapper, actionNaming, principalAttributesExtender)` | A policy needs principal attributes that aren't JWT claims (looked up per request, merged into the principal). |
+| `(client, resourceKind, idExtractor, Mapper<E, D> mapper, CerbosDtoResourceAttributesMapper<E, D> dtoAttributesMapper[, actionNaming[, extender]])` | A policy needs attributes that only exist on the DTO (computed values). |
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `client` | `CerbosBlockingClient` | The auto-configured client. |
+| `resourceKind` | `String` | The `resource:` name in the policy, e.g. `"employee"`. |
+| `idExtractor` | `Function<E, ?>` | Entity id, e.g. `Employee::getId`. |
+| `attributesMapper` | `CerbosResourceAttributesMapper<E>` | Entity attributes the policy can use. |
+| `actionNaming` | `BiFunction<Action, String, String>` | Action to policy-action mapping. Default `CerbosActionNaming.DEFAULT`. |
+| `principalAttributesExtender` | `Function<HttpServletRequest, Map<String, AttributeValue>>` | Extra principal attributes, resolved once per request. |
+
+```java
+@Override
+protected AuthorizationGuard<Employee> getAuthorizationGuard() {
+    return new CerbosAuthorizationGuard<>(cerbosClient, "employee", Employee::getId,
+            e -> Map.of("lastName", AttributeValue.stringValue(e.getLastName())));
+}
+```
+
+Policy rules that reference resource attributes must tolerate the attribute-less `preCheck`. Guard
+them with `has()`:
+
+```yaml
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: employee
+  rules:
+    - actions: ["*"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+    - actions: ["read_one", "read_page", "update", "promote"]
+      effect: EFFECT_ALLOW
+      roles: ["manager"]
+      condition:
+        match:
+          expr: "!has(request.resource.attr.lastName) || request.resource.attr.lastName == request.principal.attr.scopedLastName"
+```
+
+### `CerbosActionNaming`
+
+Maps an `AuthorizationGuard.Action` to the action string in the policy. `DEFAULT` (and the static
+`nameOf(action, customActionName)`) uses the lowercase enum name (`CREATE` → `create`, `READ_ONE` →
+`read_one`), and for `CUSTOM_READ`, `NAMED_VIEW` and `WRITE_ACTION` the action's own name
+(`promote`, `contact`, `byEmailDomain`). Pass your own `BiFunction` to match an existing policy.
+
+### `CerbosResourceAttributesMapper<E>`
+
+```java
+@FunctionalInterface
+public interface CerbosResourceAttributesMapper<E> {
+    Map<String, AttributeValue> attributesOf(E entity);
+    static <E> CerbosResourceAttributesMapper<E> none();                         // no attributes
+    static <E> CerbosResourceAttributesMapper<E> reflective(Class<E> entityType); // every simple field
+}
+```
+
+Returns the entity attributes a policy can reference as `request.resource.attr.<name>`. Called for
+`canAccess`, never for `scope`. `reflective` exposes every field that converts to an attribute value
+(strings, numbers, booleans, enums, dates and collections of them); write a lambda instead when you
+want to expose less, or computed values.
+
+### `CerbosDtoResourceAttributesMapper<E, D>`
+
+```java
+@FunctionalInterface
+public interface CerbosDtoResourceAttributesMapper<E, D> {
+    Map<String, AttributeValue> attributesOf(E entity, D dto);
+}
+```
+
+Like the above, but also receives the DTO produced by the given `Mapper`, for attributes that only
+exist after mapping. Used with the DTO-aware constructors.
+
+### `CerbosPrincipalResolver`
+
+Builds the Cerbos `Principal` from Spring Security's `SecurityContextHolder`. For a
+`JwtAuthenticationToken`, the subject becomes the principal id and the other claims become principal
+attributes (`request.principal.attr.<claim>`). Roles come from the granted authorities with the
+`ROLE_`/`SCOPE_` prefixes removed.
+
+| Method | Behavior |
+|---|---|
+| `static Principal resolve()` | Throws `401` when nobody is authenticated. Use it where authentication is required. |
+| `static Principal resolve(HttpServletRequest request)` | Same as `resolve()`. |
+| `static Optional<Principal> tryResolve()` | Empty instead of throwing, for code that may run on public routes. |
+
+### `@CerbosHiddenField` and `CerbosFieldMasker`
+
+`@CerbosHiddenField` marks a DTO field (reference type) that a policy may hide. A policy rule declares
+an `output` that evaluates to the list of field keys to hide; the masker sets those fields to `null`.
+
+| Attribute | Type | Default | Meaning |
+|---|---|---|---|
+| `value` | `String` | field name | The key the policy output uses. |
+
+```java
+public class EmployeeDto implements EntityDto {
+    @CerbosHiddenField
+    private BigDecimal salary;
+}
+```
+
+```yaml
+- actions: ["read_one"]
+  effect: EFFECT_ALLOW
+  roles: ["manager"]
+  output:
+    when:
+      ruleActivated: |-
+        request.principal.attr.canViewSalary == true ? [] : ["salary"]
+```
+
+`CerbosAuthorizationGuard.postProcessResponse` applies masking automatically on single-row responses
+(`GET /{id}`, create, update, patch, named views). For lists and pages call `CerbosFieldMasker`
+yourself in the mapper:
+
+| Method | Use |
+|---|---|
+| `mask(Map<String, Value> outputs, D dto)` | Mask from raw policy outputs. |
+| `mask(CheckResult result, D dto)` | Mask from a check result. |
+| `mask(client, principal, resource, action, dto)` | Run one check and mask. |
+| `maskAll(client, principal, resourceKind, action, dtos, idExtractor, attributesMapper)` | One batched check for a list of DTOs. |
+
+If no rule matches the action, nothing is masked; masking refines access that `preCheck`/`scope`/
+`canAccess` already granted.
+
+### `CerbosHealthIndicator` and `CerbosAutoConfiguration`
+
+`CerbosAutoConfiguration` creates the `CerbosBlockingClient` from `cerbos.client.*` and, with Actuator,
+`CerbosHealthIndicator`, which reports `UP` when a check call to the PDP completes.
+
+The full demo with Keycloak and policies is in [`example/README.md`](example/README.md) and
+[`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md#tutorial-cerbos-backed-authorization).
+
+---
+
+## Test module
+
+Artifact `spring-boot-restless-test`, package `test`. Helpers for MockMvc tests.
+
+### `RestlessErrorAssertions`
+
+| Method | Asserts |
+|---|---|
+| `restlessError(HttpStatus status)` | The response is a library error body with that status. |
+| `restlessError(HttpStatus status, String message)` | Same, with that `detail`. |
+
+```java
+mockMvc.perform(post("/skills").contentType(APPLICATION_JSON).content("{}"))
+        .andExpect(restlessError(HttpStatus.BAD_REQUEST));
+```
+
+### `RestlessPageAssertions`
+
+| Method | Asserts |
+|---|---|
+| `restlessPage()` | The body is a `PageableResponse`. |
+| `restlessPage(long totalElements, int pageSize)` | Same, with those totals. |
+
+```java
+mockMvc.perform(get("/skills?size=5")).andExpect(restlessPage(12, 5));
+```
+
+### `RestlessOwnershipContract`
+
+Proves an ownership rule on every route of one resource with a single call. `verify()` has the owner
+create a row, then checks that a stranger is denied `GET`/`PUT`/`DELETE` on it and its bulk delete,
+doesn't see it in `/list`, can't create under the owner's parent (nested) or doesn't see their own row
+in the owner's list (top level), and that the row still exists for the owner. Run it outside a
+test-wide transaction.
+
+| Method | Meaning |
+|---|---|
+| `static of(MockMvc mockMvc, String basePathTemplate)` | Start, e.g. `"/notebooks/{notebookId}/notes"`. |
+| `pathVariable(String name, Object value)` | Fill a template variable. |
+| `owner(RequestPostProcessor)` / `stranger(RequestPostProcessor)` | The two callers, e.g. `user("alice")`. |
+| `createBody(String json)` / `updateBody(String json)` | Request bodies. |
+| `idPath(String jsonPath)` | Where the id is in the create response (default `$.id`). |
+| `denialStatus(HttpStatus)` | Expected denial status (`403` or `404`). |
+| `withoutBulkDelete()` | Skip the bulk-delete check. |
+| `verify()` | Run all checks; throws `AssertionError` naming the route. |
 
 ```java
 RestlessOwnershipContract.of(mockMvc, "/notebooks/{notebookId}/notes")
         .pathVariable("notebookId", alicesNotebook)
         .owner(user("alice")).stranger(user("bob"))
-        .createBody("{\"text\":\"secret\"}").updateBody("{\"text\":\"changed\"}")
-        .verify(); // stranger: 404 on read/update/delete/bulk-delete, invisible in lists, can't create under Alice
+        .createBody("{\"text\":\"secret\"}")
+        .updateBody("{\"text\":\"changed\"}")
+        .denialStatus(HttpStatus.NOT_FOUND)
+        .verify();
 ```
 
-### OpenAPI / Swagger documentation
+---
 
-Add `springdoc-openapi-starter-webmvc-ui` to the classpath and every route this framework
-registers — generated or hand-wired, fixed or bulk or a named action — is documented at
-`/v3/api-docs`/`/swagger-ui.html` automatically, with real request/response schemas. No extra
-configuration needed.
+## Hand-subclassed controllers (legacy tier)
 
-### Observability
+Package `controller.*`. `CreateController<E, K, C, R>`, `ReadController<E, K, S, R>`,
+`UpdateController<...>` and `DeleteController<...>` are abstract controller classes with the Spring MVC
+mappings already declared, from before route registration was dynamic. You subclass them per entity and annotate the subclass with
+`@RestController @RequestMapping(...)`. They give plain CRUD with the same error format, but none of the
+features in this document (guards, bulk, actions, ownership, ETags, ...). Use `RestlessResourceHandler`
+for new code; these exist for older code that already extends them.
 
-With `spring-boot-starter-actuator` on the classpath, every `AuthorizationGuard` denial
-increments a `restless.authorization.denials` Micrometer counter (tagged `resource`/`action`/
-`hook`); the optional `cerbos` module also registers a `CerbosHealthIndicator` reporting whether
-the PDP is reachable, surfaced on `/actuator/health`.
+---
 
-## Advanced Usage
+## Internal types
 
-### Wiring authorization into the core component
+Public for technical reasons, but not meant to be used or extended directly. Their shape may change
+before 1.0.
 
-The one thing every resource should add before going to production is a real
-`AuthorizationGuard<E>` — the framework refuses to start a resource with none configured unless
-`allowAll = true` explicitly says otherwise. This is the "inject and use a core component in a
-Spring service" pattern for this library: a hand-written `@Component` implementing the guard
-interface, injected wherever your own auth stack's principal source lives.
-
-```java
-@Component
-public class TaskAuthorizationGuard implements AuthorizationGuard<Task> {
-
-    @Override
-    public boolean preCheck(Action action, String customActionName, HttpServletRequest request) {
-        return request.isUserInRole("TASK_USER");
-    }
-
-    @Override
-    public boolean canAccess(Action action, HttpServletRequest request, Task entity) {
-        String owner = request.getUserPrincipal().getName();
-        return owner.equals(entity.getOwnerUsername());
-    }
-}
-```
-
-```java
-@RestlessEntity(basePath = "/tasks", authorizationGuard = TaskAuthorizationGuard.class)
-public class Task { /* ... */ }
-```
-
-`preCheck`/`scope`/`canAccess` are the three hooks most guards override; `AuthorizationGuard` has
-three more, each defaulting to delegating to one of the above so an existing guard keeps working
-unchanged unless it opts in: `canAccessAfterWrite` (post-image check after `update`/`patch`),
-`canAccessAll` (batched pre-image check for a bulk write), and `postProcessResponse` (response
-shaping after `Mapper.map(...)` — what `CerbosAuthorizationGuard` uses to auto-mask
-`@CerbosHiddenField` fields). The full lifecycle for a single-item `PUT`:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client
-    participant H as RestlessResourceHandler
-    participant G as AuthorizationGuard
-    participant D as UpdateDataSource
-    participant M as Mapper
-
-    C->>H: PUT /tasks/{id}
-    H->>G: preCheck(UPDATE)
-    alt denied
-        H-->>C: 403 Forbidden
-    end
-    H->>D: findOne(id)
-    D-->>H: Task (existing)
-    H->>G: canAccess(UPDATE, existing)
-    alt denied
-        H-->>C: 403 Forbidden
-    end
-    H->>H: checkIfMatch (optional - 412 on a stale/missing ETag match)
-    H->>D: update(id, model)
-    D-->>H: Task (updated)
-    H->>G: canAccessAfterWrite(UPDATE, updated)
-    alt denied
-        H-->>C: 403 Forbidden - transaction rolls back
-    end
-    H->>M: map(updated)
-    M-->>H: TaskDto
-    H->>G: postProcessResponse(UPDATE, updated, dto)
-    G-->>H: dto (CerbosAuthorizationGuard: masked here)
-    H-->>C: 200 OK + ETag
-```
-
-### Overriding a single verb's data source
-
-Entity-specific create/update/delete logic doesn't require abandoning the generated tier — point
-one `@RestlessEntity` attribute at a hand-written class instead of falling back to the
-naming-convention default:
-
-```java
-@Component
-public class TaskCreateDataSource extends CreateDataSource<Task, Long, TaskCreateModel> {
-
-    public TaskCreateDataSource(TaskRepository repository) {
-        super(repository);
-    }
-
-    @Override
-    public Task create(TaskCreateModel model) {
-        Task task = new Task();
-        task.setTitle(model.getTitle().strip());
-        task.setDone(false); // a new task is never created already done
-        return repository.save(task);
-    }
-}
-```
-
-```java
-@RestlessEntity(basePath = "/tasks", createDataSource = TaskCreateDataSource.class,
-        authorizationGuard = TaskAuthorizationGuard.class)
-public class Task { /* ... */ }
-```
-
-### Backing the guard with Cerbos policy-as-code
-
-```java
-@Override
-protected AuthorizationGuard<Task> getAuthorizationGuard() {
-    return new CerbosAuthorizationGuard<>(cerbosClient, "task", Task::getId,
-            task -> Map.of("ownerUsername", AttributeValue.stringValue(task.getOwnerUsername())));
-}
-```
-
-### Customization cheat sheet
-
-| I want to... | Do this | Tier |
+| Type | Package | Role |
 |---|---|---|
-| Add a new entity with default CRUD | Entity + four DTOs, `@RestlessEntity(basePath = "...")` | Codeless |
-| Add entity-specific CUD logic | Point `createDataSource`/`updateDataSource`/`deleteDataSource` at a hand-written class | Generated + override |
-| Control who can do what | `authorizationGuard = ...` / override `getAuthorizationGuard()` | Any |
-| Back authorization with policy-as-code | `CerbosAuthorizationGuard<E>` (`spring-boot-restless-cerbos`) | Any |
-| Hide individual fields per caller | `@CerbosHiddenField` — masked automatically on single-entity responses; call `CerbosFieldMasker.maskAll` yourself for list/page responses | Any (needs `cerbos`) |
-| Restrict which routes exist | `operations = {...}` / override `getEnabledOperations()` | Any |
-| Add partial update (`PATCH`) | `patchDataSource = ...` / override `getPatchDataSource()` | Any |
-| Filter beyond plain equality | Suffix a `SearchDto` field (`Gte`/`Lte`/`Gt`/`Lt`/`Like`/`ILike`/`StartsWith`/`Ne`/`In`) | Any |
-| Return a stale concurrent write as `409`, add `ETag`/`If-Match`/`If-None-Match` | `@jakarta.persistence.Version` on the entity (automatic once added) | Any |
-| Add a filtered read beyond `SearchDto` | `readActions = ...` / `getCustomReadActions()` | Any |
-| Add a summary/export/download over the caller's rows | `collectionActions = ...` / `getCollectionActions()` (`CollectionAction<E>`) | Any |
-| Add a domain-meaningful mutation ("promote", "cancel") | `writeActions = ...` / `getCustomWriteActions()` — see [Write commands](#feature-guide) | Any |
-| Expose a different response shape of the same entity | `views = ...` / `getNamedViews()` | Any |
-| Return a PDF, image or ZIP instead of JSON | Return `RestlessBinary` from a view or action | Any |
-| Accept file uploads on create | `multipartCreate = true` / `acceptsMultipartCreate()`, `MultipartFile` field on the create model | Any |
-| Run side effects around writes | `hooks = ...` / `getLifecycleHooks()` (`RestlessLifecycleHook<E>`) | Any |
-| Let users manage only their own rows | `@RestlessOwnedBy` / `RestlessOwnershipGuards` | Any |
-| Hide other people's rows behind `404` | `denyAs = NOT_FOUND` / `restless.authorization.deny-as` | Any / Global |
-| Set a field from the caller, never from the body | `@RestlessFromPrincipal` (+ a `RestlessPrincipalIdResolver` bean if needed) | Any |
-| Make a field write-once | `@RestlessImmutable` | Any |
-| Create/update/delete many rows in one request | `POST`/`PUT {basePath}/bulk`, `POST {basePath}/bulk-delete` | Any, unconditional |
-| Keep the good rows of a bulk create | `bulkMode = PARTIAL`, optionally `bulkDedupe = ...` | Any |
-| Create subclasses of a polymorphic entity | `@RestlessSubtype` on each `@JsonTypeInfo` create model subtype | Any |
-| Share one model between create and update | `RestlessValidationGroups.OnCreate`/`OnUpdate`/`OnPatch` on constraints | Any |
-| Make `GET {basePath}` a plain array | `collectionGet = LIST` / `restless.collection-get` | Any / Global |
-| Use the application's own error body | A `RestlessErrorBodyFactory` bean | Global |
-| Keep repositories in another package | `repository = ...` on `@RestlessEntity` | Generated |
-| Soft-delete instead of hard-delete | Implement `SoftDeletable`, `deleteDataSource = DefaultSoftDeleteDataSource` | Any |
-| Keep a soft-deleted row readable/unreadable by id | `restless.soft-delete.include-in-single-read` (default `true`) | Global |
-| Add `createdDate`/`lastModifiedDate` | Extend `AbstractAuditableEntity` + `@EnableJpaAuditing` | Any |
-| Version an API | `version = "..."` on `@RestlessEntity`/`@RestlessResource` | Any |
-| Expand a related resource inline | `@RestlessEmbed` on a DTO field, `?expand=name` | Any |
-| Cap an unbounded `GET .../list` | `restless.list.max-size` (default `10000`) | Global |
-| Cap a client-supplied page `size` | `restless.page.max-size` (default `2000`) - rejects `400` over the cap | Global |
-| Cap a bulk create/update/delete request | `restless.bulk.max-size` (default `1000`) - rejects `400` over the cap | Global |
+| `RestlessRegistrar` | `registry` | Registers routes for every `@RestlessResource` bean after startup; enforces the guard and unique-`basePath` checks. |
+| `RestlessRoutes` | `registry` | The fixed route table shared by the registrar and OpenAPI generation. |
+| `ResourceMetadata` | `resource` | Resolved entity, id, DTO types, base path, version and parent of one resource. |
+| `RestlessInitContext` | `resource` | Everything the registrar passes to `RestlessResourceHandler.init(...)`. |
+| `RestlessActions` | `resource` | `byName(beans...)`: builds name-keyed action maps from `@RestlessActionName` beans (used by generated code). |
+| `RestlessOpenApiCustomizer` | `openapi` | Adds generated routes to the OpenAPI document. |
+| `RestlessEmbedResolver` | `embed` | Fills `@RestlessEmbed` fields. |
+| `RestlessAuthorizationMetrics` | `metrics` | Records denials. |
+| `RestlessAutoConfiguration`, `RestlessProperties` | `autoconfigure` | Auto-configuration and property binding. |
+| `TypedDataSource<D>` | `datasource` | Lets directly-constructed data sources report their model type. |
+| `RestlessEntityProcessor` | `processor` | The annotation processor. |
 
-For the full, worked, runnable version of every capability above — including a real Cerbos +
-Keycloak authorization demo — see the [`example`](example/README.md) module and
-[`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md).
+---
 
-## Design Rationale
+## Cookbook: "I want to..."
 
-Why three specific mechanisms above are shaped the way they are — the alternatives considered and
-rejected, not just the shape that shipped.
+| I want to... | Use | Section |
+|---|---|---|
+| Expose CRUD for an entity | `@RestlessEntity` + four DTOs | [Quick start](#quick-start) |
+| Write the resource in Java without code generation | extend `RestlessResourceHandler` | [Manual tier](#restlessresourcehandler-the-manual-tier) |
+| Add custom logic to one verb | `createDataSource = ...` (etc.) | [Data sources](#writing-your-own-data-source) |
+| Shape the response differently | a `Mapper` bean, `mapper = ...` | [Mapping](#mapping) |
+| Hide a DTO field from the generated mapper | `@RestlessMapperExclude` | [Annotations](#restlessmapperexclude) |
+| Control who can do what | `AuthorizationGuard`, `authorizationGuard = ...` | [Authorization](#authorization) |
+| Let users manage only their own rows | `@RestlessOwnedBy` + `@RestlessFromPrincipal` | [`@RestlessOwnedBy`](#restlessownedby) |
+| Make other people's rows look missing | `denyAs = NOT_FOUND` | [`RestlessDenial`](#restlessdenial) |
+| Use Cerbos policies | `CerbosAuthorizationGuard` | [Cerbos module](#cerbos-module) |
+| Hide fields per caller | `@CerbosHiddenField` | [Cerbos module](#cerboshiddenfield-and-cerbosfieldmasker) |
+| Expose only some routes | `operations = {...}` / `getEnabledOperations()` | [`RestlessOperation`](#restlessoperation) |
+| Support `PATCH` | `patchDataSource = ...` / `getPatchDataSource()` | [Models](#createmodel-updatemodel-patchmodel) |
+| Filter by range, text, set membership | suffix a search field (`Gte`, `ILike`, `In`, ...) | [Filtering](#filtering) |
+| Filter with OR or joins | override `getSpecification`, or a `ReadAction` | [Filtering](#custom-filter-getspecification-and-restlessspecifications) |
+| Add a domain command (promote, cancel) | `WriteAction`, `writeActions = ...` | [`WriteAction`](#writeactione-req-resp) |
+| Add a summary, count or export | `CollectionAction`, `collectionActions = ...` | [`CollectionAction`](#collectionactione) |
+| Show another shape of one row | named view, `views = ...` | [Named views](#named-views) |
+| Return a PDF or image | `RestlessBinary` | [Binary responses](#restlessbinary) |
+| Accept a file upload | `multipartCreate = true` + `MultipartFile` field | [Multipart create](#multipart-create) |
+| Run code around writes | `RestlessLifecycleHook`, `hooks = ...` | [Hooks](#restlesslifecyclehooke) |
+| Nest a resource under a parent | `@RestlessParent` | [Nested resources](#nested-resources) |
+| Make a field write-once | `@RestlessImmutable` | [`@RestlessImmutable`](#restlessimmutable) |
+| Fill a field from the caller | `@RestlessFromPrincipal` | [`@RestlessFromPrincipal`](#restlessfromprincipal) |
+| Create many rows, keep the valid ones | `bulkMode = PARTIAL`, `bulkDedupe = ...` | [Bulk operations](#bulk-operations) |
+| Create subclasses of a polymorphic entity | `@RestlessSubtype` | [`@RestlessSubtype`](#restlesssubtype) |
+| Use one model for create and update | `RestlessValidationGroups` | [Validation groups](#restlessvalidationgroups) |
+| Return a plain array from `GET {basePath}` | `collectionGet = LIST` | [`RestlessCollectionGet`](#restlesscollectionget) |
+| Prevent lost updates | `@Version` + `If-Match` | [Concurrency](#optimistic-concurrency-and-conditional-requests) |
+| Keep deleted rows | `SoftDeletable` + `DefaultSoftDeleteDataSource` | [Soft delete](#soft-delete) |
+| Record created/modified timestamps | `AbstractAuditableEntity` + `@EnableJpaAuditing` | [Auditing](#auditing) |
+| Version the API | `version = "..."` | [API versioning](#api-versioning) |
+| Include a related resource on request | `@RestlessEmbed` + `?expand=` | [Embedding](#embedding-related-resources) |
+| Use my own error format | `RestlessErrorBodyFactory` bean | [Errors](#restlesserrorbodyfactory) |
+| Use a repository from another package | `repository = ...` | [`@RestlessEntity`](#restlessentity) |
+| Test that strangers can't access owned rows | `RestlessOwnershipContract` | [Test module](#restlessownershipcontract) |
+
+---
+
+## Design rationale
+
+Why a few mechanisms have the shape they have.
+
+### Response shape and authorization stay hand-written
+
+A framework that generated DTOs from entities would expose every new column the moment it's added,
+and the fields a caller sees are exactly what fine-grained authorization has to reason about. So the
+DTO class is always written by hand; only the field-copying code may be generated. Likewise, a
+resource without a guard doesn't start unless `allowAll = true` says that's intended.
 
 ### Filter DSL: operator suffixes, not a query language
 
-The gap: `getSpecification()` only ever ANDed together `cb.equal(...)` for non-null `SearchDto`
-fields — no ranges, no `LIKE`, no `IN`. Three designs were considered:
+Three designs were considered for filters beyond equality:
 
-- **A. An RSQL/FIQL query string** (`?filter=age=ge=30;name==Jo*`, GitHub/Atlassian-style). One
-  query param, arbitrarily nested boolean logic — but a real grammar to parse *and secure*: every
-  operator/property combination needs validating against the entity's actual fields and types
-  before it reaches a `CriteriaBuilder` call, or a client can probe for fields the `SearchDto`
-  never declared. Heavier to implement and document than the common case justifies.
-- **B. Structured operator-suffix query params** (`ageGte`/`nameLike`/`statusIn`, what shipped).
-  Extends the existing "reflect over `SearchDto`'s declared fields" mechanism instead of replacing
-  it — the existing whitelist-by-declaration security property is preserved for free, every query
-  param is self-documenting in the generated OpenAPI schema, and it's the same reflection loop
-  `getSpecification` already had, with a switch on suffix instead of always `equal`. No boolean
-  `OR`/arbitrary nesting, but that covers the large majority of real filter needs (ranges +
-  partial match + membership) — the same 80/20 argument the framework already makes for
-  equality-match defaults.
-- **C. `RestlessSpecifications`, a fluent builder for the hand-written escape hatch itself.** Not a
-  query-string DSL at all — shipped alongside B, since it's nearly free and makes every
-  hand-written `getSpecification()` override or custom read action shorter to write.
+- **An RSQL/FIQL query string** (`?filter=age=ge=30;name==Jo*`): arbitrary boolean logic, but a real
+  grammar to parse and secure; every property and operator must be validated against the entity, or
+  clients can probe fields the search DTO never declared.
+- **Operator suffixes on search DTO fields** (`ageGte`, `nameLike`, `statusIn`): extends the existing
+  "only declared fields are filters" rule, documents itself in OpenAPI, and covers ranges, partial
+  matches and membership. No OR or nesting.
+- **A fluent builder** (`RestlessSpecifications`) for hand-written filters.
 
-**Shipped: B and C together; A only if a real consumer asks for boolean OR/nesting** — a strictly
-bigger, riskier surface for a need B doesn't cover. See `GizmoFilterTest`/`GizmoSearchDto` for the
-proof, and `GadgetRestlessResource`'s `getSpecification()`/`byEmailDomain` action for `C` used as a
-drop-in replacement for a hand-written lambda.
+The second and third shipped. A query language would only be added if a real need for OR/nesting
+appears.
 
-### Write commands: mirror `ReadAction`, don't reinvent
+### Write commands mirror `ReadAction`
 
-The gap this closed: a named-action escape hatch already existed for **reads**
-(`ReadAction`/`getCustomReadActions()`), but none for **writes** — every mutation was CRUD-shaped.
-There was no way to express `POST /employees/{id}/promote` without a hand-written
-`@RestController` outside the framework entirely, forfeiting routing/error-contract/OpenAPI parity
-with everything else. The DDD argument: an anemic model + CRUD is fine for a genuinely simple
-service, and becomes an anti-pattern the moment a bounded context has real, ever-changing business
-rules — a client sending `{"status": "PROMOTED"}` via `update()` can express any transition,
-including illegal ones, because full-replace `PUT` has no vocabulary for "this is only valid from
-these prior states."
+A full-replace `PUT` can express any state change, including illegal ones. Named write actions give
+transitions a vocabulary (`POST /employees/{id}/actions/promote`) and share the shape of read actions:
+one named route per bean, one shared handler method, the same guard and error contract. Publishing
+domain events after a command is a natural next step; `RestlessLifecycleHook.afterUpdate` already runs
+inside the transaction.
 
-`WriteAction<E, Req, Resp>` deliberately mirrors `ReadAction`'s shape (same "one named extra route,
-one shared dispatch method" idiom) so an entity author who's already used
-`getCustomReadActions()` needs to learn nothing new — see
-[Tutorial: write commands](#feature-guide) above for the shipped shape.
+### Keyset (cursor) pagination: proposed, not implemented
 
-**Bulk vs. single-item**, decided but not yet built: a bulk command (`POST
-/employees/actions/give-raise` with a list of ids + a percentage) is a legitimate second shape,
-structurally closer to `deleteAll`'s fail-fast-before-mutating pattern than to the single-entity
-`WriteAction`. Recommended sequencing was single-entity first (covers the large majority of real
-"commands"), with `BulkWriteAction<E, Req, Resp>` as a follow-up reusing `inTransaction`'s
-all-or-nothing wrapping — see [Roadmap](#roadmap).
+Paged routes use offset pagination, which gets slow on deep pages and shifts under concurrent writes.
+A keyset mode would add an optional `cursor=` parameter to the existing paged routes and return
+`body` + `nextCursor` + `hasMore` (no totals, since counting is what keyset avoids). Sorting already
+defaults to `id`, the unique tie-breaker keyset needs. The trade-off: no jumping to page N, only
+next/previous.
 
-**What this doesn't try to solve**: domain events (a command's natural companion is "and then
-publish `EmployeePromoted`" — the dispatch point right after `WriteAction#execute` returns
-successfully, still inside the transaction, is exactly where an `ApplicationEventPublisher`/
-transactional-outbox write would go, worth designing for even before it's built). Compile-time
-(`@RestlessEntity`) support was deliberately left for later - prove the shape hand-wired first -
-and has since shipped as `writeActions = ...`. `RestlessLifecycleHook#afterUpdate` is now a usable
-place to publish an event from, inside the same transaction.
-
-### Keyset (cursor) pagination — proposed, not implemented
-
-`findPage`/`findPageOverview`/`findPageSelect` all use offset pagination today (`LIMIT size OFFSET
-page*size`), which has two well-known problems at this framework's own target scale (a table past
-a few hundred thousand rows): deep pages get slow (`OFFSET 100000` still walks and discards 100,000
-rows — `O(offset)` per request, not `O(size)`), and pages shift under concurrent writes (a row
-deleted between two page fetches can make the client skip or double-see a row).
-
-Keyset pagination fixes both: the client sends "give me the next page *after* this specific row,"
-encoded as that row's own sort-key values, and the database does an indexed range scan (`WHERE
-(sortkey) > (lastSeenValue)`) — `O(size)` regardless of depth, stable under concurrent
-inserts/deletes before the cursor position. This framework is unusually well positioned for it:
-`AbstractSearchDto#getPageable()` already defaults to `Sort.by(ASC, "id")` when no `sort` param is
-sent, so **every existing route already sorts by a unique column by default** — keyset pagination
-*requires* a unique tie-breaker (otherwise "the row after this one" is ambiguous when several rows
-share sort-key values), which most frameworks retrofitting this have to bolt on and this one
-already has, just needs to become *required* rather than *incidental* in cursor mode.
-
-Recommended shape, if/when built: a new `CursorPageableResponse<B>` envelope (`body` +
-`nextCursor` + `hasMore` — deliberately **no** `totalElements`/`totalPages`, since computing those
-needs the same expensive `COUNT(*)`/full scan cursor pagination exists to avoid), opted into via a
-`cursor=` query param on the *existing* `/page` routes rather than a new route (no cursor param ->
-today's offset behavior, unchanged; a `cursor` param present -> keyset mode — same
-`AuthorizationGuard.Action.READ_PAGE`, same filter/scope composition, cursor mode only changes how
-the `Pageable`-equivalent is built and how the result is packaged). The actual seek predicate for a
-multi-column sort is a lexicographic "greater than" over a tuple (`lastName > :lastName OR
-(lastName = :lastName AND id > :id)`), a genuinely reusable, entity-agnostic ~40-line utility. The
-real trade-off worth knowing up front: no "jump to page 47" UX — keyset pagination is inherently
-sequential (next/previous only), the right fit for infinite-scroll/API-to-API consumption, not a
-UI with numbered page links, which is exactly why it's designed as additive (`cursor=`) rather than
-a replacement for offset paging.
+---
 
 ## Roadmap
 
-Tier 0 (adoptability) and Tier 1 (standards correctness) are done — see [Changelog](#changelog).
-This tracks what's next, roughly in recommended build order. Nothing here is scheduled; it's a
-priority-ordered backlog with design notes, not a commitment.
+Nothing here is scheduled; it's a priority-ordered backlog.
 
-**Next up:**
+**Next:**
 
-1. **[Write commands](#write-commands)** — ✅ done, on both tiers
-   (`@RestlessEntity(writeActions = ...)` since 0.0.1).
-2. **[Filter DSL](#filter-dsl)** — ✅ done. Operator-suffix convention over the existing
-   `SearchDto` reflection loop, plus `RestlessSpecifications` — see
-   [Design Rationale](#design-rationale) for why this shape won over an RSQL query string.
-3. **[Keyset pagination](#design-rationale)** — offset pagination degrades at depth and shifts
-   under concurrent writes; adds an opt-in `cursor=` mode alongside (not replacing) today's
-   `page=`/`size=`. Independent of the above two; safe to build in parallel.
+1. **Keyset pagination**, as described in [Design rationale](#keyset-cursor-pagination-proposed-not-implemented).
+2. **Idempotency keys** on `POST` (`Idempotency-Key` header with a request-fingerprint dedupe table),
+   so non-idempotent commands can be retried safely.
+3. **Domain events / transactional outbox** after write commands.
 
-**Also worth doing, smaller:**
+**Smaller:**
 
-- **Idempotency keys** on `POST` (`Idempotency-Key` header, request-fingerprint-keyed dedupe
-  table) — pairs naturally with write commands, since a non-idempotent command is exactly where a
-  client most wants a safe-retry story.
-- **Domain events / transactional outbox** — the natural companion to write commands (see
-  [Design Rationale](#design-rationale)'s "what this doesn't try to solve"). Design the publish
-  hook when write commands ship even if the actual publisher wiring comes later.
-- **GraalVM native-image support** — `RestlessRegistrar`'s runtime `registerMapping` and every
-  reflection-based default (`Default*DataSource`, the generated `Mapper`, `getSpecification`) are
-  invisible to native-image's static analysis without hand-written `RuntimeHints`. Real but
-  bounded work; low priority unless a consumer actually asks for it.
+- **Bulk write commands** (`BulkWriteAction`), reusing the all-or-nothing bulk transaction.
+- **GraalVM native image**: route registration and the reflective defaults need `RuntimeHints`.
 
-**Deliberately not scheduled** (would need a decision only the maintainer can make):
+**Not scheduled** (each would roughly double the surface to maintain; reconsidered only when a real
+consumer asks): Kotlin support, a GraphQL adapter, a WebFlux port, OPA/Cedar guard backends, a
+conformance test kit.
 
-- **Maven Central publishing** — needs Sonatype/GPG credentials.
-- **Kotlin support, GraphQL adapter, WebFlux port, OPA/Cedar guard backends, a conformance TCK** —
-  each is a multi-week effort that would roughly double the surface area this project has to
-  maintain. Worth reconsidering if and when a concrete consumer asks for one specifically, not
-  speculatively.
+---
 
-## Versioning and API Stability
+## Versioning and API stability
 
-`spring-boot-restless` is pre-1.0 (every module currently ships as `0.0.1`). This section
-says, honestly, what that means for anyone depending on it today: what's stable enough to build
-on, what's still free to change shape, and what to expect once 1.0 actually ships.
+The project is pre-1.0; every module is `0.0.1`. **Before 1.0 there is no compatibility guarantee**:
+the next release may not be source- or binary-compatible. In practice, most of the public surface has
+been stable for a while.
 
-**Before 1.0:** no compatibility guarantee exists yet across any release. A `0.0.1` build
-today may not be source- or binary-compatible with the next one. That said, churn is concentrated
-in specific places (below) — most of the framework's public surface has been stable for a while in
-practice, just not yet under a stated promise.
+**Intended stable surface at 1.0** (the extension points you write code against):
 
-**What's intended to be the stable surface once 1.0 ships** — the extension points an entity
-author or a consuming application actually writes code against, where compatibility will be
-prioritized first:
-
-- `RestlessResourceHandler<E, K>` and its `get*DataSource()`/`getAuthorizationGuard()`/
-  `getSpecification()`/`getCustomReadActions()`/`getEnabledOperations()` extension points.
-- `AuthorizationGuard<E>` and its hook points (`preCheck`/`scope`/`canAccess`/
-  `canAccessAfterWrite`/`canAccessAll`/`postProcessResponse`).
-- The `@Restless*` annotation set: `@RestlessEntity`, `@RestlessResource`, `@RestlessEmbed`,
-  `@RestlessMapperExclude`, `@RestlessParent`, `@RestlessOwnedBy`, `@RestlessFromPrincipal`,
-  `@RestlessImmutable`, `@RestlessSubtype`, `@RestlessActionName`, `@CerbosHiddenField`.
-- The per-resource extension interfaces: `ReadAction`, `CollectionAction`, `WriteAction`,
-  `RestlessLifecycleHook`, `RestlessDedupeKey`, and the `RestlessBinary`/`RestlessBulkResult`
-  response types.
-- The application-wide beans: `RestlessPrincipalIdResolver`, `RestlessOwnershipGuards`,
-  `RestlessErrorBodyFactory`.
-- The `*DataSource` base classes (`CreateDataSource`, `ReadDataSource`, `UpdateDataSource`,
-  `DeleteDataSource`, `PatchDataSource`) and their `Default*DataSource` implementations.
-- `Mapper<E, D>`, `SearchDto`/`AbstractSearchDto`, `SoftDeletable`, `AbstractAuditableEntity`.
+- `RestlessResourceHandler<E, K>` and its overridable methods.
+- `AuthorizationGuard<E>` and its hooks.
+- The annotations: `@RestlessEntity`, `@RestlessResource`, `@RestlessParent`, `@RestlessOwnedBy`,
+  `@RestlessFromPrincipal`, `@RestlessImmutable`, `@RestlessSubtype`, `@RestlessActionName`,
+  `@RestlessEmbed`, `@RestlessMapperExclude`, `@CerbosHiddenField`.
+- `ReadAction`, `CollectionAction`, `WriteAction`, `RestlessLifecycleHook`, `RestlessDedupeKey`,
+  `RestlessBinary`, `RestlessBulkResult`.
+- `RestlessPrincipalIdResolver`, `RestlessOwnershipGuards`, `RestlessErrorBodyFactory`.
+- The data source base classes and their `Default*` implementations.
+- `Mapper<E, D>`, `SearchDto`/`AbstractSearchDto`, the model interfaces, `SoftDeletable`,
+  `AbstractAuditableEntity`.
 - `CerbosAuthorizationGuard<E>`, `CerbosResourceAttributesMapper<E>`, `CerbosFieldMasker`.
 
-**What's internal, and still expected to change shape:**
+**Internal and expected to change:** everything listed under [Internal types](#internal-types), and
+anything in a test fixture package.
 
-- `RestlessRegistrar`'s internals (route-registration mechanics, constructor parameter order).
-- `ResourceMetadata`'s exact field list and constructor arity — already grown twice (per-projection
-  response types, API version) and may again.
-- `RestlessOpenApiCustomizer`'s internals (a best-effort documentation generator, not a contract
-  any code should depend on beyond "produces a valid OpenAPI document").
-- Anything under a `fixtures`/test-only package in any module.
+**After 1.0:** semantic versioning. Breaking changes to the stable surface only in a major version, with
+a changelog entry. Minor versions add optional attributes and methods with defaults. Patch versions fix
+bugs.
 
-**After 1.0:** standard semver. A breaking change to anything in the stable-surface list above
-ships only in a new major version, with a changelog entry naming exactly what broke and why. A
-minor version may add new optional attributes/methods (with defaults, so existing implementations
-keep compiling) but never removes or repurposes an existing one. A patch version is bug fixes only.
+---
 
 ## Contributing
 
-Thanks for considering a contribution. This is a small, opinionated framework with a lot of design
-reasoning baked into its javadoc — reading a class's javadoc before changing it will usually save
-you a round-trip.
+For anything beyond a small fix, please open an issue first describing the change and why. The project
+has deliberate design boundaries (see [Overview](#overview) and
+[`docs/DEEP_DIVE.md`'s Scope section](docs/DEEP_DIVE.md#scope)); a pull request that crosses one
+without discussion may be declined even if the code is good.
 
-**Before you start:** for anything beyond a small fix (a typo, an obvious bug), please open an
-issue first describing what you want to change and why. This project has explicit, documented
-design boundaries (see [Overview](#overview) above, [`docs/DEEP_DIVE.md`'s Scope section](docs/DEEP_DIVE.md#scope),
-and [Versioning and API Stability](#versioning-and-api-stability)) — a PR that crosses one of them
-without prior discussion is likely to be declined even if the code itself is good.
+**Development setup**
 
-**Development setup:**
-
-- **Java 25** and **Maven 3.9+** (`./mvnw` is included, no local Maven install required) - needed
-  for the full reactor, since `example` targets `--release 25`. The shipped library itself
-  (`app`/`processor`/`cerbos`/`spring-boot-restless-test`) builds down to Java 17: `./mvnw -pl
-  processor,app,cerbos,spring-boot-restless-test -am verify` works with just a JDK 17+ toolchain.
-- **Docker** and **Docker Compose**, only for the `cerbos` module's Testcontainers-backed tests and
-  `example`'s Cerbos-backed test suite (every `EmployeeAuthorizationGuardTest`-style test starts a
-  real Cerbos PDP container). Everything else runs against plain H2, no Docker needed.
+- **Java 25** and **Maven 3.9+** (`./mvnw` is included) for the full reactor, since `example` targets
+  Java 25. The published modules build with Java 17:
+  `./mvnw -pl processor,app,cerbos,spring-boot-restless-test -am verify`.
+- **Docker**, only for the Testcontainers-based Cerbos tests in `cerbos` and `example`. Everything else
+  runs against H2.
 
 ```bash
-./mvnw test              # whole reactor
-./mvnw -pl app test       # one module
+./mvnw test             # whole reactor
+./mvnw -pl app test     # one module
 ```
 
-**Using Claude Code on this repo:** [`.claude/skills/spring-boot-restless/`](.claude/skills/spring-boot-restless/)
-is an Agent Skill that teaches Claude Code this framework's conventions — the three-tier decision
-framework for adding an entity, authorization guard/Cerbos wiring, write commands, bulk operations,
-and the filter DSL. It loads automatically when relevant while working in this repo. Copy the whole
-directory into a consumer project's own `.claude/skills/` to get the same assistance there.
+**Modules:** `processor` (compile-time code generation), `app` (the runtime library), `cerbos`
+(optional Cerbos integration), `spring-boot-restless-test` (test helpers),
+`spring-boot-restless-dependencies` (BOM), `example` (a demo app and end-to-end test bed). See
+[`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md#modules).
 
-**Module map:** see [`docs/DEEP_DIVE.md`'s Modules section](docs/DEEP_DIVE.md#modules) for the
-full picture — in short, `processor` (compile-time codegen), `app` (the framework), `cerbos`
-(optional Cerbos-backed auth), `example` (a realistic consumer app, also this project's end-to-end
-test bed).
+**Code style**
 
-**Code style:**
+- Match the surrounding code's comment density and idiom. Javadoc explains why, not just what.
+- Don't add boilerplate that a `Default*` class or the processor could generate; something every
+  entity needs probably belongs in `app`, not `example`.
+- Every behavior change needs a test. `app` has its own fixtures so the framework can be tested without
+  `example`.
 
-- Match the surrounding code's comment density and idiom — this codebase explains *why*, not just
-  *what*, in javadoc; a new class with none at all reads as unfinished here.
-- No new hand-written boilerplate where a `Default*` class or the annotation processor could
-  generate it — if you're writing something every entity would need, it probably belongs in
-  `app`, not in `example`.
-- Every behavior change needs a test. `app`'s own fixtures (`Gadget`/`Gizmo`/`Sprocket`/
-  `Doohickey`/...) exist so the framework can be tested in isolation, without `example` — prefer
-  adding to those unless the change is specifically about realistic, business-named usage.
+**Commits and pull requests**
 
-**Commit messages / PRs:**
+- Keep commits focused, and explain why in the body when it isn't obvious from the diff.
+- Run `./mvnw test` for the whole reactor before opening a pull request, or say which modules you
+  couldn't run (for example, no Docker).
+- Update tests and, for user-facing changes, this README and `example/README.md` in the same pull
+  request.
 
-- Keep commits focused; explain *why* in the body when the change isn't self-evident from the
-  diff.
-- Run `./mvnw test` for the whole reactor before opening a PR (or note which modules you couldn't
-  run, e.g. "no Docker available locally").
-- Update the relevant module's tests and, if user-facing, this README/`example/README.md` in the
-  same PR — a behavior change without a doc update is treated as incomplete.
+**Claude Code:** [`.claude/skills/spring-boot-restless/`](.claude/skills/spring-boot-restless/) is an
+Agent Skill with this framework's conventions. It loads automatically in this repository.
 
-**Reporting bugs vs. security issues:** security vulnerabilities go through
-[Security Policy](#security-policy) below, not a public issue.
+**Security issues** go through the [Security policy](#security-policy), not public issues.
 
 ### Publishing a release
 
-Releases go to Maven Central through the [Central Portal](https://central.sonatype.com). Every
-published module (the reactor pom, `processor`, `app`, `cerbos`, `spring-boot-restless-test`,
-`spring-boot-restless-dependencies`) has a `release` profile that adds sources and javadoc jars,
-GPG signatures and the `central-publishing-maven-plugin`. `example` is never published.
+Releases go to Maven Central through the [Central Portal](https://central.sonatype.com). Every published
+module (the reactor pom, `processor`, `app`, `cerbos`, `spring-boot-restless-test`,
+`spring-boot-restless-dependencies`) has a `release` profile that adds sources and javadoc jars, GPG
+signatures and the `central-publishing-maven-plugin`. `example` is never published.
 
 One-time setup:
 
-1. Sign in to the Central Portal with GitHub (that verifies the `io.github.cristivoicu`
-   namespace automatically) and generate a user token.
+1. Sign in to the Central Portal with GitHub (this verifies the `io.github.cristivoicu` namespace) and
+   generate a user token.
 2. Put the token in `~/.m2/settings.xml` under `<server><id>central</id>...</server>`.
 3. Create a GPG key (`brew install gnupg`, `gpg --full-generate-key`) and upload it:
    `gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>`.
@@ -1193,497 +2493,75 @@ Per release:
 ./mvnw -P release -pl '!example' deploy                          # sign and upload
 ```
 
-The upload is validated but not published (`autoPublish` is `false`). Check it under
-*Deployments* on the portal, click *Publish*, then tag the commit (`git tag v0.0.1`). A published
-version can never be changed or deleted.
+The upload is validated but not published (`autoPublish` is `false`). Check it under *Deployments* on
+the portal, click *Publish*, then tag the commit (`git tag v0.0.1`). A published version can never be
+changed or deleted.
+
+---
 
 ## Code of Conduct
 
 Adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
 
-**Our Pledge:** we as members, contributors, and leaders pledge to make participation in our
-community a harassment-free experience for everyone, regardless of age, body size, visible or
-invisible disability, ethnicity, sex characteristics, gender identity and expression, level of
-experience, education, socio-economic status, nationality, personal appearance, race, religion, or
-sexual identity and orientation.
+**Our pledge:** we as members, contributors, and leaders pledge to make participation in our community a
+harassment-free experience for everyone, regardless of age, body size, visible or invisible disability,
+ethnicity, sex characteristics, gender identity and expression, level of experience, education,
+socio-economic status, nationality, personal appearance, race, religion, or sexual identity and
+orientation.
 
-**Our Standards** — examples of behavior that contributes to a positive environment: demonstrating
+**Our standards:** examples of behavior that contributes to a positive environment: demonstrating
 empathy and kindness toward other people; being respectful of differing opinions, viewpoints, and
 experiences; giving and gracefully accepting constructive feedback; accepting responsibility and
 apologizing for mistakes, and learning from them.
 
-Examples of unacceptable behavior: the use of sexualized language or imagery, and sexual attention
-of any kind; trolling, insulting or derogatory comments, and personal or political attacks; public
-or private harassment; publishing others' private information without explicit permission.
+Examples of unacceptable behavior: the use of sexualized language or imagery, and sexual attention of any
+kind; trolling, insulting or derogatory comments, and personal or political attacks; public or private
+harassment; publishing others' private information without explicit permission.
 
-**Enforcement Responsibilities:** project maintainers are responsible for clarifying and enforcing
-standards of acceptable behavior and will take appropriate and fair corrective action in response
-to any behavior deemed inappropriate, threatening, offensive, or harmful.
+**Enforcement responsibilities:** project maintainers are responsible for clarifying and enforcing
+standards of acceptable behavior and will take appropriate and fair corrective action in response to any
+behavior deemed inappropriate, threatening, offensive, or harmful.
 
-**Scope:** this Code of Conduct applies within all community spaces (issues, pull requests,
-discussions) and when an individual is officially representing the project in public spaces.
+**Scope:** this Code of Conduct applies within all community spaces (issues, pull requests, discussions)
+and when an individual is officially representing the project in public spaces.
 
-**Enforcement:** instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer via a GitHub issue marked confidential. All complaints will be
-reviewed and investigated promptly and fairly.
+**Enforcement:** instances of abusive, harassing, or otherwise unacceptable behavior may be reported to
+the project maintainer via a GitHub issue marked confidential. All complaints will be reviewed and
+investigated promptly and fairly.
 
-## Security Policy
+---
 
-**Supported Versions:** `spring-boot-restless` is pre-1.0 (`0.0.1`) and under active
-development — only the latest commit on `main` is supported. There is no backport policy yet; see
-[Versioning and API Stability](#versioning-and-api-stability) above for what "pre-1.0" means for
-API stability.
+## Security policy
 
-**Reporting a Vulnerability:** please **do not** open a public GitHub issue for a security
-vulnerability. Instead, report it privately via GitHub's private vulnerability reporting (Security
-tab -> "Report a vulnerability" on this repository). Include:
+**Supported versions:** only the latest commit on `main` is supported while the project is pre-1.0.
+There is no backport policy yet.
 
-- A description of the vulnerability and its impact.
-- Steps to reproduce (a minimal `@RestlessResource`/`@RestlessEntity` repro is ideal, given how
-  much of this framework's surface is annotation-driven).
-- Which module (`app`, `cerbos`, `processor`, ...) and version/commit are affected.
+**Reporting a vulnerability:** please **do not** open a public issue. Use GitHub's private vulnerability
+reporting (Security tab → "Report a vulnerability"). Include:
 
-You should receive an acknowledgement within a few days. This is a single-maintainer project run
-outside of paid time, so response time may vary — please be patient, and thank you for reporting
-responsibly.
+- a description of the vulnerability and its impact;
+- steps to reproduce (a minimal `@RestlessResource`/`@RestlessEntity` reproduction is ideal);
+- the affected module (`app`, `cerbos`, `processor`, ...) and version or commit.
 
-**Scope** — things that count as a security issue here:
+You should get an acknowledgement within a few days. This is a single-maintainer project run outside paid
+time, so response times vary.
 
-- Authorization bypass in any of `AuthorizationGuard`'s hook points (`preCheck`/`scope`/
-  `canAccess`/`canAccessAfterWrite`/`canAccessAll`/`postProcessResponse`),
-  `RestlessRegistrar`'s startup fail-fast-on-no-guard check, or the Cerbos-backed
-  guard/field-masker in the `cerbos` module.
-- Mass-assignment / unintended field exposure through the reflective `Default*DataSource` classes
-  or the default `Mapper` the annotation processor can generate.
-- Anything that lets one `@RestlessResource` read/write another's data (cross-resource isolation).
-- Injection via the reflection-driven default search filter (`getSpecification`) or
-  `@RestlessEmbed` resolution.
+**In scope:**
 
-Things that are **out of scope** (report as an ordinary bug/issue instead): denial-of-service via
-an intentionally pathological request shape against a demo/example app (`example` module) not
-meant for production use as-is; findings that require modifying policy YAML, application
-properties, or Java code you control to reach.
+- Authorization bypass in any `AuthorizationGuard` hook, in the startup check for missing guards, or in
+  the Cerbos guard and field masker.
+- Mass assignment or unintended field exposure through the `Default*DataSource` classes or the generated
+  mapper.
+- One resource reading or writing another resource's data.
+- Injection through the default search filter or `@RestlessEmbed` resolution.
 
-## Changelog
+**Out of scope** (report as a normal issue): denial of service against the `example` app with
+deliberately pathological requests; findings that require changing policy files, application
+properties or Java code you already control.
 
-All notable changes to this project are documented here. The format is loosely based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project doesn't follow SemVer yet
-(still `0.0.1`, pre-1.0) — see [Versioning and API Stability](#versioning-and-api-stability)
-above for what stability guarantees actually apply before 1.0.
-
-### [0.0.1] - 2026-10-11
-
-**Added**
-
-- **Declarative ownership and server-set fields.** See
-  [Ownership, denials and server-set fields](#ownership-denials-and-server-set-fields).
-  - `@RestlessOwnedBy` (direct: `field = "ownerId"`; via a parent: `path`/`via`/`ownerField`)
-    wires an `OwnershipAuthorizationGuard` built by the new `RestlessOwnershipGuards` bean: lists
-    scoped in SQL (a subquery for the via shape), every single row checked, a create under
-    someone else's parent rolled back, a nested parent checked once in `preCheck`. Fails closed
-    with no principal. Paths are validated at compile time and again at startup.
-  - `denyAs` on `@RestlessEntity`/`@RestlessResource` (`RestlessDenial.FORBIDDEN`/`NOT_FOUND`),
-    global default `restless.authorization.deny-as`. `NOT_FOUND` makes a denied row answer
-    exactly like a missing id, on every route including bulk.
-  - `@RestlessFromPrincipal` - set from the caller on create, immutable afterwards; a
-    create/update/patch model declaring the same field is a compile error. Create with no
-    principal is a `401`.
-  - `@RestlessImmutable(onUpdate = IGNORE | REJECT)`, global default `restless.immutable.on-update`.
-  - `RestlessPrincipalIdResolver` bean (default: the authenticated name, anonymous counts as
-    none), exposed as `RestlessContext.principalId()`.
-- **Actions, files and lifecycle hooks on the generated tier.** See
-  [Actions, files and lifecycle hooks](#actions-files-and-lifecycle-hooks-on-the-generated-tier).
-  - `@RestlessEntity` gains `readActions`, `collectionActions`, `writeActions`, `views` and
-    `hooks` (bean classes), with `@RestlessActionName` naming each action/view - write commands
-    and named views no longer need the hand-wired tier.
-  - `CollectionAction<E>` - `GET {basePath}/actions/{name}`, handed the caller's visible rows as a
-    `Specification`.
-  - `RestlessBinary` - a non-JSON body (PDF, image, ZIP) from a view or action, streamed inside
-    the route's transaction.
-  - `multipartCreate` - `POST {basePath}` also accepts `multipart/form-data`, bound onto the
-    create model (`MultipartFile` fields) and validated like JSON; otherwise `415`.
-  - `RestlessLifecycleHook<E>` - `afterCreate`, `beforeUpdate`/`afterUpdate`,
-    `beforeDelete`/`afterDelete`, inside the write's transaction, after authorization.
-- **Bulk import, polymorphism, validation groups, error shape.** See
-  [Bulk import, polymorphism, validation groups, error shape](#bulk-import-polymorphism-validation-groups-error-shape).
-  - `bulkMode = PARTIAL` (`RestlessBulkMode`) with an optional `RestlessDedupeKey` bean
-    (`bulkDedupe`): per-row transactions, a `RestlessBulkResult` response, `?dedupe=false` to opt
-    out. Authorization denials still abort the request.
-  - `collectionGet = LIST` (`RestlessCollectionGet`), global default `restless.collection-get`.
-  - `@RestlessSubtype` for polymorphic create through `DefaultCreateDataSource`.
-  - `RestlessValidationGroups.OnCreate`/`OnUpdate`/`OnPatch`, applied on top of `Default`.
-  - `RestlessErrorBodyFactory` - replace the `ProblemDetail` body on every generated route.
-  - `@RestlessEntity(repository = ...)` - a repository outside the `{Entity}Repository` convention.
-  - `RestlessOwnershipContract` in `spring-boot-restless-test` - verifies an owner/stranger
-    ownership contract across every route in one call.
-- **`example`**: `Notebook` (direct ownership, a collection action, a write action, a hook), `Note`
-  (owned via its notebook, partial bulk with dedupe), `Attachment` (multipart upload, binary
-  view, list mode) and `Shape` (polymorphism, validation groups, custom repository), each with
-  end-to-end tests.
-
-- **Nested (parent-scoped) resources and `RestlessContext`.** Two related additions, both driven
-  by a real consumer integration (backend-nunti) that had to flatten `/api/events/{eventId}/guests`
-  into `/api/guests?eventId=...` because the framework had no way to mount a resource under a
-  parent's own path variable, and no way for a data source to see the request at all.
-  - **`RestlessContext`** - a per-request object carrying the resolved path variables (plus a
-    typed `pathVariable(name, Class)` accessor using the app's own `ConversionService`), the
-    `HttpServletRequest`, the current `Authentication` (`Object`-typed - see its own javadoc for
-    why - `app` has no mandatory Spring Security dependency, now an `optional=true` compile
-    dependency purely so this can exist), and the `AuthorizationGuard.Action`/custom action name
-    being checked. Every `*DataSource` verb gained a context-aware overload (`create(C, RestlessContext)`,
-    `update(K, U, RestlessContext)`, ...) defaulting to the existing non-context one, so every
-    hand-written data source keeps working unchanged - the handler always calls the context-aware
-    overload. Also available anywhere via the static `RestlessContext.current()` (a nesting-safe
-    thread-local, correctly restoring the outer context across a `@RestlessEmbed` cross-resource
-    call), for a guard's own `preCheck` to read without a new parameter on `AuthorizationGuard`
-    itself (which would have broken every existing implementation).
-  - **`@RestlessParent`** (on `@RestlessEntity` and, identically shaped, `@RestlessResource`) -
-    `basePath = "/events/{eventId}/guests", parent = @RestlessParent(variable = "eventId", field
-    = "eventId")` mounts a resource under a parent's path variable. The parent field may be a flat
-    scalar column (`eventId`, a `UUID`/`Long`) or one dotted `association.idProperty` segment
-    (`event.id`, a real `@ManyToOne`) - the processor validates `field` at compile time for the
-    generated tier (exists, isn't a type a path variable could never convert to); a runtime check
-    in `RestlessResourceHandler#init` backstops both tiers (fail-fast if `variable` doesn't
-    actually appear in `basePath`). Full semantics: every route (fixed/bulk/PATCH/named action)
-    registers under the templated path, with duplicate-basePath detection treating `/a/{x}/b` and
-    `/a/{y}/b` as the same route; create (single and bulk) writes the parent field from the path
-    *after* the create model is applied, so a body-supplied value for the same field is always
-    overwritten, never honored; every read auto-ANDs a `parentField = :pathValue` predicate onto
-    its own filter, before the guard's `scope()`; a single-row route (`GET`/`PUT`/`PATCH`/
-    `DELETE`/a named action) for a row under a *different* parent 404s, checked inside the same
-    transaction, before `canAccess`; a bulk update/delete with even one foreign-parent target
-    fails the whole batch with `404`, nothing written; update/patch can never move a row to a
-    different parent ("protected like `@Id`" - forcibly reset after every write regardless of
-    what the data source did); an unconvertible path value is a clean `400`; `RestlessOpenApiCustomizer`
-    documents the parent path parameter (with the right schema type) on every route; `@RestlessEmbed`
-    and soft delete keep working unchanged on a nested resource. See `example`'s `Task`
-    (`/projects/{projectId}/tasks`, the dotted-association form) and its `TaskAuthorizationGuardBean`
-    (a guard cheaply authorizing the parent once per request via `RestlessContext` in `preCheck`,
-    Feature B item 8) for an end-to-end proof, and the "Nested (parent-scoped) resources" section
-    below for the full guide.
-
-- **Conditional requests (Phase 2 item 9).** `findOne`/`namedView`/`create`/`update`/`patch` now
-  emit a strong `ETag` from `@Version` on single-resource responses. `GET` with `If-None-Match`
-  short-circuits to `304` (weak comparison, per RFC 9110). `If-Match` now supports `*` and a
-  comma-separated candidate list, under *strong* comparison - a weak (`W/"..."`) candidate is
-  excluded entirely rather than stripped-and-compared, since a weak validator can never satisfy
-  strong comparison; **this is a behavior tightening**, not purely additive - a client that was
-  relying on a weak `If-Match` validator being accepted (today's lenient, technically
-  RFC-incorrect behavior) will now get `412` instead. `If-Match` is also now optionally honored
-  on named write actions (previously not checked there at all). `readVersion` now walks
-  superclasses - a `@Version` on a shared `@MappedSuperclass` was previously invisible.
-
-- **Tooling (Phase 3 item 17).**
-  - **JaCoCo**: `app`/`processor`/`cerbos` each produce a per-module coverage report
-    (`target/site/jacoco/index.html`) on `mvn verify`.
-  - **japicmp**: wired into `app`'s pom against the stable-surface packages (see "Versioning and
-    API Stability" above), but there is no previously published release of this artifact yet to
-    diff against - `ignoreMissingOldVersion` makes that a correctly-wired no-op today rather than
-    a build failure; it starts actually comparing the moment a real first version is published.
-  - **JSpecify**: every main package in `app`/`processor`/`cerbos` now has a `package-info.java`
-    with `@NullMarked` - documentation of intent only, no null-checking build step wired in.
-  - **PostgreSQL Testcontainers for `example`**: `PostgresBackedTest` + `DepartmentPostgresCudTest`
-    (tagged `"postgres"`, excluded from the default H2-backed run) exercise the full CUD cycle
-    against a real Postgres container instead of H2's emulation of one - catches the class of
-    `LIKE`-wildcard/collation/null-ordering bug H2 papers over. CI runs it as its own job
-    (`-Dgroups=postgres`), separate from the fast default run.
-
-- **Java 17 baseline for the shipped library (Phase 3 item 16).** `app`/`processor`/`cerbos`/
-  `spring-boot-restless-test` now build down to Java 17 (`example`, never shipped, stays on 25).
-  One real Java-21-only construct turned up along the way and was rewritten: `CerbosAttributeValues`
-  used a `switch` with type patterns (JEP 441, finalized in 21) - replaced with a plain
-  `instanceof`-pattern chain, identical behavior. CI now builds a `[17, 21, 25]` matrix; the 17/21
-  legs build only the library modules (`example`'s own sources target `--release 25`, which a
-  JDK 17/21 `javac` can't do regardless of the library's own compatibility).
-
-- **Generated mapper codegen (Phase 3 item 15).** The default generated `{Entity}Mapper` (when
-  no hand-written one exists) no longer uses reflective `BeanUtils.copyProperties` - it now emits
-  one explicit `dto.setX(source.getX())` call per matched, non-`@RestlessMapperExclude` field
-  pair, compile-time type-checked, a step toward GraalVM native-image support. Also declared
-  `isolating` in `META-INF/gradle/incremental.annotation.processors`, so a Gradle incremental
-  build only reprocesses the `@RestlessEntity` classes whose own source actually changed.
-
-- **Soft-delete write/read consistency (Phase 2 item 13).** A write (`update`/`patch`/
-  `deleteById`/a named write action) on an already-soft-deleted row now 404s unconditionally -
-  previously the write path had no soft-delete awareness at all and happily proceeded as if the
-  row were any other. New `restless.soft-delete.include-in-single-read` property (default `true`
-  - today's pre-item-13 behavior: `findOne`/a named view still returns a soft-deleted row);
-  set to `false` to 404 it there too, same as a row that never existed. Threaded through the new
-  `RestlessInitContext.includeSoftDeletedInSingleRead` field.
-
-- **Fail-closed field masking (Phase 2 item 12).** New `AuthorizationGuard.postProcessResponse(action,
-  customActionName, request, entity, dto)` default hook (returns `dto` unchanged) -
-  `RestlessResourceHandler` now calls it right after `Mapper.map(...)` on every single-entity
-  response (`create`/`findOne`/`namedView`/`update`/`patch`). `CerbosAuthorizationGuard` overrides
-  it to automatically run `CerbosFieldMasker` against any `@CerbosHiddenField`-annotated DTO field
-  - a hand-written `Mapper` no longer has to remember to call the masker itself (one that already
-  does keeps working unaffected; masking is idempotent). Skips the Cerbos `check()` RPC entirely
-  when the DTO type carries no `@CerbosHiddenField` field at all. If the PDP can't be reached to
-  say which fields to hide, every `@CerbosHiddenField` field is masked rather than none - fail
-  closed, consistent with this guard's other hooks.
-
-- **Cerbos query plan translator hardening (Phase 2 item 11).** `eq`/`ne` against a `null`
-  literal now translate to `IS NULL`/`IS NOT NULL` instead of `cb.equal(path, null)` (which
-  Hibernate does not treat as a null check, so a condition like `request.resource.attr.ownerId ==
-  null` previously silently matched nothing at all). `coerce()` now also widens a `String` literal
-  to an `enum` constant, a `UUID`, or a `java.time` value (`Instant`/`LocalDate`/
-  `LocalDateTime`/`OffsetDateTime`) when the target attribute's Java type calls for one - Cerbos's
-  own `Value` has no representation for any of those, so a policy condition comparing one of these
-  columns always carries it as a plain string. `CerbosAuthorizationGuard.scope()` now fails closed
-  (denies) instead of surfacing an unhandled `500` when the translator hits a query-plan shape it
-  doesn't support. `principalAttributesExtender` - documented as potentially a real database
-  lookup - is now resolved at most once per request (cached on the `HttpServletRequest` itself)
-  instead of once per `preCheck`/`canAccess`/`scope` call.
-
-- **Bulk performance (Phase 2 item 10).** `updateBulk`/`deleteAll` now resolve their whole
-  pre-image/pre-check batch with one `findAllById` + one `canAccessAll` call, instead of looping
-  `findOne`/`canAccess` per id - one query and one authorization decision per bulk request
-  instead of N of each. `ReadDataSource` gained a concrete `findAllById(Collection<K>)` (default:
-  loops `findOne`, so any existing subclass keeps working unchanged); `DefaultReadDataSource`
-  overrides it with a single `specificationRepository.findAllById(...)` call.
-  `AuthorizationGuard` gained a `default canAccessAll(Action, HttpServletRequest, List<E>)`
-  (default: loops `canAccess`, same end result as before - override it for a guard that can check
-  a whole batch in one round trip, e.g. a single batched policy-engine call instead of N).
-  `DefaultDeleteDataSource`/`DefaultSoftDeleteDataSource` also gained a 3-arg constructor
-  (`repository, idType, conversionService`) alongside the existing 2-arg one - bulk-delete id
-  conversion previously always went through a standalone `DefaultConversionService`, silently
-  bypassing any custom `Converter` bean a consumer had registered on the app's own
-  `ConversionService`; processor-generated resources now pass the real one through.
-
-- **Internals cleanup (Phase 2 item 14).** `getAuthorizationGuard()` is now resolved once, in
-  `init()`, and cached - every internal check (`checkPreCheck`/`checkCanAccess`/`scope()`/...)
-  reads that cached instance instead of calling the (overridable, possibly expensive-to-construct)
-  accessor again on every single request. `init()`'s six telescoping overloads are replaced by
-  one `init(RestlessInitContext)` - a plain record naming every collaborator, so a future new one
-  doesn't need a seventh overload. Transaction demarcation
-  (`inTransaction`/`inReadOnlyTransaction`) and `If-Match`/`@Version` precondition handling moved
-  into new package-private `TransactionSupport`/`PreconditionSupport` classes - no change to
-  `RestlessResourceHandler`'s own protected/public surface, both were already private there.
-
-- **Filter DSL hardening.** Every `SearchDto` field/operator binding is now precomputed and
-  validated once at startup (not per request, and not via per-request `getDeclaredFields`/
-  `setAccessible`) - an equality field naming no real entity property, an operator the resolved
-  property's type doesn't support, `In` on a non-`Collection` field, and a primitive filter field
-  now all fail fast at startup instead of being silently ignored or thrown from inside a running
-  query. A suffixed field whose *full* name is itself a real entity property (e.g. `checkIn`) is
-  now treated as plain equality on that property rather than silently dropped as an unresolvable
-  `In` operator on a nonexistent `check` base property. `Like` now escapes a literal `%`/`_`/`\`
-  in the search term (previously a literal `%` in a search term was interpreted as a SQL
-  wildcard). New `ILike` (case-insensitive contains) and `StartsWith` (index-friendly prefix
-  match, no leading wildcard) operators.
-
-- **`@RestlessEmbed` now respects the target's `getEnabledOperations()`, excludes soft-deleted
-  rows, and applies `scope()` on a `many = false` embed too.** Previously `?expand=name` could
-  reach `findEmbeddedList`/`findEmbeddedOne` directly, bypassing a target resource's own
-  `READ_LIST`/`READ_ONE` opt-out, its soft-delete exclusion, and (for `many = false`) its
-  row-level `scope()` entirely - none of which the embedded field's own route (there isn't one)
-  would have let through. `findEmbeddedOne` also now queries with a limit of 2 and throws if the
-  join matches more than one row, instead of silently taking the first - more than one match
-  means `sourceField`/`targetField` don't actually form the natural key `@RestlessEmbed`
-  assumes, which is a configuration error worth surfacing, not papering over.
-
-- **Atomic write pipeline.** `create`/`update`/`patch`/`deleteById` (and `createBulk`/
-  `updateBulk`) now run load, 404-if-missing, `canAccess`, `If-Match`, the data-source write,
-  a flush, and `Mapper.map` inside one transaction, in that order - previously the guard/
-  `If-Match` check loaded the entity separately, outside any transaction, and the data source
-  reloaded and wrote independently. Two consequences, now closed: a concurrent write landing
-  between the check and this request's own write now surfaces as `409`/`412`, never a silent
-  overwrite (see the new `ConcurrentUpdateRaceTest`); and a write-response `Mapper` touching a
-  lazy association now works under `spring.jpa.open-in-view=false` (see
-  `CreateWithLazyAssociationOsivOffTest`) - previously nothing in the write path ran inside a
-  transaction/session at all. `DataSource` gained a `flush()` method (public, concrete) so
-  `RestlessResourceHandler` can force a pending write to actually hit the database before
-  mapping the result.
-- **Row-level authorization on create, extended to writes generally.** `create`
-  (and `createBulk`) now calls `canAccess(CREATE, request, newEntity)` *after* the data source
-  saves it, inside the same transaction - a denial rolls the insert back. Previously create
-  never called `canAccess` at all; a resource's own guard had no say over what a client could
-  create. New `AuthorizationGuard#canAccessAfterWrite(Action, String, HttpServletRequest, E
-  after)` default method, additive, defaulting to `canAccess(...)` - `update`/`patch` (and
-  `updateBulk`) now call it *after* the write, on the now-mutated entity, in addition to the
-  existing pre-image check before it. **Default-on behavior change worth knowing about**: a
-  guard whose `canAccess` inspects mutable state that a legitimate update is expected to change
-  (e.g. `status == DRAFT` as part of an allowed draft→published transition) will now also run
-  that same check against the *new* state, and could unexpectedly deny a transition it used to
-  allow. Whether `canAccessAfterWrite` should default to `canAccess` at all, versus defaulting
-  to "always allow" (strictly opt-in), is flagged as a decision worth making before 1.0.
-
-- **Mass-assignment protection.** `Default{Create,Update,Patch}DataSource`'s `BeanUtils.copyProperties`
-  now ignores whichever of the entity's `@Id`/`@Version`/`SoftDeletable`-`deleted`/audit-timestamp
-  property names it finds (`ProtectedEntityFields`) - previously a `CreateModel` carrying a
-  populated `id` could make `save()` merge onto an existing row instead of inserting a new one,
-  bypassing that row's `UPDATE` guard entirely. `RestlessEntityProcessor` now also raises a compile
-  error when a Create/Update/PatchModel declares one of those protected field names, or when a
-  PatchModel field is primitive (it can never be `null`, so `PATCH` would always overwrite it).
-- **`restless.page.max-size`** (default `2000`, matching Spring Data's own
-  `spring.data.web.pageable.max-page-size` default) - a client-supplied `size` over this on
-  `GET {basePath}`/`.../overview`/`.../select/async`/a named read action is now rejected `400`,
-  previously unbounded.
-- **`restless.bulk.max-size`** (default `1000`) - `createBulk`/`updateBulk`/`deleteAll` now reject
-  `400` for a request carrying more items than this, checked before any item is processed.
-- **Bound `SearchDto`s are now validated.** `bindSearchDto` runs the bound instance through the
-  same `Validator` request bodies already go through - a `@Max`/`@Min`/... on a `SearchDto` field
-  was silently never enforced before this.
-- **`findEmbeddedList` is now capped** by `restless.list.max-size`, the same cap every other
-  unbounded read already had - an `@RestlessEmbed(many = true)` field was the one unbounded read
-  that cap didn't reach yet.
-- **Default sort resolves the entity's real `@Id` property.** Previously `AbstractSearchDto`
-  always defaulted an unsorted request to a hardcoded `"id"` sort - a 400 on every single
-  unsorted request to any entity whose `@Id` isn't literally named `id` (a natural key, say).
-  An explicit client sort that doesn't already end in the id property now also gets it appended
-  as a tie-breaker, a prerequisite for stable pagination. Sortable properties are now also
-  restricted to plain scalar columns - associations, collections, static/transient fields, and
-  any property whose response DTO counterpart is `@CerbosHiddenField` are excluded (previously
-  some of these produced a confusing 500 from Hibernate instead of a clean 400; sorting by a
-  masked field would have leaked its order).
-- **Repo documentation consolidated.** Every standalone governance/meta doc (`ROADMAP.md`,
-  `VERSIONING.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, this changelog) and the
-  three `docs/design/*.md` design-rationale docs are now sections of this README instead of
-  separate files — fewer files/folders to navigate for a first-time visitor. `docs/DEEP_DIVE.md`
-  (the full tutorial-depth walkthrough) is unaffected.
-- **Claude Code Agent Skill.** `.claude/skills/spring-boot-restless/` teaches Claude Code this
-  framework's conventions - the three-tier entity decision framework, authorization/Cerbos wiring,
-  write commands, bulk operations, and the filter DSL - split into a concise `SKILL.md` plus
-  on-demand `reference/*.md` files. Loads automatically while working in this repo; copy the
-  directory into a consumer project's own `.claude/skills/` for the same assistance there.
-- **Repo made publish-ready.** `README.md` restructured into a concise, template-shaped reference
-  (badges, requirements, installation, configuration, quick start, feature guide); the previous
-  full tutorial-depth content (every mechanism, sequence diagrams, the three-tier decision
-  framework, worked examples) moved to `docs/DEEP_DIVE.md` instead of competing with it.
-  GitHub issue templates (`bug_report.md`/`feature_request.md`) and a `PULL_REQUEST_TEMPLATE.md`
-  added under `.github/`. Root `pom.xml` now declares a `<licenses>` block (Apache-2.0).
-- **Filter DSL.** `FilterOperator` + an extended `RestlessResourceHandler#getSpecification`
-  reflection loop (`app`): a `SearchDto` field named `ageGte` now filters `age >= value` (and
-  `Lte`/`Gt`/`Lt`/`Like`/`Ne`/`In` suffixes similarly), reflected over the same way a plain field
-  already was — equality-only filtering was the gap, this is additive, not a rewrite. Wire format
-  is camelCase (`?ageGte=30`), matching the Java field name exactly. Also new:
-  `RestlessSpecifications`, a small fluent builder for hand-written `Specification` escape
-  hatches, proven as a genuine drop-in by refactoring `GadgetRestlessResource`'s own hand-written
-  filter and `byEmailDomain` custom read action onto it (all pre-existing Gadget tests pass
-  unchanged). See [Design Rationale](#design-rationale).
-- **Write commands.** `WriteAction<E, Req, Resp>` / `getCustomWriteActions()` (`app`), mirroring
-  the existing `ReadAction`/`getCustomReadActions()` mechanism: a named, intent-carrying mutation
-  (`POST {basePath}/{id}/actions/{name}`) beyond the fixed create/update/patch/delete verbs, for a
-  transition a full-replace `PUT` has no vocabulary to guard (illegal-state prevention,
-  multi-step domain logic). Runs inside a real transaction (load + guard-check + `execute`),
-  documented automatically by `RestlessOpenApiCustomizer`. New
-  `AuthorizationGuard.Action.WRITE_ACTION` enum value (additive), and `CerbosActionNaming` now
-  forwards a write action's own name to the policy (`cerbos` module) the same way it already did
-  for named read actions/views. Hand-wired tier only for now — see [Design Rationale](#design-rationale)
-  for the deferred `@RestlessEntity`/annotation-processor phase. Demonstrated end-to-end on
-  `example`'s `Employee`: `promote` (illegal-transition prevention via a fixed `JobTitle` career
-  ladder), `giveRaise` (a business-rule cap a bean-validation annotation can't express),
-  `addCertification`/`recordAchievement` (append-only mutation of a collection
-  `EmployeeUpdateModel` deliberately never exposes) — see `example/README.md`'s "Write commands"
-  section.
-- **Auto-configuration.** `RestlessAutoConfiguration` (`app`) and `CerbosAutoConfiguration`
-  (`cerbos`), discovered via
-  `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`. A consumer
-  no longer needs `@ComponentScan(basePackages = "ro.cristivoicu.springbootrestless")` - every
-  framework infrastructure bean (`RestlessRegistrar`, `RestlessEmbedResolver`,
-  `RestlessAuthorizationMetrics`, `RestlessExceptionHandler`, `RestlessOpenApiCustomizer`, the
-  Cerbos client and health indicator) is a plain `@Bean` behind
-  `@ConditionalOnMissingBean`/`@ConditionalOnClass` now, registered automatically the moment the
-  jar is on the classpath.
-- **`@RestlessResource(allowAll = ...)` / `@RestlessEntity(allowAll = ...)`.** `RestlessRegistrar`
-  now refuses to register a resource that has no real `AuthorizationGuard` (still
-  `AuthorizationGuard.allowAll()`) unless this is explicitly set to `true` - a startup-time
-  `IllegalStateException` naming the resource, not a silently wide-open route. Fail-fast, not a
-  runtime behavior change for any resource that already has a guard.
-- **`restless.list.max-size`** (`RestlessProperties`, default 10,000) - a hard cap on
-  `GET .../list`, previously unbounded. A response that hit the cap carries
-  `X-Restless-List-Truncated: true`.
-- **`Location` header + `201 Created`** on every single-item create (both the dynamic mechanism
-  and the hand-subclassed `CreateController` tier), per RFC 9110 §15.3.2 - previously `200 OK`
-  with no `Location`.
-- **`RestlessResourceHandler#inReadOnlyTransaction`** wraps every read path (`findOne`,
-  `findList`, `findPage*`, `customRead`, `namedView`) in a `readOnly` transaction when a
-  `PlatformTransactionManager` is configured - fixes a `LazyInitializationException` risk for
-  consumers running with `spring.jpa.open-in-view=false` (the generally-recommended production
-  setting) whose hand-written `Mapper`/`@RestlessEmbed` touches a lazy association. `example` now
-  runs with OSIV off to prove this.
-- `LICENSE` (Apache-2.0), this changelog, and a CI workflow (`.github/workflows/ci.yml`).
-
-**Changed**
-
-- **`RestlessExceptionHandler`'s handler methods now return `ResponseEntity<Object>`** (was
-  `ResponseEntity<ProblemDetail>`), so a `RestlessErrorBodyFactory` can supply a different body
-  type. Source-incompatible for a subclass overriding them or code reading `getBody()` as a
-  `ProblemDetail` without a cast; the default body is still a `ProblemDetail`.
-- **`DefaultCreateDataSource` writes server-managed fields before the `INSERT`.** A nested
-  resource's parent field and `@RestlessFromPrincipal` fields are now set on the entity before
-  `save`, not only re-applied afterwards - so they can be `NOT NULL` columns. (`example`'s
-  `Task.project` is now mandatory to prove it.) The handler still re-applies them after any data
-  source, as before.
-- **Error responses are now RFC 9457 `application/problem+json`**
-  (`org.springframework.http.ProblemDetail`), not a bespoke
-  `{timestamp, status, error, message, path, details}` JSON shape. The old `ErrorResponse` record
-  is removed; field-level validation messages now live under the `errors` extension member
-  (present only on a validation failure), and `path` is now the standard `instance` member.
-- **Bulk delete moved off `DELETE` with a request body.** `DELETE {basePath}` is now
-  `POST {basePath}/bulk-delete` (same body shape, same `AuthorizationGuard.Action.DELETE_ALL`) -
-  RFC 9110 gives a `DELETE` request body no defined semantics, and in practice proxies/CDNs/
-  `fetch()` are known to drop it. Applies to both the dynamic mechanism and the hand-subclassed
-  `DeleteController` tier.
-- **`RestlessExceptionHandler` is now scoped** (`@RestControllerAdvice(assignableTypes =
-  RestlessErrorScope.class)`) to restless handlers and the hand-subclassed `*Controller` tier -
-  previously an unscoped advice, so its `Exception` catch-all changed error handling for a
-  consumer's own, unrelated controllers too (e.g. turning a Spring Security
-  `AuthorizationDeniedException` into a generic 500). `RestlessResourceHandler` and the four
-  `*Controller` base classes now implement the new `RestlessErrorScope` marker interface.
-- **Every `ProblemDetail` now carries a stable `type` URI**, one per error kind (e.g.
-  `.../problems/validation-failed`, `.../problems/not-found`) - previously the RFC 9457 default
-  of `about:blank` for every response, which can't distinguish one error kind from another.
-- **`errors` entries are now objects (`{field, message, code}`)**, not a single
-  `"field: message"` string - a client parsing them programmatically had no reliable way to
-  separate the field name from the message, or key off the violated constraint at all.
-- **`DataIntegrityViolationException` now maps to `409`** with a generic detail - previously
-  fell through to the generic `500` handler, which also meant the underlying SQL exception's own
-  message (routinely embedding table/column/constraint names, even literal values) could leak
-  into the response body.
-
-**Fixed**
-
-- **A `CreateDataSource` overriding `createAll(List)` was silently bypassed on bulk create.** The
-  handler always calls the context-aware `createAll(List, RestlessContext)`, whose default looped
-  the single-item `create` - so a batched, validate-everything-first override never ran. The
-  request's own transaction still rolled back on a bad row, but inside an enclosing transaction
-  (a `@Transactional` test, a calling service) the earlier good rows stayed visible. The default now delegates to an overridden `createAll(List)`. Caught by
-  `example`'s `ProjectAssignmentTest`.
-- **`@Id` declared on a shared `@MappedSuperclass` (e.g. a project-wide `BaseEntity`) failed
-  compilation** - `RestlessEntityProcessor` only ever looked at the annotated entity's own
-  declared fields, so an entity whose `@Id` actually lived on its superclass hit "has no field
-  annotated `@jakarta.persistence.Id`" even though one genuinely existed. `resolveIdType` now
-  walks superclasses the same way `declaredFieldsOf`/`reservedEntityFieldNames` already did,
-  resolving a generic superclass's own type argument (`BaseEntity<K>`) via `Types.asMemberOf`
-  rather than returning the erased type variable name. See `example`'s own `Skill`/`BaseEntity`
-  (`entity/shared`) for the end-to-end proof, and `RestlessEntityProcessorInheritedIdTest`
-  (`processor` module) for the isolated compile-time one.
-- **A single `?sort=field,direction` (one occurrence, not the repeated-param form) was silently
-  broken** - `?sort=date,asc` returned `400 "Unknown sort property 'asc'"`. `ServletRequestDataBinder`
-  hands a single-occurrence query parameter to the conversion service as a plain `String`, not a
-  one-element array; converting that onto `AbstractSearchDto#sort`'s `List<String>` then goes
-  through `DefaultConversionService`'s `StringToCollectionConverter`, which splits on *every*
-  comma in the whole string - turning one `"date,asc"` entry into two broken ones, `"date"` and
-  `"asc"`, each parsed as its own property with no direction. A repeated `sort` param
-  (`?sort=a,asc&sort=b,desc`) never hit this, since Spring binds a multi-value parameter as a real
-  array with no comma-splitting involved - which is why only the single-value form was broken.
-  `RestlessResourceHandler` now reads `sort`'s raw request-parameter values directly instead of
-  leaving it to the generic binder, bypassing the faulty conversion entirely. Also added: a
-  leading `-` as shorthand for descending (`?sort=-lastName`, same convention GitHub's and many
-  other REST APIs' own sort parameters use).
-- `SECURITY.md`/[Security Policy](#security-policy) pointed at a `<developers>` section in the
-  root `pom.xml` that never existed - dead end for anyone trying to report a vulnerability
-  privately. Now relies solely on GitHub's private vulnerability reporting (Security tab).
-- An in-flight `@RequiredArgsConstructor` change to `RestlessRegistrar` would have dropped its
-  `ObjectProvider<RestlessAuthorizationMetrics>` fallback (breaking resources with no
-  Actuator/Micrometer on the classpath) and its null-default for `RestlessProperties` - caught
-  before it was ever committed; `RestlessRegistrar` keeps its explicit constructor.
-
-**Before this changelog existed:** see the git history (`cf0b117` onward) for the Cerbos
-integration, exception handling, OpenAPI generation, and versioning work that predates this file.
+---
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). You may use, modify, and distribute
-this project in compliance with the License; a copy of it is included in this repository.
+Licensed under the [Apache License, Version 2.0](LICENSE). You may use, modify, and distribute this
+project in compliance with the License; a copy is included in this repository.

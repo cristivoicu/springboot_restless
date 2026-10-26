@@ -31,7 +31,7 @@ docker compose up -d      # from the repo root
 
 Swagger UI: `http://localhost:8081/swagger-ui.html`. Raw OpenAPI document:
 `http://localhost:8081/v3/api-docs`. Full Keycloak/Cerbos setup and demo-account minting is in the
-root README's [Running the full demo](../README.md#running-the-full-demo-docker-compose--keycloak)
+root README's [Running the full demo](../docs/DEEP_DIVE.md#running-the-full-demo-docker-compose--keycloak)
 section — the curl examples below assume you already have a token, exactly as shown there.
 
 ## Entities at a glance
@@ -239,7 +239,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/projects/1 | jq 
 
 A `manager`'s JWT `scopedLastName` claim restricts which employees they see; row-scoping on
 `Project` is resolved from the caller's *own* `Employee` row (not a JWT claim) — see the root
-README's [step 5](../README.md#5-principal-attributes-that-arent-jwt-claims). Both come from the
+README's [step 5](../docs/DEEP_DIVE.md#5-principal-attributes-that-arent-jwt-claims). Both come from the
 same mechanism: `CerbosAuthorizationGuard.scope()` translating a Cerbos query plan into a JPA
 `Specification`.
 
@@ -380,7 +380,7 @@ call each.
 | `carol-manager` | manager | `scopedLastName=Lovelace`, `canViewSalary=true` |
 | `dave-employee` | employee | — |
 
-See the root README's [Running the full demo](../README.md#running-the-full-demo-docker-compose--keycloak)
+See the root README's [Running the full demo](../docs/DEEP_DIVE.md#running-the-full-demo-docker-compose--keycloak)
 for how to mint a token for each, and `docker/keycloak/README.md` for the full account table. The
 `contact` named view's `expectedInitials`/manager `scopedLastName` claims used above are test-only
 JWT claims (see `EmployeeAuthorizationGuardTest`) — the real Keycloak demo realm doesn't issue an

@@ -1,0 +1,32 @@
+---
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: payslip
+  rules:
+    # A read-only resource (@RestlessReadEntity): only read actions ever reach this policy.
+
+    # admin: every payslip.
+    - actions:
+        - read_one
+        - read_list
+        - read_page
+        - read_page_overview
+        - read_page_select
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+
+    # employee: only their own - matched on the JWT's email claim, which CerbosPrincipalResolver
+    # passes through as a principal attribute. The same condition drives the query plan, so pages
+    # and lists are filtered in the database, not after the fact.
+    - actions:
+        - read_one
+        - read_list
+        - read_page
+        - read_page_overview
+        - read_page_select
+      effect: EFFECT_ALLOW
+      roles: ["employee"]
+      condition:
+        match:
+          expr: request.resource.attr.employeeEmail == request.principal.attr.email
